@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agent-series-postgres
+    environment:
+      POSTGRES_DB: agent_series
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+    ports:
+      # Host 5432 is commonly occupied by a locally installed PostgreSQL.
+      - "5433:5432"
+    volumes:
+      - agent_series_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent_series"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  agent_series_postgres:

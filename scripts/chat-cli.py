@@ -21,7 +21,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agent_core.agent import Agent  # noqa: E402
 from agent_core.config import load_settings  # noqa: E402
+from agent_core.knowledge import KnowledgeService, build_knowledge_tool  # noqa: E402
 from agent_core.providers import build_client  # noqa: E402
+from agent_core.storage import Database  # noqa: E402
 from agent_core.tools import build_default_registry  # noqa: E402
 
 
@@ -29,7 +31,8 @@ def build_agent() -> Agent:
     settings = load_settings()
     print(f"🔌 Provider: {settings.provider} | Model: {settings.active_model}\n")
     client = build_client(settings)
-    registry = build_default_registry()
+    knowledge = KnowledgeService(Database(settings.database_url), settings.knowledge_dir, settings.embedding_model)
+    registry = build_default_registry(build_knowledge_tool(knowledge))
     return Agent(client, registry, max_steps=settings.max_steps)
 
 

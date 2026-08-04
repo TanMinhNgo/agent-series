@@ -32,3 +32,7 @@ dist/
 Thumbs.db
 .vscode/
 .idea/
+
+# ===== Dữ liệu runtime cục bộ =====
+knowledge/
+data/

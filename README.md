@@ -33,7 +33,7 @@ Agent có thể tự phối hợp ba tool theo đúng thứ tự:
 
 ```mermaid
 flowchart LR
-    Q["Yêu cầu của người dùng"] --> PDF["read_pdf<br/>Trích xuất số liệu"]
+    Q["Yêu cầu của người dùng"] --> PDF["search_knowledge_base<br/>Truy hồi số liệu"]
     PDF --> CALC["calculator<br/>Tính tổng"]
     CALC --> FX["convert_currency<br/>Quy đổi tiền tệ"]
     FX --> A["Câu trả lời cuối"]
@@ -89,7 +89,7 @@ flowchart TB
     end
 
     subgraph T["Công cụ mặc định"]
-        PDF["read_pdf"]
+        PDF["search_knowledge_base"]
         CALC["calculator"]
         FX["convert_currency"]
     end
@@ -247,6 +247,85 @@ CLI — trò chuyện liên tục:
 python scripts/chat_cli.py
 ```
 
+<a id="rag-postgres"></a>
+## Chạy bản Agent RAG có lưu lịch sử
+
+Phiên bản hiện tại lưu chat, metadata tài liệu và vector embedding vào **PostgreSQL + pgvector**. PDF chỉ đi vào knowledge base qua upload UI; agent không còn được đọc một đường dẫn PDF bất kỳ trên máy.
+
+### 1. Khởi động database
+
+Cần cài Docker Desktop. Tại thư mục gốc project:
+
+```powershell
+docker compose up -d
+```
+
+Docker tạo PostgreSQL local tại `localhost:5433`, database `agent_series`. Host port `5433` tránh xung đột với PostgreSQL thường đã chạy ở `5432`. Dữ liệu nằm trong Docker volume `agent_series_postgres`, nên vẫn còn sau khi dừng container.
+
+### 2. Cài dependency và tạo schema
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+alembic upgrade head
+```
+
+Nếu chưa có môi trường ảo, chạy `./run.ps1`. Script này tự tạo `.venv`/`.env`, khởi động Docker Compose và áp migration trước khi mở Streamlit.
+
+### 3. Cấu hình provider và model
+
+Trong `.env`, điền key cho provider bạn muốn dùng. UI chỉ hiện provider có key hợp lệ. Mỗi biến `*_MODELS` là allowlist model có thể chọn trong Streamlit:
+
+```dotenv
+GEMINI_API_KEY=...
+GEMINI_MODELS=gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite
+
+OPENAI_API_KEY=...
+OPENAI_MODELS=gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna,gpt-4o-mini
+```
+
+Model được nhóm theo vai trò để dễ chọn:
+
+| Provider | Mạnh nhất | Cân bằng | Nhanh/tiết kiệm |
+|---|---|---|---|
+| Gemini | `gemini-3.1-pro-preview` | `gemini-3.6-flash`, `gemini-3.5-flash` | `gemini-3.5-flash-lite` |
+| Anthropic | `claude-fable-5`, `claude-opus-4-8` | `claude-sonnet-5` | `claude-haiku-4-5` |
+| OpenAI | `gpt-5.6-sol` | `gpt-5.6-terra` | `gpt-5.6-luna` |
+
+Model phải được tài khoản API của bạn cấp quyền. Với provider nào chưa có key, UI sẽ không hiện provider đó.
+
+- Đổi model trong **cùng provider** giữ nguyên lịch sử chat.
+- Đổi sang **provider khác** yêu cầu tạo chat mới; chat cũ vẫn xuất hiện trong lịch sử.
+- Không nhập API key trên UI và không commit `.env`.
+
+### 4. Upload, index và hỏi PDF
+
+```powershell
+streamlit run app.py
+```
+
+1. Ở ô chat phía dưới, bấm nút đính kèm và chọn một hoặc nhiều PDF, tối đa 25 MB mỗi file.
+2. Gửi kèm câu hỏi hoặc chỉ gửi file. App sẽ tự lưu và index. Lần đầu `sentence-transformers` tải model `intfloat/multilingual-e5-small` về máy.
+3. Chờ trạng thái tài liệu là `ready`, sau đó hỏi về nội dung trong ô chat. Câu trả lời dựa trên tài liệu sẽ nêu tên file và số trang.
+
+PDF scan không có text layer sẽ báo lỗi; cần OCR trước. Upload trùng nội dung được nhận diện bằng SHA-256 để không index lặp.
+
+Để index PDF đã đặt thủ công trong `knowledge/`:
+
+```powershell
+python scripts/ingest.py
+```
+
+`knowledge/` và dữ liệu runtime đều nằm trong `.gitignore`; không đưa tài liệu nhạy cảm vào Git.
+
+### 5. Kiểm tra hệ thống
+
+```powershell
+pytest -q
+```
+
+Test không gọi API LLM thật. Trước khi dùng, kiểm tra PostgreSQL đang chạy bằng `docker compose ps`.
+
 <a id="cach-su-dung"></a>
 ## Cách sử dụng
 
@@ -257,16 +336,28 @@ Thử các prompt sau để quan sát cách Agent chọn và phối hợp công 
 | `100 USD đổi ra bao nhiêu VND?` | `convert_currency` |
 | `15% của 2.000.000 là bao nhiêu?` | `calculator` |
 | `15% của 2.000.000 là bao nhiêu, rồi đổi sang USD?` | `calculator` → `convert_currency` |
-| `Đọc file D:/Documents/hoa-don.pdf và tóm tắt nội dung` | `read_pdf` |
-| `Đọc hóa đơn PDF, cộng các khoản rồi đổi sang USD` | `read_pdf` → `calculator` → `convert_currency` |
+| `Tóm tắt chính sách hoàn tiền trong tài liệu đã upload` | `search_knowledge_base` → trả lời kèm nguồn/trang |
+| `Từ số liệu trong PDF đã upload, tính 15% tổng tiền` | `search_knowledge_base` → `calculator` |
 | `Xin chào, bạn có thể làm gì?` | Trả lời trực tiếp, không cần tool |
 
 Trong giao diện Streamlit:
 
-1. Thanh bên hiển thị provider, model và danh sách tool hiện tại.
-2. Trạng thái xử lý cập nhật ngay khi Agent gọi hoặc nhận kết quả từ tool.
-3. Mỗi câu trả lời có thể mở rộng để xem toàn bộ dấu vết thực thi.
-4. Nút **“Xóa hội thoại”** đặt lại cả lịch sử giao diện và bộ nhớ của Agent.
+1. Thanh bên dùng để tạo/chọn chat, xem các PDF đã index và đổi giao diện.
+2. Thanh điều khiển ngay trên ô chat dùng để chọn provider/model. Đổi model cùng provider giữ lịch sử; đổi provider tạo chat mới.
+3. Dùng nút đính kèm trong ô chat để upload PDF. App index PDF trước khi gửi câu hỏi tới Agent.
+4. Trạng thái xử lý cập nhật ngay khi Agent gọi hoặc nhận kết quả từ tool. Chat được lưu trong PostgreSQL và có thể mở lại sau khi restart app.
+
+### Giao diện Light, Dark và System
+
+Mở mục **Appearance** ở sidebar và chọn một trong ba chế độ:
+
+| Chế độ | Hành vi |
+|---|---|
+| `System` | Tự theo giao diện sáng/tối của hệ điều hành hoặc trình duyệt |
+| `Light` | Luôn dùng giao diện sáng, phù hợp khi đọc tài liệu dài |
+| `Dark` | Luôn dùng giao diện tối, phù hợp môi trường thiếu sáng |
+
+Lựa chọn được lưu trong localStorage của trình duyệt hiện tại. Nó không được lưu vào PostgreSQL và không đồng bộ giữa các trình duyệt, vì project chưa có tài khoản người dùng.
 
 <a id="nha-cung-cap-llm"></a>
 ## Nhà cung cấp LLM
@@ -275,9 +366,9 @@ Chỉ cần đổi `LLM_PROVIDER` trong `.env`; vòng lặp Agent và các tool 
 
 | Provider | Giá trị cấu hình | Biến API key | Model mặc định trong project |
 |---|---|---|---|
-| Google Gemini | `gemini` | `GEMINI_API_KEY` | `gemini-flash-latest` |
-| Anthropic Claude | `anthropic` | `ANTHROPIC_API_KEY` | `claude-opus-4-8` |
-| OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o-mini` |
+| Google Gemini | `gemini` | `GEMINI_API_KEY` | `gemini-3.5-flash` |
+| Anthropic Claude | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5` |
+| OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-5.6-terra` |
 
 Ví dụ chuyển sang Anthropic:
 
@@ -295,14 +386,19 @@ ANTHROPIC_MODEL=claude-haiku-4-5
 | Biến | Mặc định | Mô tả |
 |---|---:|---|
 | `LLM_PROVIDER` | `gemini` | Provider đang hoạt động: `gemini`, `anthropic` hoặc `openai` |
-| `GEMINI_MODEL` | `gemini-flash-latest` | Model dùng bởi Gemini adapter |
-| `ANTHROPIC_MODEL` | `claude-opus-4-8` | Model dùng bởi Anthropic adapter |
-| `OPENAI_MODEL` | `gpt-4o-mini` | Model dùng bởi OpenAI adapter |
+| `GEMINI_MODEL` | `gemini-3.5-flash` | Model mặc định cho Gemini adapter |
+| `GEMINI_MODELS` | theo `GEMINI_MODEL` | Allowlist model Gemini hiện trên UI |
+| `ANTHROPIC_MODEL` | `claude-sonnet-5` | Model mặc định cho Anthropic adapter |
+| `ANTHROPIC_MODELS` | theo `ANTHROPIC_MODEL` | Allowlist model Anthropic hiện trên UI |
+| `OPENAI_MODEL` | `gpt-5.6-terra` | Model mặc định cho OpenAI adapter |
+| `OPENAI_MODELS` | theo `OPENAI_MODEL` | Allowlist model OpenAI hiện trên UI |
+| `DATABASE_URL` | PostgreSQL local | Kết nối PostgreSQL + pgvector |
+| `EMBEDDING_MODEL` | `intfloat/multilingual-e5-small` | Model embedding local cho RAG |
 | `AGENT_TEMPERATURE` | `0.2` | Độ ngẫu nhiên thấp để quyết định gọi tool ổn định hơn |
 | `AGENT_MAX_STEPS` | `5` | Số vòng suy luận tối đa cho mỗi yêu cầu |
 | `AGENT_MAX_TOKENS` | `2048` | Giới hạn token đầu ra mỗi lượt ở adapter có sử dụng giá trị này |
 
-Project chỉ yêu cầu API key của provider đang được chọn; key của hai provider còn lại có thể để trống.
+Project chỉ hiện provider có API key hợp lệ; các key còn lại có thể để trống.
 
 ### Quản lý prompt
 
@@ -325,7 +421,7 @@ Với nhiều persona hoặc use case, hãy khai báo thêm các hằng prompt t
 
 | Tool | Input chính | Công dụng | Giới hạn hiện tại |
 |---|---|---|---|
-| `read_pdf` | `path`, `max_chars` | Trích xuất văn bản từ PDF cục bộ | Mặc định lấy 4.000 ký tự đầu; không OCR file scan |
+| `search_knowledge_base` | `query`, `top_k` | Truy hồi PDF đã upload/index | Chỉ tìm text layer, trả nguồn/tên file/số trang |
 | `calculator` | `expression` | Tính biểu thức số học bằng AST | Chỉ cho phép số và các toán tử cơ bản |
 | `convert_currency` | `amount`, `from_currency`, `to_currency` | Quy đổi USD, VND, EUR, JPY, GBP, CNY | Dùng bảng tỷ giá minh họa cố định, không phải dữ liệu thời gian thực |
 
@@ -372,14 +468,13 @@ Sau đó đăng ký spec tại `agent_core/tools/defaults.py`:
 from .current_time import CURRENT_TIME_TOOL
 
 DEFAULT_TOOLS = (
-    PDF_READER_TOOL,
     CALCULATOR_TOOL,
     CURRENCY_TOOL,
     CURRENT_TIME_TOOL,
 )
 ```
 
-Tool mới sẽ tự động xuất hiện trong sidebar và được chuyển sang định dạng phù hợp với provider đang dùng. Bạn không cần sửa `agent.py`, provider adapters hay UI.
+Tool mới sẽ tự động được chuyển sang định dạng phù hợp với provider đang dùng. Với RAG, `search_knowledge_base` được tạo từ `KnowledgeService` tại `app.py`/CLI vì nó cần database và embedding model.
 
 <a id="cau-truc-thu-muc"></a>
 ## Cấu trúc thư mục
@@ -394,7 +489,9 @@ AI_AGENT_FROM_ZERO/
 │   │   ├── defaults.py      # Danh sách tool bật mặc định
 │   │   ├── calculator.py    # Máy tính giới hạn bằng AST
 │   │   ├── currency.py      # Quy đổi tiền tệ minh họa
-│   │   └── pdf_reader.py    # Trích xuất văn bản PDF
+│   │   └── pdf_reader.py    # Tiện ích PDF mức thấp, không expose mặc định
+│   ├── knowledge.py          # Upload, index và truy hồi pgvector
+│   └── storage.py            # SQLAlchemy models/repository cho chat và tài liệu
 │   ├── __init__.py          # Public API và phiên bản package
 │   ├── agent.py             # Vòng lặp Agent và lịch sử hội thoại
 │   ├── prompts.py           # System prompts dùng bởi Agent
@@ -416,7 +513,7 @@ AI_AGENT_FROM_ZERO/
 ## Giới hạn và lưu ý an toàn
 
 - `convert_currency` phục vụ demo luồng tool; **không dùng kết quả cho giao dịch tài chính**.
-- `read_pdf` chỉ đọc PDF chứa lớp văn bản. PDF ảnh scan cần thêm OCR.
+- Knowledge base chỉ index PDF có lớp văn bản. PDF ảnh scan cần OCR trước.
 - Đường dẫn PDF được Agent mở trên chính máy đang chạy ứng dụng; chỉ sử dụng file bạn tin cậy.
 - Nội dung PDF được gửi tới provider LLM trong lịch sử hội thoại. Không dùng tài liệu nhạy cảm nếu chưa đánh giá chính sách dữ liệu của provider.
 - Project chưa có sandbox riêng cho tool tùy chỉnh. Hãy kiểm tra chặt input và quyền truy cập khi thêm tool có tác động hệ thống.

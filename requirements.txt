@@ -3,6 +3,7 @@
 
 # --- Giao diện chat (UI) ---
 streamlit>=1.36.0        # dựng web UI bằng Python thuần
+streamlit-js-eval==1.0.0   # bridge localStorage không chặn render Streamlit
 
 # --- Tiện ích ---
 python-dotenv>=1.0.0     # đọc biến môi trường từ file .env
@@ -14,3 +15,11 @@ openai>=1.40.0           # GPT/Codex — tuỳ chọn (cần key mới dùng đ�
 
 # --- Cần cho tool read_pdf ---
 pypdf>=4.0.0             # đọc nội dung file PDF
+
+# --- Persistence + RAG cục bộ ---
+SQLAlchemy>=2.0.0
+alembic>=1.14.0
+psycopg[binary]>=3.2.0   # PostgreSQL driver
+pgvector>=0.3.0
+sentence-transformers>=3.0.0
+pytest>=8.0.0

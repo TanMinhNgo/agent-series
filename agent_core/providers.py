@@ -271,13 +271,19 @@ class OpenAIClient:
         ]
 
     def complete(self, system: str, history: list[dict], tools: list[ToolSpec]) -> NormalizedReply:
-        response = self._client.chat.completions.create(
-            model=self._model,
-            temperature=self._temperature,
-            max_tokens=self._max_tokens,
-            tools=self._to_tools(tools),
-            messages=self._to_messages(system, history),
-        )
+        request = {
+            "model": self._model,
+            "temperature": self._temperature,
+            "tools": self._to_tools(tools),
+            "messages": self._to_messages(system, history),
+        }
+        # GPT-5.6 uses the current completion-token field. Keep the older field
+        # for gpt-4o-mini so existing configurations remain compatible.
+        if self._model.startswith("gpt-5.6"):
+            request["max_completion_tokens"] = self._max_tokens
+        else:
+            request["max_tokens"] = self._max_tokens
+        response = self._client.chat.completions.create(**request)
         message = response.choices[0].message
 
         tool_calls = []

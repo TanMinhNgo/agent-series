@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from .calculator import CALCULATOR_TOOL
 from .currency import CURRENCY_TOOL
-from .pdf_reader import PDF_READER_TOOL
 from .registry import ToolRegistry
+from .base import ToolSpec
 
 
 DEFAULT_TOOLS = (
-    PDF_READER_TOOL,
     CALCULATOR_TOOL,
     CURRENCY_TOOL,
 )
 
 
-def build_default_registry() -> ToolRegistry:
+def build_default_registry(knowledge_tool: ToolSpec | None = None) -> ToolRegistry:
     """Build a registry containing the project's default tool set."""
-    return ToolRegistry(list(DEFAULT_TOOLS))
+    tools = list(DEFAULT_TOOLS)
+    if knowledge_tool is not None:
+        tools.append(knowledge_tool)
+    return ToolRegistry(tools)

@@ -12,7 +12,7 @@ cần điền key của provider mình có (Gemini / Claude / OpenAI) rồi đ�
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -50,6 +50,10 @@ class Settings:
     # max_tokens: giới hạn độ dài câu trả lời model sinh ra mỗi lượt. Đặt vừa phải để
     #   không tốn quota vô ích; Anthropic BẮT BUỘC tham số này nên ta luôn khai báo.
     max_tokens: int
+    database_url: str
+    embedding_model: str
+    knowledge_dir: Path
+    provider_models: dict[str, tuple[str, ...]]
 
     # ---- Vài tiện ích đọc nhanh cấu hình của provider đang chọn ----
     @property
@@ -68,6 +72,30 @@ class Settings:
             "openai": self.openai_model,
         }[self.provider]
 
+    def configured_provider_models(self) -> dict[str, tuple[str, ...]]:
+        """Return only providers that have a usable key and model allowlist."""
+        return {
+            provider: models
+            for provider, models in self.provider_models.items()
+            if models and {
+                "gemini": self.gemini_api_key,
+                "anthropic": self.anthropic_api_key,
+                "openai": self.openai_api_key,
+            }[provider]
+        }
+
+    def with_provider_model(self, provider: str, model: str) -> "Settings":
+        """Create settings for a model selected in the UI without exposing keys."""
+        if model not in self.configured_provider_models().get(provider, ()):
+            raise ValueError("Provider hoặc model chưa được cấu hình trong .env.")
+        field_name = f"{provider}_model"
+        return replace(self, provider=provider, **{field_name: model})
+
+
+def _model_list(env_name: str, fallback: str) -> tuple[str, ...]:
+    values = [item.strip() for item in os.getenv(env_name, fallback).split(",")]
+    return tuple(dict.fromkeys(item for item in values if item))
+
 
 def load_settings() -> Settings:
     """Đọc cấu hình từ môi trường và trả về đối tượng Settings.
@@ -84,19 +112,29 @@ def load_settings() -> Settings:
 
     settings = Settings(
         provider=provider,
-        # Gemini: mặc định 'gemini-flash-latest' — nhanh, rẻ, hợp để học/demo.
+        # Gemini 3.5 Flash cân bằng tốt cho chat/tool calling ở bản mới.
         gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-flash-latest").strip(),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash").strip(),
         # Anthropic (Claude): mặc định model mạnh nhất; muốn rẻ hơn đổi sang
         # 'claude-haiku-4-5' trong .env. Xem chú thích ở .env.example.
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", "").strip(),
-        anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-opus-4-8").strip(),
+        anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5").strip(),
         # OpenAI (Codex/GPT): mặc định model gọn nhẹ; bạn tự đổi theo model mình có.
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip(),
+        openai_model=os.getenv("OPENAI_MODEL", "gpt-5.6-terra").strip(),
         temperature=float(os.getenv("AGENT_TEMPERATURE", "0.2")),
         max_steps=int(os.getenv("AGENT_MAX_STEPS", "5")),
         max_tokens=int(os.getenv("AGENT_MAX_TOKENS", "2048")),
+        database_url=os.getenv(
+            "DATABASE_URL", "postgresql+psycopg://agent:agent@localhost:5433/agent_series"
+        ).strip(),
+        embedding_model=os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-small").strip(),
+        knowledge_dir=(PROJECT_ROOT / os.getenv("KNOWLEDGE_DIR", "knowledge").strip()).resolve(),
+        provider_models={
+            "gemini": _model_list("GEMINI_MODELS", os.getenv("GEMINI_MODEL", "gemini-3.5-flash")),
+            "anthropic": _model_list("ANTHROPIC_MODELS", os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")),
+            "openai": _model_list("OPENAI_MODELS", os.getenv("OPENAI_MODEL", "gpt-5.6-terra")),
+        },
     )
 
     # Kiểm tra key của ĐÚNG provider đang chọn (các provider khác không cần key).

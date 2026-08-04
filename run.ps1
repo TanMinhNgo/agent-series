@@ -23,6 +23,13 @@ if (-not (Test-Path ".env")) {
     Write-Host "Da tao .env tu .env.example — hay mo ra dien API key!" -ForegroundColor Yellow
 }
 
-# 5) Mở giao diện chat
+# 5) Khởi động PostgreSQL + pgvector và áp schema.
+# Docker Desktop cần đang chạy; nếu chưa chạy, lệnh này sẽ dừng với lỗi rõ ràng.
+Write-Host "Khoi dong PostgreSQL + pgvector..." -ForegroundColor Cyan
+docker compose up -d
+Write-Host "Ap dung database migration..." -ForegroundColor Cyan
+python -m alembic upgrade head
+
+# 6) Mở giao diện chat
 Write-Host "Mo giao dien chat..." -ForegroundColor Green
 streamlit run app.py
