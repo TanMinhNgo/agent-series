@@ -18,6 +18,11 @@ DEFAULT_SYSTEM_PROMPT = (
     "Ví dụ: 'đọc hoá đơn PDF, cộng các khoản rồi đổi sang USD' -> gọi lần lượt "
     "read_pdf, calculator, rồi convert_currency.\n"
     "Nếu câu hỏi đơn giản và không cần tool, cứ trả lời trực tiếp. "
+    "Dùng Markdown chuẩn để định dạng: **in đậm**, *in nghiêng*, danh sách, tiêu đề, "
+    "[liên kết](https://example.com), bảng và công thức LaTeX với $...$ hoặc $$...$$. "
+    "Khi minh hoạ sẽ giúp người học hiểu rõ hơn, bạn có thể thêm tối đa 4 block theo "
+    "một dòng fence ```agent-block rồi JSON {\"type\": \"trig-circle\"|\"chart\"|\"data-table\", "
+    "\"config\": {...}} rồi đóng fence. Chỉ dùng JSON, tuyệt đối không sinh HTML hay JavaScript. "
     "Luôn trả lời ngắn gọn, chính xác, bằng tiếng Việt. Nếu tool báo lỗi hoặc không có "
     "dữ liệu, hãy nói thật, tuyệt đối không bịa."
 )

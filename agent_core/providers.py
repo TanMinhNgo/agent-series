@@ -22,6 +22,7 @@ lại (Anthropic, OpenAI) làm y hệt một ý tưởng, chỉ khác cú pháp 
 from __future__ import annotations
 
 import json
+import base64
 from dataclasses import dataclass, field
 
 from .config import Settings
@@ -62,8 +63,13 @@ class GeminiClient:
         for msg in history:
             role = msg["role"]
             if role == "user":
+                parts = [types.Part.from_text(text=msg["content"])]
+                for attachment in msg.get("attachments", []):
+                    parts.append(types.Part.from_bytes(
+                        data=base64.b64decode(attachment["data"]), mime_type=attachment["mimeType"]
+                    ))
                 contents.append(
-                    types.Content(role="user", parts=[types.Part.from_text(text=msg["content"])])
+                    types.Content(role="user", parts=parts)
                 )
             elif role == "assistant":
                 # Lượt của model: role Gemini gọi là "model". Gồm phần chữ (nếu có)
@@ -173,7 +179,12 @@ class AnthropicClient:
         for msg in history:
             role = msg["role"]
             if role == "user":
-                messages.append({"role": "user", "content": msg["content"]})
+                content = [{"type": "text", "text": msg["content"]}]
+                content.extend({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": item["mimeType"], "data": item["data"]},
+                } for item in msg.get("attachments", []))
+                messages.append({"role": "user", "content": content if len(content) > 1 else msg["content"]})
             elif role == "assistant":
                 blocks = []
                 if msg.get("content"):
@@ -243,7 +254,12 @@ class OpenAIClient:
         for msg in history:
             role = msg["role"]
             if role == "user":
-                messages.append({"role": "user", "content": msg["content"]})
+                content = [{"type": "text", "text": msg["content"]}]
+                content.extend({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{item['mimeType']};base64,{item['data']}"},
+                } for item in msg.get("attachments", []))
+                messages.append({"role": "user", "content": content if len(content) > 1 else msg["content"]})
             elif role == "assistant":
                 m = {"role": "assistant", "content": msg.get("content") or None}
                 if msg.get("tool_calls"):
@@ -281,6 +297,10 @@ class OpenAIClient:
         # for gpt-4o-mini so existing configurations remain compatible.
         if self._model.startswith("gpt-5.6"):
             request["max_completion_tokens"] = self._max_tokens
+            # /v1/chat/completions currently rejects GPT-5.6 function tools
+            # when reasoning is enabled.  This agent owns the tool loop, so
+            # disable model reasoning explicitly for this compatible path.
+            request["reasoning_effort"] = "none"
         else:
             request["max_tokens"] = self._max_tokens
         response = self._client.chat.completions.create(**request)

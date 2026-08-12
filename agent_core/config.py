@@ -53,6 +53,7 @@ class Settings:
     database_url: str
     embedding_model: str
     knowledge_dir: Path
+    media_dir: Path
     provider_models: dict[str, tuple[str, ...]]
 
     # ---- Vài tiện ích đọc nhanh cấu hình của provider đang chọn ----
@@ -130,6 +131,7 @@ def load_settings() -> Settings:
         ).strip(),
         embedding_model=os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-small").strip(),
         knowledge_dir=(PROJECT_ROOT / os.getenv("KNOWLEDGE_DIR", "knowledge").strip()).resolve(),
+        media_dir=(PROJECT_ROOT / os.getenv("MEDIA_DIR", "uploads").strip()).resolve(),
         provider_models={
             "gemini": _model_list("GEMINI_MODELS", os.getenv("GEMINI_MODEL", "gemini-3.5-flash")),
             "anthropic": _model_list("ANTHROPIC_MODELS", os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")),

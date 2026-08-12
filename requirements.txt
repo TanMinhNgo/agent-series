@@ -2,8 +2,9 @@
 # Cài đặt (trong venv đã kích hoạt):  pip install -r requirements.txt
 
 # --- Giao diện chat (UI) ---
-streamlit>=1.36.0        # dựng web UI bằng Python thuần
-streamlit-js-eval==1.0.0   # bridge localStorage không chặn render Streamlit
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.12
 
 # --- Tiện ích ---
 python-dotenv>=1.0.0     # đọc biến môi trường từ file .env

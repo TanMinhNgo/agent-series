@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from agent_core.storage import Base
 
 config = context.config
-# Alembic runs outside the Streamlit app, so it must load the project .env itself.
+# Alembic runs outside the API process, so it must load the project .env itself.
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL", config.get_main_option("sqlalchemy.url")))
 if config.config_file_name:

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from .prompts import DEFAULT_SYSTEM_PROMPT
+from .response_blocks import parse_response
 from .tools.registry import ToolRegistry
 
 # Backward-compatible import for code that previously used agent.SYSTEM_PROMPT.
@@ -42,6 +43,7 @@ class AgentResult:
 
     text: str                        # câu trả lời cuối
     steps: list[Step] = field(default_factory=list)  # các bước gọi tool đã đi qua
+    content_blocks: list[dict] = field(default_factory=list)
 
 
 class Agent:
@@ -67,6 +69,7 @@ class Agent:
     def run(
         self,
         user_text: str,
+        attachments: list[dict] | None = None,
         on_step: Optional[Callable[[dict], None]] = None,
     ) -> AgentResult:
         """Xử lý MỘT câu hỏi của người dùng, trả về câu trả lời cuối + các bước đã đi.
@@ -75,7 +78,10 @@ class Agent:
         nhờ đó UI hiển thị tiến trình trực tiếp. Nếu không truyền thì bỏ qua.
         """
         # Thêm câu người dùng vào lịch sử.
-        self.history.append({"role": "user", "content": user_text})
+        message = {"role": "user", "content": user_text}
+        if attachments:
+            message["attachments"] = attachments
+        self.history.append(message)
         steps: list[Step] = []
 
         # Vòng lặp có GIỚI HẠN số bước (phanh an toàn chống lặp vô hạn).
@@ -94,7 +100,9 @@ class Agent:
 
             # (B) Nếu model KHÔNG gọi tool nữa -> nó đã trả lời xong.
             if not reply.tool_calls:
-                return AgentResult(text=reply.text, steps=steps)
+                response = parse_response(reply.text)
+                self.history[-1]["content"] = response.markdown
+                return AgentResult(text=response.markdown, steps=steps, content_blocks=response.blocks)
 
             # (C) Model muốn gọi tool -> chạy TẤT CẢ tool nó yêu cầu, rồi đưa kết quả lại.
             for call in reply.tool_calls:
