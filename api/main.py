@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -193,7 +194,24 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Agent Series API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="Agent Series API",
+    version="1.0.0",
+    description="API cho AI chat, RAG PDF, thư viện memory và workspace local.",
+    openapi_tags=[
+        {"name": "System", "description": "Kiểm tra trạng thái và đọc cấu hình client an toàn."},
+        {"name": "Chats", "description": "Tạo, quản lý và lấy lịch sử hội thoại."},
+        {"name": "Chat streaming", "description": "Gửi tin nhắn đến agent qua Server-Sent Events (SSE)."},
+        {"name": "Memory library", "description": "Kho memory dài hạn cục bộ của người dùng hiện tại."},
+        {"name": "Shared chats", "description": "Tạo và đọc snapshot chat được chia sẻ bằng token."},
+        {"name": "Knowledge base", "description": "Upload và quản lý PDF dùng cho RAG."},
+        {"name": "Media", "description": "Upload ảnh và tệp đính kèm để dùng trong tin nhắn."},
+        {"name": "Projects", "description": "Quản lý dự án trong workspace."},
+        {"name": "Schedules", "description": "Quản lý lịch trình trong workspace."},
+        {"name": "Plugins", "description": "Quản lý plugin tích hợp trong workspace."},
+    ],
+    lifespan=lifespan,
+)
 UPLOADS_DIR = Path(__file__).resolve().parents[1] / "uploads"
 UPLOADS_DIR.mkdir(exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
@@ -210,12 +228,12 @@ def services() -> Services:
     return app.state.services
 
 
-@app.get("/api/health")
+@app.get("/api/health", tags=["System"])
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/api/config")
+@app.get("/api/config", tags=["System"])
 def config() -> dict[str, Any]:
     settings = services().settings
     return {
@@ -225,12 +243,12 @@ def config() -> dict[str, Any]:
     }
 
 
-@app.get("/api/chats")
+@app.get("/api/chats", tags=["Chats"])
 def list_chats() -> list[dict[str, Any]]:
     return [chat_json(chat) for chat in services().chats.list()]
 
 
-@app.post("/api/chats", status_code=201)
+@app.post("/api/chats", status_code=201, tags=["Chats"])
 def create_chat(payload: CreateChatRequest) -> dict[str, Any]:
     settings = services().settings
     provider, model = payload.provider or settings.provider, payload.model or settings.active_model
@@ -244,23 +262,23 @@ def create_chat(payload: CreateChatRequest) -> dict[str, Any]:
     return chat_json(services().chats.create(selected.provider, selected.active_model, source_id))
 
 
-@app.get("/api/memories")
+@app.get("/api/memories", tags=["Memory library"])
 def memories(query: str = "") -> list[dict[str, Any]]:
     return services().memory.list(query)
 
 
-@app.delete("/api/memories/{memory_id}", status_code=204)
+@app.delete("/api/memories/{memory_id}", status_code=204, tags=["Memory library"])
 def forget_memory(memory_id: str) -> None:
     if not services().memory.forget(memory_id):
         raise HTTPException(status_code=404, detail="Không tìm thấy memory.")
 
 
-@app.delete("/api/memories", status_code=204)
+@app.delete("/api/memories", status_code=204, tags=["Memory library"])
 def forget_all_memories() -> None:
     services().memory.forget_all()
 
 
-@app.get("/api/chats/{chat_id}")
+@app.get("/api/chats/{chat_id}", tags=["Chats"])
 def get_chat(chat_id: str) -> dict[str, Any]:
     chat = services().chats.get(chat_id)
     if chat is None:
@@ -268,14 +286,14 @@ def get_chat(chat_id: str) -> dict[str, Any]:
     return chat_json(chat)
 
 
-@app.get("/api/chats/{chat_id}/messages")
+@app.get("/api/chats/{chat_id}/messages", tags=["Chats"])
 def messages(chat_id: str) -> list[dict[str, Any]]:
     if services().chats.get(chat_id) is None:
         raise HTTPException(status_code=404, detail="Không tìm thấy chat.")
     return [message_json(item) for item in services().chats.history(chat_id) if item["role"] in {"user", "assistant"}]
 
 
-@app.patch("/api/chats/{chat_id}")
+@app.patch("/api/chats/{chat_id}", tags=["Chats"])
 def update_chat(chat_id: str, payload: UpdateChatRequest) -> dict[str, Any]:
     try:
         chat = services().chats.get(chat_id)
@@ -291,13 +309,13 @@ def update_chat(chat_id: str, payload: UpdateChatRequest) -> dict[str, Any]:
     return chat_json(chat)
 
 
-@app.delete("/api/chats/{chat_id}", status_code=204)
+@app.delete("/api/chats/{chat_id}", status_code=204, tags=["Chats"])
 def delete_chat(chat_id: str) -> None:
     if not services().chats.delete(chat_id):
         raise HTTPException(status_code=404, detail="Không tìm thấy chat.")
 
 
-@app.post("/api/chats/{chat_id}/share")
+@app.post("/api/chats/{chat_id}/share", tags=["Shared chats"])
 def share_chat(chat_id: str) -> dict[str, Any]:
     share = services().chats.create_or_update_share(chat_id)
     if share is None:
@@ -305,7 +323,7 @@ def share_chat(chat_id: str) -> dict[str, Any]:
     return share_json(share)
 
 
-@app.get("/api/public/shares/{token}")
+@app.get("/api/public/shares/{token}", tags=["Shared chats"])
 def public_share(token: str) -> dict[str, Any]:
     share = services().chats.get_share(token)
     if share is None:
@@ -313,12 +331,12 @@ def public_share(token: str) -> dict[str, Any]:
     return share_json(share)
 
 
-@app.get("/api/documents")
+@app.get("/api/documents", tags=["Knowledge base"])
 def documents() -> list[dict[str, Any]]:
     return [document_json(item) for item in services().knowledge.list_documents()]
 
 
-@app.post("/api/documents", status_code=201)
+@app.post("/api/documents", status_code=201, tags=["Knowledge base"])
 async def upload_documents(files: list[UploadFile] = File(...)) -> list[dict[str, Any]]:
     uploaded: list[Document] = []
     try:
@@ -330,7 +348,7 @@ async def upload_documents(files: list[UploadFile] = File(...)) -> list[dict[str
     return [document_json(item) for item in uploaded]
 
 
-@app.post("/api/media", status_code=201)
+@app.post("/api/media", status_code=201, tags=["Media"])
 async def upload_media(files: list[UploadFile] = File(...)) -> list[dict[str, Any]]:
     try:
         uploaded = [services().media.upload(file.filename or "image", file.content_type or "", await file.read()) for file in files]
@@ -339,17 +357,17 @@ async def upload_media(files: list[UploadFile] = File(...)) -> list[dict[str, An
     return [media_json(item) for item in uploaded]
 
 
-@app.get("/api/projects")
+@app.get("/api/projects", tags=["Projects"])
 def list_projects() -> list[dict[str, Any]]:
     return [project_json(item) for item in services().workspace.list(Project)]
 
 
-@app.post("/api/projects", status_code=201)
+@app.post("/api/projects", status_code=201, tags=["Projects"])
 def create_project(payload: ProjectRequest) -> dict[str, Any]:
     return project_json(services().workspace.create(Project, **payload.model_dump()))
 
 
-@app.patch("/api/projects/{project_id}")
+@app.patch("/api/projects/{project_id}", tags=["Projects"])
 def update_project(project_id: str, payload: ProjectRequest) -> dict[str, Any]:
     item = services().workspace.update(Project, project_id, **payload.model_dump())
     if item is None:
@@ -357,25 +375,25 @@ def update_project(project_id: str, payload: ProjectRequest) -> dict[str, Any]:
     return project_json(item)
 
 
-@app.delete("/api/projects/{project_id}", status_code=204)
+@app.delete("/api/projects/{project_id}", status_code=204, tags=["Projects"])
 def delete_project(project_id: str) -> None:
     if not services().workspace.delete(Project, project_id):
         raise HTTPException(status_code=404, detail="Không tìm thấy dự án.")
 
 
-@app.get("/api/schedules")
+@app.get("/api/schedules", tags=["Schedules"])
 def list_schedules() -> list[dict[str, Any]]:
     return [schedule_json(item) for item in services().workspace.list(Schedule)]
 
 
-@app.post("/api/schedules", status_code=201)
+@app.post("/api/schedules", status_code=201, tags=["Schedules"])
 def create_schedule(payload: ScheduleRequest) -> dict[str, Any]:
     if payload.ends_at and payload.ends_at < payload.starts_at:
         raise HTTPException(status_code=422, detail="Thời điểm kết thúc phải sau thời điểm bắt đầu.")
     return schedule_json(services().workspace.create(Schedule, **payload.model_dump()))
 
 
-@app.patch("/api/schedules/{schedule_id}")
+@app.patch("/api/schedules/{schedule_id}", tags=["Schedules"])
 def update_schedule(schedule_id: str, payload: ScheduleRequest) -> dict[str, Any]:
     if payload.ends_at and payload.ends_at < payload.starts_at:
         raise HTTPException(status_code=422, detail="Thời điểm kết thúc phải sau thời điểm bắt đầu.")
@@ -385,23 +403,23 @@ def update_schedule(schedule_id: str, payload: ScheduleRequest) -> dict[str, Any
     return schedule_json(item)
 
 
-@app.delete("/api/schedules/{schedule_id}", status_code=204)
+@app.delete("/api/schedules/{schedule_id}", status_code=204, tags=["Schedules"])
 def delete_schedule(schedule_id: str) -> None:
     if not services().workspace.delete(Schedule, schedule_id):
         raise HTTPException(status_code=404, detail="Không tìm thấy lịch trình.")
 
 
-@app.get("/api/plugins")
+@app.get("/api/plugins", tags=["Plugins"])
 def list_plugins() -> list[dict[str, Any]]:
     return [plugin_json(item) for item in services().workspace.list(Plugin)]
 
 
-@app.post("/api/plugins", status_code=201)
+@app.post("/api/plugins", status_code=201, tags=["Plugins"])
 def create_plugin(payload: PluginRequest) -> dict[str, Any]:
     return plugin_json(services().workspace.create(Plugin, **payload.model_dump()))
 
 
-@app.patch("/api/plugins/{plugin_id}")
+@app.patch("/api/plugins/{plugin_id}", tags=["Plugins"])
 def update_plugin(plugin_id: str, payload: PluginUpdateRequest) -> dict[str, Any]:
     item = services().workspace.update(Plugin, plugin_id, **payload.model_dump(exclude_unset=True))
     if item is None:
@@ -409,7 +427,7 @@ def update_plugin(plugin_id: str, payload: PluginUpdateRequest) -> dict[str, Any
     return plugin_json(item)
 
 
-@app.delete("/api/plugins/{plugin_id}", status_code=204)
+@app.delete("/api/plugins/{plugin_id}", status_code=204, tags=["Plugins"])
 def delete_plugin(plugin_id: str) -> None:
     if not services().workspace.delete(Plugin, plugin_id):
         raise HTTPException(status_code=404, detail="Không tìm thấy plugin.")
@@ -466,7 +484,7 @@ def stream_chat(chat_id: str, content: str, attachments: list[dict]) -> Iterator
         yield sse(event, payload)
 
 
-@app.post("/api/chats/{chat_id}/stream")
+@app.post("/api/chats/{chat_id}/stream", tags=["Chat streaming"])
 def chat_stream(chat_id: str, payload: ChatRequest) -> StreamingResponse:
     try:
         attachments = services().media.for_prompt(payload.attachment_ids)
@@ -477,3 +495,83 @@ def chat_stream(chat_id: str, payload: ChatRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# Swagger uses these responses consistently, while the route implementations
+# remain focused on their actual application behavior.
+ERROR_RESPONSES: dict[int, dict[str, Any]] = {
+    404: {
+        "description": "Không tìm thấy tài nguyên được yêu cầu.",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ApiError"},
+                "example": {"detail": "Không tìm thấy chat."},
+            }
+        },
+    },
+    422: {
+        "description": "Dữ liệu gửi lên không hợp lệ hoặc không thỏa điều kiện nghiệp vụ.",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ApiError"},
+                "example": {"detail": "Model không được hỗ trợ."},
+            }
+        },
+    },
+    500: {
+        "description": "Lỗi máy chủ không mong đợi. Kiểm tra log FastAPI để biết chi tiết.",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ApiError"},
+                "example": {"detail": "Lỗi máy chủ nội bộ."},
+            }
+        },
+    },
+}
+
+# Only list errors the endpoint can actually return as an HTTP response.
+# The streaming endpoint reports missing chats/model failures as SSE `error`
+# events after its HTTP 200 connection has started.
+ROUTE_ERROR_STATUSES: dict[tuple[str, str], tuple[int, ...]] = {
+    ("post", "/api/chats"): (422, 500),
+    ("get", "/api/chats/{chat_id}"): (404, 500),
+    ("get", "/api/chats/{chat_id}/messages"): (404, 500),
+    ("patch", "/api/chats/{chat_id}"): (404, 422, 500),
+    ("delete", "/api/chats/{chat_id}"): (404, 500),
+    ("post", "/api/chats/{chat_id}/share"): (404, 500),
+    ("get", "/api/public/shares/{token}"): (404, 500),
+    ("post", "/api/chats/{chat_id}/stream"): (422, 500),
+    ("delete", "/api/memories/{memory_id}"): (404, 500),
+    ("post", "/api/documents"): (422, 500),
+    ("post", "/api/media"): (422, 500),
+    ("post", "/api/projects"): (422, 500),
+    ("patch", "/api/projects/{project_id}"): (404, 422, 500),
+    ("delete", "/api/projects/{project_id}"): (404, 500),
+    ("post", "/api/schedules"): (422, 500),
+    ("patch", "/api/schedules/{schedule_id}"): (404, 422, 500),
+    ("delete", "/api/schedules/{schedule_id}"): (404, 500),
+    ("post", "/api/plugins"): (422, 500),
+    ("patch", "/api/plugins/{plugin_id}"): (404, 422, 500),
+    ("delete", "/api/plugins/{plugin_id}"): (404, 500),
+}
+
+
+def custom_openapi() -> dict[str, Any]:
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    schema = get_openapi(title=app.title, version=app.version, description=app.description, routes=app.routes)
+    schema.setdefault("components", {}).setdefault("schemas", {})["ApiError"] = {
+        "type": "object",
+        "required": ["detail"],
+        "properties": {"detail": {"type": "string", "description": "Thông báo lỗi cho client."}},
+    }
+    for (method, path), statuses in ROUTE_ERROR_STATUSES.items():
+        operation = schema["paths"][path][method]
+        operation.setdefault("responses", {}).update({str(status): ERROR_RESPONSES[status] for status in statuses})
+
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = custom_openapi
