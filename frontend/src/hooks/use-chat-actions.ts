@@ -11,17 +11,11 @@ export const useChatActions = () => {
   const update = useMutation({
     mutationFn: ({ chatId, values }: { chatId: string; values: UpdateValues }) =>
       request<Chat>({ url: `/chats/${chatId}`, method: 'PATCH', data: values }),
-    onSuccess: (chat) =>
-      queryClient.setQueryData<Chat[]>(queryKeys.chats, (items = []) =>
-        items.map((item) => (item.id === chat.id ? chat : item)),
-      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
   });
   const remove = useMutation({
     mutationFn: (chatId: string) => request<void>({ url: `/chats/${chatId}`, method: 'DELETE' }),
-    onSuccess: (_, chatId) =>
-      queryClient.setQueryData<Chat[]>(queryKeys.chats, (items = []) =>
-        items.filter((item) => item.id !== chatId),
-      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
   });
   return { update, remove };
 };

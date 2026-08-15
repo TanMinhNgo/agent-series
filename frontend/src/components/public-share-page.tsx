@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Sparkles } from 'lucide-react';
 
 import { request } from '@/src/hooks/client';
-import { RichResponse } from '@/src/components/rich-response';
+import { RichResponseLazy } from '@/src/components/rich-response-lazy';
 import type { PublicShare } from '@/src/types';
 
 export function PublicSharePage({ token }: { token: string }) {
@@ -55,7 +55,7 @@ export function PublicSharePage({ token }: { token: string }) {
             }
           >
             {message.role === 'assistant' ? (
-              <RichResponse content={message.content} blocks={message.contentBlocks} />
+              <RichResponseLazy content={message.content} blocks={message.contentBlocks} />
             ) : (
               <p className="whitespace-pre-wrap">{message.content}</p>
             )}

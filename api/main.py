@@ -10,24 +10,27 @@ from datetime import datetime
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Thread
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 
 from agent_core.agent import Agent
 from agent_core.config import Settings, load_settings
 from agent_core.knowledge import KnowledgeService, build_knowledge_tool
 from agent_core.media import MediaService
+from agent_core.library import LibraryService
 from agent_core.memory import MemoryService
+from agent_core.plugin_catalog import CATALOG, catalog_json, find_catalog_plugin
 from agent_core.prompts import DEFAULT_SYSTEM_PROMPT
 from agent_core.providers import build_client
-from agent_core.storage import Chat, ChatRepository, ChatShare, Database, Document, MediaAttachment, MediaRepository, Plugin, Project, Schedule, WorkspaceRepository
-from agent_core.tools import build_default_registry
+from agent_core.storage import Chat, ChatRepository, ChatShare, Database, Document, LibraryAsset, MediaAttachment, MediaRepository, Plugin, Project, Schedule, WorkspaceRepository
+from agent_core.tools import ToolSpec, build_default_registry
 
 
 @dataclass
@@ -38,6 +41,7 @@ class Services:
     media: MediaService
     memory: MemoryService
     workspace: WorkspaceRepository
+    library: LibraryService
 
 
 class CreateChatRequest(BaseModel):
@@ -66,15 +70,21 @@ class ChatRequest(BaseModel):
 class ProjectRequest(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     description: str | None = Field(default=None, max_length=10_000)
-    status: str = Field(default="active", max_length=24)
+    status: Literal["active", "paused", "completed"] = "active"
 
 
 class ScheduleRequest(BaseModel):
     title: str = Field(min_length=1, max_length=160)
-    starts_at: datetime
-    ends_at: datetime | None = None
+    starts_at: datetime = Field(alias="startsAt")
+    ends_at: datetime | None = Field(default=None, alias="endsAt")
     notes: str | None = Field(default=None, max_length=10_000)
-    project_id: str | None = None
+    project_id: str | None = Field(default=None, alias="projectId")
+    prompt: str | None = Field(default=None, max_length=10_000)
+    recurrence: Literal["once", "daily", "weekly", "monthly"] = "once"
+    status: Literal["active", "paused"] = "active"
+    next_run_at: datetime | None = Field(default=None, alias="nextRunAt")
+
+    model_config = {"populate_by_name": True}
 
 
 class PluginRequest(BaseModel):
@@ -86,6 +96,7 @@ class PluginRequest(BaseModel):
 
 
 class PluginUpdateRequest(BaseModel):
+    slug: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[a-z0-9-]+$")
     name: str | None = Field(default=None, min_length=1, max_length=160)
     description: str | None = Field(default=None, max_length=10_000)
     enabled: bool | None = None
@@ -136,11 +147,15 @@ def project_json(item: Project) -> dict[str, Any]:
 
 
 def schedule_json(item: Schedule) -> dict[str, Any]:
-    return {"id": item.id, "title": item.title, "startsAt": item.starts_at.isoformat(), "endsAt": item.ends_at.isoformat() if item.ends_at else None, "notes": item.notes, "projectId": item.project_id, "createdAt": item.created_at.isoformat(), "updatedAt": item.updated_at.isoformat()}
+    return {"id": item.id, "title": item.title, "startsAt": item.starts_at.isoformat(), "endsAt": item.ends_at.isoformat() if item.ends_at else None, "notes": item.notes, "projectId": item.project_id, "prompt": item.prompt, "recurrence": item.recurrence, "status": item.status, "nextRunAt": item.next_run_at.isoformat() if item.next_run_at else None, "createdAt": item.created_at.isoformat(), "updatedAt": item.updated_at.isoformat()}
+
+
+def library_asset_json(item: LibraryAsset) -> dict[str, Any]:
+    return {"id": item.id, "name": item.name, "mimeType": item.mime_type, "sizeBytes": item.size_bytes, "source": item.source, "createdAt": item.created_at.isoformat(), "url": f"/uploads/{item.stored_name}"}
 
 
 def plugin_json(item: Plugin) -> dict[str, Any]:
-    return {"id": item.id, "slug": item.slug, "name": item.name, "description": item.description, "enabled": item.enabled, "config": item.config, "createdAt": item.created_at.isoformat(), "updatedAt": item.updated_at.isoformat()}
+    return {"id": item.id, "slug": item.slug, "name": item.name, "description": item.description, "enabled": item.enabled, "config": item.config, "catalogSlug": item.catalog_slug, "category": item.category, "capabilities": item.capabilities, "connectionStatus": item.connection_status, "createdAt": item.created_at.isoformat(), "updatedAt": item.updated_at.isoformat()}
 
 
 def sse(event: str, payload: dict[str, Any]) -> str:
@@ -168,9 +183,15 @@ def make_agent(app_services: Services, chat: Chat, memory_context: str = "") -> 
         if turns:
             transcript = "\n".join(f"{item['role']}: {item['content']}" for item in turns)
             source_context = f"\n\nNgữ cảnh kế thừa từ cuộc trò chuyện trước (ẩn với người dùng):\n{transcript}"
+    export_tool = ToolSpec(
+        name="create_file",
+        description="Tạo file cho người dùng và lưu vào Thư viện. Dùng khi người dùng yêu cầu xuất DOCX, XLSX, PPTX, Markdown, CSV, PDF hoặc JSON.",
+        parameters={"type": "object", "properties": {"name": {"type": "string"}, "format": {"type": "string", "enum": ["docx", "xlsx", "pptx", "md", "csv", "pdf", "json"]}, "content": {"type": "string"}}, "required": ["name", "format", "content"]},
+        func=lambda name, format, content: json.dumps(library_asset_json(app_services.library.create_export(name, format, content)), ensure_ascii=False),
+    )
     agent = Agent(
         build_client(settings),
-        build_default_registry(build_knowledge_tool(app_services.knowledge)),
+        build_default_registry(build_knowledge_tool(app_services.knowledge), [export_tool]),
         system_prompt=DEFAULT_SYSTEM_PROMPT + source_context + (f"\n\n{memory_context}" if memory_context else ""),
         max_steps=settings.max_steps,
     )
@@ -188,6 +209,7 @@ async def lifespan(app: FastAPI):
         chats=ChatRepository(database),
         knowledge=KnowledgeService(database, Path(settings.knowledge_dir), settings.embedding_model),
         media=media,
+        library=LibraryService(database, settings.media_dir),
         memory=MemoryService(database, settings.embedding_model),
         workspace=WorkspaceRepository(database),
     )
@@ -203,12 +225,14 @@ app = FastAPI(
         {"name": "Chats", "description": "Tạo, quản lý và lấy lịch sử hội thoại."},
         {"name": "Chat streaming", "description": "Gửi tin nhắn đến agent qua Server-Sent Events (SSE)."},
         {"name": "Memory library", "description": "Kho memory dài hạn cục bộ của người dùng hiện tại."},
+        {"name": "Personal library", "description": "Kho file cá nhân upload hoặc do AI tạo."},
         {"name": "Shared chats", "description": "Tạo và đọc snapshot chat được chia sẻ bằng token."},
         {"name": "Knowledge base", "description": "Upload và quản lý PDF dùng cho RAG."},
         {"name": "Media", "description": "Upload ảnh và tệp đính kèm để dùng trong tin nhắn."},
         {"name": "Projects", "description": "Quản lý dự án trong workspace."},
         {"name": "Schedules", "description": "Quản lý lịch trình trong workspace."},
         {"name": "Plugins", "description": "Quản lý plugin tích hợp trong workspace."},
+        {"name": "Plugin catalog", "description": "Khám phá và cài catalog plugin mẫu cho workspace local."},
     ],
     lifespan=lifespan,
 )
@@ -244,8 +268,17 @@ def config() -> dict[str, Any]:
 
 
 @app.get("/api/chats", tags=["Chats"])
-def list_chats() -> list[dict[str, Any]]:
-    return [chat_json(chat) for chat in services().chats.list()]
+def list_chats(
+    offset: int = Query(default=0, ge=0, description="Vị trí bắt đầu của trang lịch sử."),
+    limit: int = Query(default=40, ge=1, le=100, description="Số chat tối đa mỗi lần tải."),
+) -> dict[str, Any]:
+    items, total = services().chats.list(offset=offset, limit=limit)
+    next_offset = offset + len(items)
+    return {
+        "items": [chat_json(chat) for chat in items],
+        "total": total,
+        "nextOffset": next_offset if next_offset < total else None,
+    }
 
 
 @app.post("/api/chats", status_code=201, tags=["Chats"])
@@ -276,6 +309,24 @@ def forget_memory(memory_id: str) -> None:
 @app.delete("/api/memories", status_code=204, tags=["Memory library"])
 def forget_all_memories() -> None:
     services().memory.forget_all()
+
+
+@app.get("/api/library/assets", tags=["Personal library"])
+def list_library_assets(query: str = "") -> list[dict[str, Any]]:
+    return [library_asset_json(item) for item in services().library.list(query)]
+
+
+@app.post("/api/library/assets", status_code=201, tags=["Personal library"])
+async def upload_library_assets(files: list[UploadFile] = File(...)) -> list[dict[str, Any]]:
+    try:
+        return [library_asset_json(services().library.upload(file.filename or "file", file.content_type or "", await file.read())) for file in files]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/library/assets/{asset_id}", status_code=204, tags=["Personal library"])
+def delete_library_asset(asset_id: str) -> None:
+    if not services().library.delete(asset_id): raise HTTPException(status_code=404, detail="Không tìm thấy file trong Thư viện.")
 
 
 @app.get("/api/chats/{chat_id}", tags=["Chats"])
@@ -390,6 +441,8 @@ def list_schedules() -> list[dict[str, Any]]:
 def create_schedule(payload: ScheduleRequest) -> dict[str, Any]:
     if payload.ends_at and payload.ends_at < payload.starts_at:
         raise HTTPException(status_code=422, detail="Thời điểm kết thúc phải sau thời điểm bắt đầu.")
+    if payload.project_id and services().workspace.get(Project, payload.project_id) is None:
+        raise HTTPException(status_code=422, detail="Dự án được chọn không tồn tại.")
     return schedule_json(services().workspace.create(Schedule, **payload.model_dump()))
 
 
@@ -397,6 +450,8 @@ def create_schedule(payload: ScheduleRequest) -> dict[str, Any]:
 def update_schedule(schedule_id: str, payload: ScheduleRequest) -> dict[str, Any]:
     if payload.ends_at and payload.ends_at < payload.starts_at:
         raise HTTPException(status_code=422, detail="Thời điểm kết thúc phải sau thời điểm bắt đầu.")
+    if payload.project_id and services().workspace.get(Project, payload.project_id) is None:
+        raise HTTPException(status_code=422, detail="Dự án được chọn không tồn tại.")
     item = services().workspace.update(Schedule, schedule_id, **payload.model_dump())
     if item is None:
         raise HTTPException(status_code=404, detail="Không tìm thấy lịch trình.")
@@ -414,16 +469,59 @@ def list_plugins() -> list[dict[str, Any]]:
     return [plugin_json(item) for item in services().workspace.list(Plugin)]
 
 
+@app.get("/api/plugin-catalog", tags=["Plugin catalog"])
+def plugin_catalog() -> list[dict[str, Any]]:
+    installed = services().workspace.catalog_plugin_ids()
+    return [catalog_json(item, installed.get(item.slug)) for item in CATALOG]
+
+
+@app.post("/api/plugin-catalog/{slug}/install", status_code=201, tags=["Plugin catalog"])
+def install_catalog_plugin(slug: str) -> dict[str, Any]:
+    item = find_catalog_plugin(slug)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy plugin trong catalog.")
+    existing = services().workspace.get_plugin_by_catalog_slug(slug)
+    if existing is not None:
+        return plugin_json(existing)
+    try:
+        plugin = services().workspace.create(
+            Plugin,
+            slug=item.slug,
+            name=item.name,
+            description=item.description,
+            enabled=False,
+            config={},
+            catalog_slug=item.slug,
+            category=item.category,
+            capabilities=list(item.capabilities),
+            connection_status="not_connected",
+        )
+    except IntegrityError:
+        plugin = services().workspace.get_plugin_by_catalog_slug(slug)
+        if plugin is None:
+            raise
+    return plugin_json(plugin)
+
+
 @app.post("/api/plugins", status_code=201, tags=["Plugins"])
 def create_plugin(payload: PluginRequest) -> dict[str, Any]:
-    return plugin_json(services().workspace.create(Plugin, **payload.model_dump()))
+    try:
+        return plugin_json(services().workspace.create(Plugin, **payload.model_dump()))
+    except IntegrityError as exc:
+        raise HTTPException(status_code=422, detail="Slug plugin đã tồn tại.") from exc
 
 
 @app.patch("/api/plugins/{plugin_id}", tags=["Plugins"])
 def update_plugin(plugin_id: str, payload: PluginUpdateRequest) -> dict[str, Any]:
-    item = services().workspace.update(Plugin, plugin_id, **payload.model_dump(exclude_unset=True))
-    if item is None:
+    current = services().workspace.get(Plugin, plugin_id)
+    if current is None:
         raise HTTPException(status_code=404, detail="Không tìm thấy plugin.")
+    if payload.enabled and current.catalog_slug and current.connection_status != "connected":
+        raise HTTPException(status_code=422, detail="Plugin catalog chưa được kết nối nên chưa thể bật.")
+    try:
+        item = services().workspace.update(Plugin, plugin_id, **payload.model_dump(exclude_unset=True))
+    except IntegrityError as exc:
+        raise HTTPException(status_code=422, detail="Slug plugin đã tồn tại.") from exc
     return plugin_json(item)
 
 
@@ -551,6 +649,8 @@ ROUTE_ERROR_STATUSES: dict[tuple[str, str], tuple[int, ...]] = {
     ("patch", "/api/schedules/{schedule_id}"): (404, 422, 500),
     ("delete", "/api/schedules/{schedule_id}"): (404, 500),
     ("post", "/api/plugins"): (422, 500),
+    ("get", "/api/plugin-catalog"): (500,),
+    ("post", "/api/plugin-catalog/{slug}/install"): (404, 500),
     ("patch", "/api/plugins/{plugin_id}"): (404, 422, 500),
     ("delete", "/api/plugins/{plugin_id}"): (404, 500),
 }
@@ -561,6 +661,7 @@ def custom_openapi() -> dict[str, Any]:
         return app.openapi_schema
 
     schema = get_openapi(title=app.title, version=app.version, description=app.description, routes=app.routes)
+    schema["tags"] = app.openapi_tags
     schema.setdefault("components", {}).setdefault("schemas", {})["ApiError"] = {
         "type": "object",
         "required": ["detail"],

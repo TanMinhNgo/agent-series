@@ -3,7 +3,7 @@ import { Sparkles } from 'lucide-react';
 
 import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
-import { RichResponse } from '@/src/components/rich-response';
+import { RichResponseLazy } from '@/src/components/rich-response-lazy';
 import type { Message } from '@/src/types';
 
 type Props = { messages: Message[]; status: string | null; error: string | null; userScrollRequest: number };
@@ -51,7 +51,7 @@ export function MessageList({ messages, status, error, userScrollRequest }: Prop
             )}
           >
             {message.role === 'assistant' ? (
-              <RichResponse content={message.content} blocks={message.contentBlocks} />
+              <RichResponseLazy content={message.content} blocks={message.contentBlocks} />
             ) : (
               <p className="m-0 whitespace-pre-wrap text-[.95rem]">{message.content}</p>
             )}

@@ -7,7 +7,7 @@ from secrets import token_urlsafe
 from uuid import uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, create_engine, delete, desc, select
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, create_engine, delete, desc, func, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 
@@ -84,6 +84,18 @@ class MediaAttachment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class LibraryAsset(Base):
+    __tablename__ = "library_assets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    name: Mapped[str] = mapped_column(String(255))
+    stored_name: Mapped[str] = mapped_column(String(255), unique=True)
+    mime_type: Mapped[str] = mapped_column(String(120))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    source: Mapped[str] = mapped_column(String(24), default="upload")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 class Project(Base):
     __tablename__ = "projects"
 
@@ -104,6 +116,10 @@ class Schedule(Base):
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recurrence: Mapped[str] = mapped_column(String(16), default="once")
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -117,6 +133,10 @@ class Plugin(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    catalog_slug: Mapped[str | None] = mapped_column(String(80), unique=True, nullable=True)
+    category: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    capabilities: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    connection_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -169,9 +189,16 @@ class ChatRepository:
             session.commit()
             return chat
 
-    def list(self) -> list[Chat]:
+    def list(self, offset: int = 0, limit: int = 40) -> tuple[list[Chat], int]:
         with self.database.session() as session:
-            return list(session.scalars(select(Chat).order_by(desc(Chat.pinned), desc(Chat.updated_at))))
+            total = session.scalar(select(func.count()).select_from(Chat)) or 0
+            chats = session.scalars(
+                select(Chat)
+                .order_by(desc(Chat.pinned), desc(Chat.updated_at))
+                .offset(offset)
+                .limit(limit)
+            )
+            return list(chats), total
 
     def get(self, chat_id: str) -> Chat | None:
         with self.database.session() as session:
@@ -290,6 +317,19 @@ class WorkspaceRepository:
         with self.database.session() as session:
             return list(session.scalars(select(entity).order_by(entity.updated_at.desc())))
 
+    def get(self, entity, item_id: str):
+        with self.database.session() as session:
+            return session.get(entity, item_id)
+
+    def get_plugin_by_catalog_slug(self, catalog_slug: str) -> Plugin | None:
+        with self.database.session() as session:
+            return session.scalar(select(Plugin).where(Plugin.catalog_slug == catalog_slug))
+
+    def catalog_plugin_ids(self) -> dict[str, str]:
+        with self.database.session() as session:
+            rows = session.scalars(select(Plugin).where(Plugin.catalog_slug.is_not(None))).all()
+            return {item.catalog_slug: item.id for item in rows if item.catalog_slug}
+
     def create(self, entity, **values):
         with self.database.session() as session:
             item = entity(**values)
@@ -303,8 +343,7 @@ class WorkspaceRepository:
             if item is None:
                 return None
             for key, value in values.items():
-                if value is not None:
-                    setattr(item, key, value)
+                setattr(item, key, value)
             item.updated_at = datetime.utcnow()
             session.commit()
             return item

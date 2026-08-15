@@ -1,8 +1,7 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   CalendarDays,
   CircleHelp,
-  FileText,
   FolderKanban,
   Library,
   Monitor,
@@ -21,7 +20,6 @@ import {
   Trash2,
 } from 'lucide-react';
 
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -36,13 +34,18 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Separator } from '@/components/ui/separator';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import type { Chat, Document, Theme } from '@/src/types';
+import type { Chat, Theme } from '@/src/types';
+import type { WorkspaceView } from '@/src/components/workspace-panel';
+
+export type SidebarNavigation = 'chat' | 'library' | WorkspaceView;
 
 type Props = {
   chats: Chat[];
-  documents: Document[];
   activeChatId?: string;
+  activeNavigation?: SidebarNavigation;
+  hasMoreChats?: boolean;
+  loadingMoreChats?: boolean;
+  onLoadMoreChats?: () => void;
   theme: Theme;
   onCreateChat: () => void;
   onSelectChat: (chat: Chat) => void;
@@ -52,6 +55,7 @@ type Props = {
   onDelete: (chat: Chat) => void;
   onShare: (chat: Chat) => void;
   onOpenLibrary: () => void;
+  onOpenWorkspace: (view: WorkspaceView) => void;
 };
 
 const themeOptions = [
@@ -62,8 +66,11 @@ const themeOptions = [
 
 export function AppSidebar({
   chats,
-  documents,
   activeChatId,
+  activeNavigation,
+  hasMoreChats = false,
+  loadingMoreChats = false,
+  onLoadMoreChats,
   theme,
   onCreateChat,
   onSelectChat,
@@ -73,6 +80,7 @@ export function AppSidebar({
   onDelete,
   onShare,
   onOpenLibrary,
+  onOpenWorkspace,
 }: Props) {
   const recent = chats.filter((chat) => !chat.archived);
   const archived = chats.filter((chat) => chat.archived);
@@ -83,53 +91,45 @@ export function AppSidebar({
     setRenameTarget(chat);
     setTitle(chat.title);
   };
+  const handleHistoryScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const element = event.currentTarget;
+    if (hasMoreChats && !loadingMoreChats && element.scrollHeight - element.scrollTop - element.clientHeight < 120) {
+      onLoadMoreChats?.();
+    }
+  }, [hasMoreChats, loadingMoreChats, onLoadMoreChats]);
   return (
     <aside className="flex min-h-[100dvh] flex-col border-b border-border bg-sidebar p-4 lg:sticky lg:top-0 lg:h-screen lg:border-r lg:border-b-0">
-      <div className="mb-5 flex items-center justify-between">
+      <div className="mb-5 flex items-center">
         <div className="flex items-center gap-2 font-semibold">
           <span className="grid size-8 place-items-center rounded-xl bg-primary text-primary-foreground">
             <Sparkles size={16} />
           </span>
           Local Agent
         </div>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button variant="ghost" size="icon" onClick={onCreateChat}>
-                <Plus size={18} />
-              </Button>
-            }
-          />
-          <TooltipContent>Tạo chat mới</TooltipContent>
-        </Tooltip>
       </div>
-      <Button className="mb-5 w-full" onClick={onCreateChat}>
-        <Plus size={16} />
-        New chat
-      </Button>
       <nav className="mb-5 grid gap-1">
-        <Button variant="secondary" className="justify-start" onClick={onCreateChat}>
+        <Button variant="ghost" data-active={activeNavigation === 'chat'} aria-current={activeNavigation === 'chat' ? 'page' : undefined} className="sidebar-nav-item justify-start" onClick={onCreateChat}>
           <Plus size={16} />
           Đoạn chat mới
         </Button>
-        <Button variant="ghost" className="justify-start" onClick={onOpenLibrary}>
+        <Button variant="ghost" data-active={activeNavigation === 'library'} aria-current={activeNavigation === 'library' ? 'page' : undefined} className="sidebar-nav-item justify-start" onClick={onOpenLibrary}>
           <Library size={16} />
           Thư viện
         </Button>
-        <Button variant="ghost" className="justify-start">
+        <Button variant="ghost" data-active={activeNavigation === 'projects'} aria-current={activeNavigation === 'projects' ? 'page' : undefined} className="sidebar-nav-item justify-start" onClick={() => onOpenWorkspace('projects')}>
           <FolderKanban size={16} />
           Dự án
         </Button>
-        <Button variant="ghost" className="justify-start">
+        <Button variant="ghost" data-active={activeNavigation === 'schedules'} aria-current={activeNavigation === 'schedules' ? 'page' : undefined} className="sidebar-nav-item justify-start" onClick={() => onOpenWorkspace('schedules')}>
           <CalendarDays size={16} />
           Lịch trình
         </Button>
-        <Button variant="ghost" className="justify-start">
+        <Button variant="ghost" data-active={activeNavigation === 'plugins'} aria-current={activeNavigation === 'plugins' ? 'page' : undefined} className="sidebar-nav-item justify-start" onClick={() => onOpenWorkspace('plugins')}>
           <Plug size={16} />
           Plugin
         </Button>
       </nav>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto" onScroll={handleHistoryScroll}>
         <p className="section-label">Gần đây</p>
         <nav className="space-y-1">
           {recent.map((chat) => (
@@ -165,23 +165,8 @@ export function AppSidebar({
             </nav>
           </>
         ) : null}
-        <Separator className="my-6" />
-        <p className="section-label">Thư viện</p>
-        <div className="space-y-2">
-          {documents.length ? (
-            documents.map((doc) => (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground" key={doc.id}>
-                <FileText size={14} />
-                <span className="truncate">{doc.name}</span>
-                <Badge variant={doc.status === 'ready' ? 'secondary' : 'outline'}>
-                  {doc.status === 'ready' ? 'Ready' : doc.status}
-                </Badge>
-              </div>
-            ))
-          ) : (
-            <p className="text-xs text-muted-foreground">Đính kèm PDF trong ô chat để tạo knowledge base.</p>
-          )}
-        </div>
+        {loadingMoreChats ? <p className="px-2 py-3 text-center text-xs text-muted-foreground">Đang tải thêm...</p> : null}
+        {!loadingMoreChats && hasMoreChats ? <p className="px-2 py-3 text-center text-xs text-muted-foreground">Cuộn xuống để tải thêm lịch sử</p> : null}
       </div>
       <div className="mt-6 shrink-0 border-t pt-5">
         <DropdownMenu>
@@ -306,8 +291,10 @@ function ChatRow({ chat, active, onSelect, onRename, onUpdate, onDelete, onShare
   return (
     <div className="group flex items-center gap-1">
       <Button
-        variant={active ? 'secondary' : 'ghost'}
-        className="min-w-0 flex-1 justify-start truncate"
+        variant="ghost"
+        data-active={active}
+        aria-current={active ? 'page' : undefined}
+        className="sidebar-chat-item min-w-0 flex-1 justify-start truncate"
         onClick={() => onSelect(chat)}
       >
         {chat.pinned ? <Pin className="mr-1.5 shrink-0" size={13} /> : null}

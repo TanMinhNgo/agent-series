@@ -3,7 +3,7 @@ import { AtSign, Check, Copy, Link, LoaderCircle, MessageCircle, X } from 'lucid
 
 import { Button } from '@/components/ui/button';
 import { request } from '@/src/hooks/client';
-import { RichResponse } from '@/src/components/rich-response';
+import { RichResponseLazy } from '@/src/components/rich-response-lazy';
 import type { Chat, Message, PublicShare } from '@/src/types';
 
 type Props = { chat: Chat; onClose: () => void };
@@ -86,7 +86,7 @@ export function ChatShareDialog({ chat, onClose }: Props) {
                   }
                 >
                   {message.role === 'assistant' ? (
-                    <RichResponse content={message.content} blocks={message.contentBlocks} />
+                    <RichResponseLazy content={message.content} blocks={message.contentBlocks} />
                   ) : (
                     message.content
                   )}
@@ -116,12 +116,12 @@ export function ChatShareDialog({ chat, onClose }: Props) {
             </div>
             <div className="mt-5 flex justify-center gap-4">
               <ShareButton label="X" icon={<X size={18} />} onClick={() => social('x')} />
+              <ShareButton label="LinkedIn" icon={<AtSign size={18} />} onClick={() => social('linkedin')} />
               <ShareButton
-                label="LinkedIn"
-                icon={<AtSign size={18} />}
-                onClick={() => social('linkedin')}
+                label="Reddit"
+                icon={<MessageCircle size={18} />}
+                onClick={() => social('reddit')}
               />
-              <ShareButton label="Reddit" icon={<MessageCircle size={18} />} onClick={() => social('reddit')} />
             </div>
             <p className="mt-4 text-center text-xs text-muted-foreground">
               Tệp đính kèm, kết quả tool và dữ liệu knowledge base không được chia sẻ.
@@ -133,15 +133,7 @@ export function ChatShareDialog({ chat, onClose }: Props) {
   );
 }
 
-function ShareButton({
-  label,
-  icon,
-  onClick,
-}: {
-  label: string;
-  icon: ReactNode;
-  onClick: () => void;
-}) {
+function ShareButton({ label, icon, onClick }: { label: string; icon: ReactNode; onClick: () => void }) {
   return (
     <button
       type="button"

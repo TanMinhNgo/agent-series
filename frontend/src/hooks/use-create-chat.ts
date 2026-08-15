@@ -10,6 +10,6 @@ export const useCreateChat = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (data: Variables) => request<Chat>({ url: '/chats', method: 'POST', data }),
-    onSuccess: (chat) => queryClient.setQueryData<Chat[]>(queryKeys.chats, (items = []) => [chat, ...items]),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
   });
 };

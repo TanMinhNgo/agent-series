@@ -13,6 +13,10 @@ export type Schedule = {
   endsAt: string | null;
   notes: string | null;
   projectId: string | null;
+  prompt: string | null;
+  recurrence: 'once' | 'daily' | 'weekly' | 'monthly';
+  status: 'active' | 'paused';
+  nextRunAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -23,6 +27,20 @@ export type Plugin = {
   description: string | null;
   enabled: boolean;
   config: Record<string, unknown> | null;
+  catalogSlug: string | null;
+  category: string | null;
+  capabilities: string[] | null;
+  connectionStatus: 'not_connected' | 'connected' | null;
   createdAt: string;
   updatedAt: string;
+};
+export type PluginCatalogItem = {
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  capabilities: string[];
+  setup_url: string;
+  featured: boolean;
+  installedPluginId: string | null;
 };

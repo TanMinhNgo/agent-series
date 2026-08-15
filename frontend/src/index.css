@@ -2,7 +2,6 @@
 @import 'tw-animate-css';
 @import '@fontsource-variable/cormorant-garamond';
 @import '@fontsource-variable/inter';
-@import 'katex/dist/katex.min.css';
 
 @custom-variant dark (&:is(.dark *));
 
@@ -106,6 +105,64 @@ button:not(:disabled):active {
   letter-spacing: 0.11em;
   text-transform: uppercase;
 }
+.sidebar-nav-item {
+  position: relative;
+  border: 1px solid transparent;
+  color: var(--muted-foreground);
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+}
+.sidebar-nav-item:hover {
+  color: var(--foreground);
+}
+.sidebar-nav-item[data-active='true'] {
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--border));
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  color: var(--foreground);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--primary) 12%, transparent);
+  font-weight: 650;
+}
+.sidebar-nav-item[data-active='true']::before {
+  position: absolute;
+  top: 0.48rem;
+  bottom: 0.48rem;
+  left: -1px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--primary);
+  content: '';
+}
+.sidebar-nav-item[data-active='true'] svg {
+  color: var(--primary);
+}
+.sidebar-chat-item {
+  position: relative;
+  border: 1px solid transparent;
+  color: var(--muted-foreground);
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+}
+.sidebar-chat-item:hover {
+  color: var(--foreground);
+}
+.sidebar-chat-item[data-active='true'] {
+  border-color: color-mix(in srgb, var(--primary) 28%, var(--border));
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  color: var(--foreground);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--primary) 10%, transparent);
+  font-weight: 650;
+}
+.sidebar-chat-item[data-active='true']::before {
+  position: absolute;
+  top: 0.45rem;
+  bottom: 0.45rem;
+  left: -1px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--primary);
+  content: '';
+}
+.sidebar-chat-item[data-active='true'] svg {
+  color: var(--primary);
+}
 .select-control {
   max-width: 170px;
   border: 1px solid var(--border);
@@ -117,6 +174,20 @@ button:not(:disabled):active {
   outline: none;
 }
 .select-control:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+.workspace-input {
+  width: 100%;
+  border: 1px solid var(--input);
+  border-radius: 0.6rem;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0.55rem 0.7rem;
+  font-size: 0.875rem;
+  outline: none;
+}
+.workspace-input:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent);
 }

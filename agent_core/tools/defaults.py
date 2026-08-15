@@ -14,9 +14,11 @@ DEFAULT_TOOLS = (
 )
 
 
-def build_default_registry(knowledge_tool: ToolSpec | None = None) -> ToolRegistry:
+def build_default_registry(knowledge_tool: ToolSpec | None = None, extra_tools: list[ToolSpec] | None = None) -> ToolRegistry:
     """Build a registry containing the project's default tool set."""
     tools = list(DEFAULT_TOOLS)
     if knowledge_tool is not None:
         tools.append(knowledge_tool)
+    if extra_tools:
+        tools.extend(extra_tools)
     return ToolRegistry(tools)

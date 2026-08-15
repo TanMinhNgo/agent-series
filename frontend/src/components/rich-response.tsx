@@ -4,6 +4,7 @@ import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import { Check, Copy } from 'lucide-react';
+import 'katex/dist/katex.min.css';
 
 import { ResponseBlocks } from '@/src/components/response-blocks';
 import type { ResponseBlock } from '@/src/types';
