@@ -7,12 +7,13 @@
 ## Điểm nổi bật
 
 - Chat với Gemini, Claude hoặc OpenAI; model được cấu hình qua allowlist trong `.env`.
-- Lưu lịch sử chat vào PostgreSQL: đổi model sẽ tạo chat mới nhưng giữ ngữ cảnh 10 lượt gần nhất của chat đang mở.
+- Lưu toàn bộ lịch sử chat vào PostgreSQL; AI nhận 10 lượt gần nhất và truy hồi semantic các đoạn cũ liên quan bằng pgvector trong đúng chat đang mở.
 - Hiển thị Markdown/GFM, bảng, công thức KaTeX, code block có nút sao chép, chữ **đậm**, *nghiêng* và liên kết an toàn.
-- Upload PDF, trích xuất nội dung, chia đoạn, tạo embedding local và tìm kiếm ngữ nghĩa bằng pgvector.
+- Upload PDF, xử lý/index nền qua PostgreSQL job queue, chia đoạn, tạo embedding local và tìm kiếm ngữ nghĩa bằng pgvector.
 - Thư viện memory dài hạn: tự index hội thoại, tự tìm phần liên quan cho câu hỏi mới, tìm kiếm/forget từng mục hoặc xoá toàn bộ trong UI.
 - Stream trạng thái agent/tool qua SSE, hỗ trợ file/ảnh đính kèm, giao diện sáng/tối/system.
-- Chia sẻ bản snapshot chat công khai bằng token khi cần.
+- Lên lịch tác vụ AI một lần, hằng ngày hoặc hằng tuần; mỗi lịch có chat kết quả, run log và timeout recovery riêng.
+- Chia sẻ bản snapshot chat công khai bằng token, có thể đặt hạn dùng hoặc thu hồi.
 
 ## Kiến trúc
 
@@ -24,6 +25,8 @@ FastAPI API ── Agent core ── LLM provider (Gemini / Claude / OpenAI)
         │
         ├── PostgreSQL + pgvector (chat, memory, RAG)
         └── Local storage (PDF knowledge base, media uploads)
+
+Worker ── PostgreSQL (job queue, lịch đến hạn, run log) ── Agent core
 ```
 
 ## Yêu cầu
@@ -48,7 +51,7 @@ FastAPI API ── Agent core ── LLM provider (Gemini / Claude / OpenAI)
    .\run.ps1
    ```
 
-Lần đầu script sẽ tạo `.venv`, cài Python/Node dependencies, chạy PostgreSQL + pgvector tại cổng `5433`, áp Alembic migration, rồi mở:
+Lần đầu script sẽ tạo `.venv`, cài Python/Node dependencies, chạy PostgreSQL + pgvector tại cổng `5433`, áp Alembic migration, khởi động scheduler worker nền, rồi mở:
 
 - App: `http://localhost:5173`
 - API: `http://localhost:8000`
@@ -71,6 +74,8 @@ Các biến quan trọng trong `.env`:
 | `MEDIA_DIR` | Thư mục lưu media người dùng upload |
 
 Lần đầu dùng RAG/memory, `sentence-transformers` có thể tải embedding model từ Hugging Face. Nếu bước này lỗi, chat thường vẫn hoạt động nhưng chưa đọc/lưu được memory ở lượt đó.
+
+PDF scan không có text layer sẽ được đánh dấu **Cần OCR** thay vì index lỗi; OCR engine chưa được cài trong bản local này.
 
 ## Thư viện memory cá nhân
 

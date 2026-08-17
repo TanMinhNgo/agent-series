@@ -11,5 +11,9 @@ function RichResponseFallback({ content }: { content: string }) {
 }
 
 export function RichResponseLazy({ content, blocks = [] }: { content: string; blocks?: ResponseBlock[] }) {
-  return <Suspense fallback={<RichResponseFallback content={content} />}><RichResponse content={content} blocks={blocks} /></Suspense>;
+  return (
+    <Suspense fallback={<RichResponseFallback content={content} />}>
+      <RichResponse content={content} blocks={blocks} />
+    </Suspense>
+  );
 }

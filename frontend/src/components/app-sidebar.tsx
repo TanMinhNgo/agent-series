@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   CalendarDays,
   CircleHelp,
@@ -34,13 +35,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Separator } from '@/components/ui/separator';
-import type { Chat, Theme } from '@/src/types';
+import type { Chat, Project, Theme } from '@/src/types';
 import type { WorkspaceView } from '@/src/components/workspace-panel';
 
 export type SidebarNavigation = 'chat' | 'library' | WorkspaceView;
 
 type Props = {
   chats: Chat[];
+  projects: Project[];
   activeChatId?: string;
   activeNavigation?: SidebarNavigation;
   hasMoreChats?: boolean;
@@ -51,7 +53,7 @@ type Props = {
   onSelectChat: (chat: Chat) => void;
   onThemeChange: (theme: Theme) => void;
   onRename: (chat: Chat, title: string) => void;
-  onUpdate: (chat: Chat, values: { pinned?: boolean; archived?: boolean }) => void;
+  onUpdate: (chat: Chat, values: { pinned?: boolean; archived?: boolean; projectId?: string | null }) => void;
   onDelete: (chat: Chat) => void;
   onShare: (chat: Chat) => void;
   onOpenLibrary: () => void;
@@ -66,6 +68,7 @@ const themeOptions = [
 
 export function AppSidebar({
   chats,
+  projects,
   activeChatId,
   activeNavigation,
   hasMoreChats = false,
@@ -91,12 +94,19 @@ export function AppSidebar({
     setRenameTarget(chat);
     setTitle(chat.title);
   };
-  const handleHistoryScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
-    const element = event.currentTarget;
-    if (hasMoreChats && !loadingMoreChats && element.scrollHeight - element.scrollTop - element.clientHeight < 120) {
-      onLoadMoreChats?.();
-    }
-  }, [hasMoreChats, loadingMoreChats, onLoadMoreChats]);
+  const handleHistoryScroll = useCallback(
+    (event: React.UIEvent<HTMLDivElement>) => {
+      const element = event.currentTarget;
+      if (
+        hasMoreChats &&
+        !loadingMoreChats &&
+        element.scrollHeight - element.scrollTop - element.clientHeight < 120
+      ) {
+        onLoadMoreChats?.();
+      }
+    },
+    [hasMoreChats, loadingMoreChats, onLoadMoreChats],
+  );
   return (
     <aside className="flex min-h-[100dvh] flex-col border-b border-border bg-sidebar p-4 lg:sticky lg:top-0 lg:h-screen lg:border-r lg:border-b-0">
       <div className="mb-5 flex items-center">
@@ -108,23 +118,53 @@ export function AppSidebar({
         </div>
       </div>
       <nav className="mb-5 grid gap-1">
-        <Button variant="ghost" data-active={activeNavigation === 'chat'} aria-current={activeNavigation === 'chat' ? 'page' : undefined} className="sidebar-nav-item justify-start" onClick={onCreateChat}>
+        <Button
+          variant="ghost"
+          data-active={activeNavigation === 'chat'}
+          aria-current={activeNavigation === 'chat' ? 'page' : undefined}
+          className="sidebar-nav-item justify-start"
+          onClick={onCreateChat}
+        >
           <Plus size={16} />
           Đoạn chat mới
         </Button>
-        <Button variant="ghost" data-active={activeNavigation === 'library'} aria-current={activeNavigation === 'library' ? 'page' : undefined} className="sidebar-nav-item justify-start" onClick={onOpenLibrary}>
+        <Button
+          variant="ghost"
+          data-active={activeNavigation === 'library'}
+          aria-current={activeNavigation === 'library' ? 'page' : undefined}
+          className="sidebar-nav-item justify-start"
+          onClick={onOpenLibrary}
+        >
           <Library size={16} />
           Thư viện
         </Button>
-        <Button variant="ghost" data-active={activeNavigation === 'projects'} aria-current={activeNavigation === 'projects' ? 'page' : undefined} className="sidebar-nav-item justify-start" onClick={() => onOpenWorkspace('projects')}>
+        <Button
+          variant="ghost"
+          data-active={activeNavigation === 'projects'}
+          aria-current={activeNavigation === 'projects' ? 'page' : undefined}
+          className="sidebar-nav-item justify-start"
+          onClick={() => onOpenWorkspace('projects')}
+        >
           <FolderKanban size={16} />
           Dự án
         </Button>
-        <Button variant="ghost" data-active={activeNavigation === 'schedules'} aria-current={activeNavigation === 'schedules' ? 'page' : undefined} className="sidebar-nav-item justify-start" onClick={() => onOpenWorkspace('schedules')}>
+        <Button
+          variant="ghost"
+          data-active={activeNavigation === 'schedules'}
+          aria-current={activeNavigation === 'schedules' ? 'page' : undefined}
+          className="sidebar-nav-item justify-start"
+          onClick={() => onOpenWorkspace('schedules')}
+        >
           <CalendarDays size={16} />
           Lịch trình
         </Button>
-        <Button variant="ghost" data-active={activeNavigation === 'plugins'} aria-current={activeNavigation === 'plugins' ? 'page' : undefined} className="sidebar-nav-item justify-start" onClick={() => onOpenWorkspace('plugins')}>
+        <Button
+          variant="ghost"
+          data-active={activeNavigation === 'plugins'}
+          aria-current={activeNavigation === 'plugins' ? 'page' : undefined}
+          className="sidebar-nav-item justify-start"
+          onClick={() => onOpenWorkspace('plugins')}
+        >
           <Plug size={16} />
           Plugin
         </Button>
@@ -140,6 +180,7 @@ export function AppSidebar({
               onSelect={onSelectChat}
               onRename={startRename}
               onUpdate={onUpdate}
+              projects={projects}
               onDelete={setDeleteTarget}
               onShare={onShare}
             />
@@ -158,6 +199,7 @@ export function AppSidebar({
                   onSelect={onSelectChat}
                   onRename={startRename}
                   onUpdate={onUpdate}
+                  projects={projects}
                   onDelete={setDeleteTarget}
                   onShare={onShare}
                 />
@@ -165,8 +207,14 @@ export function AppSidebar({
             </nav>
           </>
         ) : null}
-        {loadingMoreChats ? <p className="px-2 py-3 text-center text-xs text-muted-foreground">Đang tải thêm...</p> : null}
-        {!loadingMoreChats && hasMoreChats ? <p className="px-2 py-3 text-center text-xs text-muted-foreground">Cuộn xuống để tải thêm lịch sử</p> : null}
+        {loadingMoreChats ? (
+          <p className="px-2 py-3 text-center text-xs text-muted-foreground">Đang tải thêm...</p>
+        ) : null}
+        {!loadingMoreChats && hasMoreChats ? (
+          <p className="px-2 py-3 text-center text-xs text-muted-foreground">
+            Cuộn xuống để tải thêm lịch sử
+          </p>
+        ) : null}
       </div>
       <div className="mt-6 shrink-0 border-t pt-5">
         <DropdownMenu>
@@ -215,71 +263,78 @@ export function AppSidebar({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      {renameTarget ? (
-        <div
-          className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4"
-          role="dialog"
-          aria-modal="true"
-        >
-          <form
-            className="w-full max-w-sm rounded-2xl border bg-card p-5"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (title.trim()) onRename(renameTarget, title.trim());
-              setRenameTarget(null);
-            }}
-          >
-            <h2 className="text-lg font-semibold">Đổi tên cuộc trò chuyện</h2>
-            <input
-              autoFocus
-              maxLength={160}
-              className="mt-4 w-full rounded-xl border bg-background px-3 py-2"
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-            />
-            <div className="mt-5 flex justify-end gap-2">
-              <Button type="button" variant="ghost" onClick={() => setRenameTarget(null)}>
-                Hủy
-              </Button>
-              <Button type="submit">Lưu</Button>
-            </div>
-          </form>
-        </div>
-      ) : null}
-      {deleteTarget ? (
-        <div
-          className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4"
-          role="dialog"
-          aria-modal="true"
-        >
-          <section className="w-full max-w-sm rounded-2xl border bg-card p-5">
-            <h2 className="text-lg font-semibold">Xóa cuộc trò chuyện?</h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Toàn bộ lịch sử và liên kết chia sẻ công khai sẽ bị thu hồi.
-            </p>
-            <div className="mt-5 flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setDeleteTarget(null)}>
-                Hủy
-              </Button>
-              <Button
-                variant="destructive"
-                onClick={() => {
-                  onDelete(deleteTarget);
-                  setDeleteTarget(null);
+      {renameTarget
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[100] grid place-items-center bg-black/60 p-4"
+              role="dialog"
+              aria-modal="true"
+            >
+              <form
+                className="w-full max-w-sm rounded-2xl border bg-card p-5"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (title.trim()) onRename(renameTarget, title.trim());
+                  setRenameTarget(null);
                 }}
               >
-                Xóa
-              </Button>
-            </div>
-          </section>
-        </div>
-      ) : null}
+                <h2 className="text-lg font-semibold">Đổi tên cuộc trò chuyện</h2>
+                <input
+                  autoFocus
+                  maxLength={160}
+                  className="mt-4 w-full rounded-xl border bg-background px-3 py-2"
+                  value={title}
+                  onChange={(event) => setTitle(event.target.value)}
+                />
+                <div className="mt-5 flex justify-end gap-2">
+                  <Button type="button" variant="ghost" onClick={() => setRenameTarget(null)}>
+                    Hủy
+                  </Button>
+                  <Button type="submit">Lưu</Button>
+                </div>
+              </form>
+            </div>,
+            document.body,
+          )
+        : null}
+      {deleteTarget
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[100] grid place-items-center bg-black/60 p-4"
+              role="dialog"
+              aria-modal="true"
+            >
+              <section className="w-full max-w-sm rounded-2xl border bg-card p-5">
+                <h2 className="text-lg font-semibold">Xóa cuộc trò chuyện?</h2>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Toàn bộ lịch sử và liên kết chia sẻ công khai sẽ bị thu hồi.
+                </p>
+                <div className="mt-5 flex justify-end gap-2">
+                  <Button variant="ghost" onClick={() => setDeleteTarget(null)}>
+                    Hủy
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={() => {
+                      onDelete(deleteTarget);
+                      setDeleteTarget(null);
+                    }}
+                  >
+                    Xóa
+                  </Button>
+                </div>
+              </section>
+            </div>,
+            document.body,
+          )
+        : null}
     </aside>
   );
 }
 
 type ChatRowProps = {
   chat: Chat;
+  projects: Project[];
   active: boolean;
   onSelect: (chat: Chat) => void;
   onRename: (chat: Chat) => void;
@@ -287,7 +342,7 @@ type ChatRowProps = {
   onDelete: (chat: Chat) => void;
   onShare: (chat: Chat) => void;
 };
-function ChatRow({ chat, active, onSelect, onRename, onUpdate, onDelete, onShare }: ChatRowProps) {
+function ChatRow({ chat, projects, active, onSelect, onRename, onUpdate, onDelete, onShare }: ChatRowProps) {
   return (
     <div className="group flex items-center gap-1">
       <Button
@@ -327,6 +382,21 @@ function ChatRow({ chat, active, onSelect, onRename, onUpdate, onDelete, onShare
           <DropdownMenuItem onClick={() => onUpdate(chat, { archived: !chat.archived })}>
             <Archive /> {chat.archived ? 'Khôi phục' : 'Lưu trữ'}
           </DropdownMenuItem>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <FolderKanban /> {chat.projectId ? 'Chuyển dự án' : 'Thêm vào dự án'}
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuItem onClick={() => onUpdate(chat, { projectId: null })}>
+                Không thuộc dự án
+              </DropdownMenuItem>
+              {projects.map((project) => (
+                <DropdownMenuItem key={project.id} onClick={() => onUpdate(chat, { projectId: project.id })}>
+                  {project.name}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
           <DropdownMenuSeparator />
           <DropdownMenuItem
             className="text-destructive focus:text-destructive"

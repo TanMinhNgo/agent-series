@@ -21,7 +21,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { PluginBrandIcon } from '@/src/components/plugin-brand-icon';
-import { useWorkspace } from '@/src/hooks/use-workspace';
+import { useScheduleRuns, useWorkspace } from '@/src/hooks/use-workspace';
 import type { Plugin, PluginCatalogItem, Project, Schedule } from '@/src/types';
 
 export type WorkspaceView = 'projects' | 'schedules' | 'plugins';
@@ -136,9 +136,10 @@ function PageHeader({
 }
 
 function ProjectsView() {
-  const { projects, projectActions } = useWorkspace();
+  const { projects, projectActions, deleteProject } = useWorkspace();
   const [status, setStatus] = useState<'all' | keyof typeof statusMeta>('all');
   const [editing, setEditing] = useState<Project | null | undefined>();
+  const [deleting, setDeleting] = useState<Project | null>(null);
   const [query, setQuery] = useState('');
   const items = useMemo(
     () =>
@@ -149,7 +150,9 @@ function ProjectsView() {
       ),
     [projects.data, query, status],
   );
-  const save = async (data: Pick<Project, 'name' | 'description' | 'status'>) => {
+  const save = async (
+    data: Pick<Project, 'name' | 'description' | 'status' | 'instructions' | 'memoryMode'>,
+  ) => {
     if (editing) await projectActions.update.mutateAsync({ id: editing.id, data });
     else await projectActions.create.mutateAsync(data);
     setEditing(undefined);
@@ -207,10 +210,7 @@ function ProjectsView() {
               key={item.id}
               item={item}
               onEdit={() => setEditing(item)}
-              onDelete={() => {
-                if (window.confirm(`Xóa dự án "${item.name}"? Lịch liên quan sẽ không còn gắn dự án.`))
-                  void projectActions.remove.mutateAsync(item.id);
-              }}
+              onDelete={() => setDeleting(item)}
             />
           ))}
         </div>
@@ -222,6 +222,18 @@ function ProjectsView() {
           error={projectActions.create.error?.message || projectActions.update.error?.message}
           onClose={() => setEditing(undefined)}
           onSave={save}
+        />
+      ) : null}
+      {deleting ? (
+        <DeleteProjectDialog
+          project={deleting}
+          busy={deleteProject.isPending}
+          error={deleteProject.error?.message}
+          onClose={() => setDeleting(null)}
+          onConfirm={async (confirmName) => {
+            await deleteProject.mutateAsync({ id: deleting.id, confirmName });
+            setDeleting(null);
+          }}
         />
       ) : null}
     </>
@@ -280,18 +292,28 @@ function ProjectForm({
   busy: boolean;
   error?: string;
   onClose: () => void;
-  onSave: (data: Pick<Project, 'name' | 'description' | 'status'>) => Promise<void>;
+  onSave: (
+    data: Pick<Project, 'name' | 'description' | 'status' | 'instructions' | 'memoryMode'>,
+  ) => Promise<void>;
 }) {
   const [name, setName] = useState(project?.name || '');
   const [description, setDescription] = useState(project?.description || '');
   const [status, setStatus] = useState(project?.status || 'active');
+  const [memoryMode, setMemoryMode] = useState<Project['memoryMode']>(project?.memoryMode || 'default');
+  const [instructions, setInstructions] = useState(project?.instructions || '');
   return (
     <FormDialog title={project ? 'Sửa dự án' : 'Tạo dự án'} onClose={onClose}>
       <form
         className="space-y-4"
         onSubmit={(event) => {
           event.preventDefault();
-          void onSave({ name, description: description || null, status });
+          void onSave({
+            name,
+            description: description || null,
+            status,
+            instructions: instructions || null,
+            memoryMode,
+          });
         }}
       >
         <Field label="Tên dự án">
@@ -324,6 +346,25 @@ function ProjectForm({
             ))}
           </select>
         </Field>
+        <Field label="Bộ nhớ">
+          <select
+            className="workspace-input"
+            value={memoryMode}
+            onChange={(event) => setMemoryMode(event.target.value as Project['memoryMode'])}
+          >
+            <option value="default">Bộ nhớ mặc định</option>
+            <option value="project_only">Chỉ bộ nhớ dự án</option>
+          </select>
+        </Field>
+        <Field label="Hướng dẫn cho AI trong dự án">
+          <textarea
+            className="workspace-input min-h-24"
+            maxLength={10_000}
+            value={instructions}
+            onChange={(event) => setInstructions(event.target.value)}
+            placeholder="Ví dụ: Trả lời ngắn gọn, luôn nêu nguồn tài liệu."
+          />
+        </Field>
         {error ? <FormError message={error} /> : null}
         <FormActions busy={busy} onClose={onClose} submit={project ? 'Lưu thay đổi' : 'Tạo dự án'} />
       </form>
@@ -331,17 +372,82 @@ function ProjectForm({
   );
 }
 
+function DeleteProjectDialog({
+  project,
+  busy,
+  error,
+  onClose,
+  onConfirm,
+}: {
+  project: Project;
+  busy: boolean;
+  error?: string;
+  onClose: () => void;
+  onConfirm: (name: string) => Promise<void>;
+}) {
+  const [step, setStep] = useState(1);
+  const [confirmation, setConfirmation] = useState('');
+  return (
+    <FormDialog
+      title={step === 1 ? `Xóa dự án "${project.name}"?` : 'Xác nhận xóa vĩnh viễn'}
+      onClose={onClose}
+    >
+      {step === 1 ? (
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Toàn bộ chat, PDF RAG, file, lịch trình và memory thuộc dự án sẽ bị xóa vĩnh viễn.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={onClose}>
+              Hủy
+            </Button>
+            <Button variant="destructive" onClick={() => setStep(2)}>
+              Tiếp tục
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void onConfirm(confirmation);
+          }}
+        >
+          <p className="text-sm text-muted-foreground">
+            Nhập chính xác <strong>{project.name}</strong> để xác nhận.
+          </p>
+          <input
+            className="workspace-input"
+            value={confirmation}
+            onChange={(event) => setConfirmation(event.target.value)}
+            autoFocus
+          />
+          {error ? <FormError message={error} /> : null}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => setStep(1)}>
+              Quay lại
+            </Button>
+            <Button type="submit" variant="destructive" disabled={busy || confirmation !== project.name}>
+              Xóa vĩnh viễn
+            </Button>
+          </div>
+        </form>
+      )}
+    </FormDialog>
+  );
+}
+
 function SchedulesView() {
-  const { schedules, projects, scheduleActions } = useWorkspace();
-  const [draft, setDraft] = useState('');
+  const { schedules, projects, scheduleActions, runScheduleNow } = useWorkspace();
   const [filter, setFilter] = useState<'active' | 'paused' | 'all'>('active');
   const [editing, setEditing] = useState<Schedule | null | undefined>();
-  const [draftDate, setDraftDate] = useState<Date>();
-  const save = async (data: Pick<Schedule, 'title' | 'startsAt' | 'endsAt' | 'notes' | 'projectId'>) => {
+  const save = async (
+    data: Pick<Schedule, 'title' | 'startsAt' | 'endsAt' | 'notes' | 'projectId' | 'prompt' | 'recurrence'>,
+  ) => {
     if (editing) await scheduleActions.update.mutateAsync({ id: editing.id, data });
-    else await scheduleActions.create.mutateAsync(data);
+    else await scheduleActions.create.mutateAsync({ ...data, status: 'active', nextRunAt: data.startsAt });
     setEditing(undefined);
-    setDraftDate(undefined);
   };
   if (schedules.isLoading || projects.isLoading) return <WorkspaceSkeleton />;
   if (schedules.error || projects.error)
@@ -352,22 +458,116 @@ function SchedulesView() {
   return (
     <>
       <div className="mx-auto max-w-3xl py-8">
-        <header className="flex items-end justify-between gap-4"><div><h1 className="text-3xl font-semibold tracking-tight">Đã lên lịch</h1><p className="mt-1 text-sm text-muted-foreground">Tạo và quản lý các tác vụ AI cần thực hiện định kỳ.</p></div><div className="flex rounded-xl border p-1">{(['active','paused','all'] as const).map((value) => <Button key={value} size="sm" variant={filter === value ? 'secondary' : 'ghost'} onClick={() => setFilter(value)}>{value === 'active' ? 'Đang hoạt động' : value === 'paused' ? 'Tạm dừng' : 'Tất cả'}</Button>)}</div></header>
-        <form className="mt-7 flex gap-2 rounded-2xl border bg-muted/30 p-2" onSubmit={(event) => { event.preventDefault(); const prompt = draft.trim(); if (!prompt) return; const recurrence = /mỗi ngày|hằng ngày|mỗi sáng|mỗi tối/i.test(prompt) ? 'daily' : /mỗi tuần|hằng tuần|thứ /i.test(prompt) ? 'weekly' : /mỗi tháng|hằng tháng/i.test(prompt) ? 'monthly' : 'once'; void scheduleActions.create.mutateAsync({ title: prompt.slice(0, 160), prompt, startsAt: new Date().toISOString(), endsAt: null, notes: null, projectId: null, recurrence, status: 'active', nextRunAt: new Date().toISOString() }).then(() => setDraft('')); }}><input className="min-w-0 flex-1 bg-transparent px-3 py-2 outline-none" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Ví dụ: Mỗi sáng theo dõi tin công nghệ"/><Button type="submit"><Plus/> Lên lịch</Button></form>
-        <div className="mt-6 space-y-2">{events.map((item) => <article key={item.id} className="flex items-start gap-3 rounded-xl border p-4"><span className="mt-1.5 size-2 rounded-full bg-primary"/><button type="button" className="min-w-0 flex-1 text-left" onClick={() => setEditing(item)}><p className="font-medium">{item.title}</p><p className="mt-1 text-sm text-muted-foreground">{item.prompt || item.notes || 'Tác vụ đã lên lịch'} · {item.recurrence === 'once' ? new Date(item.startsAt).toLocaleString('vi-VN') : item.recurrence === 'daily' ? 'Hằng ngày' : item.recurrence === 'weekly' ? 'Hằng tuần' : 'Hằng tháng'}</p></button><Button size="sm" variant="ghost" onClick={() => void scheduleActions.update.mutateAsync({ id: item.id, data: { status: item.status === 'active' ? 'paused' : 'active' } })}>{item.status === 'active' ? 'Tạm dừng' : 'Bật lại'}</Button></article>)}{!events.length ? <EmptyState icon={CalendarDays} title="Chưa có tác vụ phù hợp" detail="Dùng ô phía trên để lên lịch cho một tác vụ." action={() => setEditing(null)} /> : null}</div>
+        <header className="flex items-end justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight">Đã lên lịch</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Tạo và quản lý các tác vụ AI cần thực hiện định kỳ.
+            </p>
+          </div>
+          <div className="flex rounded-xl border p-1">
+            {(['active', 'paused', 'all'] as const).map((value) => (
+              <Button
+                key={value}
+                size="sm"
+                variant={filter === value ? 'secondary' : 'ghost'}
+                onClick={() => setFilter(value)}
+              >
+                {value === 'active' ? 'Đang hoạt động' : value === 'paused' ? 'Tạm dừng' : 'Tất cả'}
+              </Button>
+            ))}
+          </div>
+        </header>
+        <Button className="mt-7" onClick={() => setEditing(null)}>
+          <Plus /> Tạo tác vụ AI
+        </Button>
+        <div className="mt-6 space-y-2">
+          {events.map((item) => (
+            <article
+              key={item.id}
+              className="flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-start"
+            >
+              <span className="mt-1.5 size-2 rounded-full bg-primary" />
+              <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setEditing(item)}>
+                <p className="font-medium">{item.title}</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {item.recurrence === 'once'
+                    ? 'Một lần'
+                    : item.recurrence === 'daily'
+                      ? 'Hằng ngày'
+                      : 'Hằng tuần'}
+                  {' · '}
+                  {item.nextRunAt
+                    ? `Lần tới: ${new Date(item.nextRunAt).toLocaleString('vi-VN')}`
+                    : 'Không còn lần chạy'}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {item.lastRunAt
+                    ? `Đã chạy: ${new Date(item.lastRunAt).toLocaleString('vi-VN')}`
+                    : 'Chưa chạy lần nào'}
+                  {' · '}
+                  {item.recurrence === 'once'
+                    ? 'Một lần'
+                    : item.status === 'paused'
+                      ? 'Đang tạm dừng'
+                      : item.status === 'completed'
+                        ? 'Đã hoàn tất'
+                        : 'Đang hoạt động'}
+                </p>
+              </button>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={runScheduleNow.isPending}
+                  onClick={() => void runScheduleNow.mutateAsync(item.id)}
+                >
+                  <CirclePlay /> Chạy ngay
+                </Button>
+                {item.status !== 'completed' ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      void scheduleActions.update.mutateAsync({
+                        id: item.id,
+                        data: { status: item.status === 'active' ? 'paused' : 'active' },
+                      })
+                    }
+                  >
+                    {item.status === 'active' ? 'Tạm dừng' : 'Bật lại'}
+                  </Button>
+                ) : null}
+                {item.chatId ? (
+                  <Button size="sm" variant="ghost" render={<a href={`/chat/${item.chatId}`} />}>
+                    Mở chat
+                  </Button>
+                ) : null}
+              </div>
+            </article>
+          ))}
+          {!events.length ? (
+            <EmptyState
+              icon={CalendarDays}
+              title="Chưa có tác vụ phù hợp"
+              detail="Dùng ô phía trên để lên lịch cho một tác vụ."
+              action={() => setEditing(null)}
+            />
+          ) : null}
+        </div>
       </div>
       {editing !== undefined ? (
         <ScheduleForm
           schedule={editing}
           projects={projects.data || []}
-          defaultDate={draftDate}
           busy={scheduleActions.create.isPending || scheduleActions.update.isPending}
           error={scheduleActions.create.error?.message || scheduleActions.update.error?.message}
           onClose={() => {
             setEditing(undefined);
-            setDraftDate(undefined);
           }}
           onSave={save}
+          onRunNow={editing ? () => runScheduleNow.mutateAsync(editing.id) : undefined}
+          runningNow={runScheduleNow.isPending}
           onDelete={
             editing
               ? async () => {
@@ -487,29 +687,34 @@ export function Calendar({
 function ScheduleForm({
   schedule,
   projects,
-  defaultDate,
   busy,
   error,
   onClose,
   onSave,
+  onRunNow,
+  runningNow,
   onDelete,
 }: {
   schedule: Schedule | null;
   projects: Project[];
-  defaultDate?: Date;
   busy: boolean;
   error?: string;
   onClose: () => void;
-  onSave: (data: Pick<Schedule, 'title' | 'startsAt' | 'endsAt' | 'notes' | 'projectId'>) => Promise<void>;
+  onSave: (
+    data: Pick<Schedule, 'title' | 'startsAt' | 'endsAt' | 'notes' | 'projectId' | 'prompt' | 'recurrence'>,
+  ) => Promise<void>;
+  onRunNow?: () => Promise<unknown>;
+  runningNow?: boolean;
   onDelete?: () => Promise<void>;
 }) {
   const [title, setTitle] = useState(schedule?.title || '');
-  const [startsAt, setStartsAt] = useState(
-    schedule ? toInputDateTime(schedule.startsAt) : defaultDateTime(defaultDate),
-  );
+  const [startsAt, setStartsAt] = useState(schedule ? toInputDateTime(schedule.startsAt) : defaultDateTime());
   const [endsAt, setEndsAt] = useState(schedule?.endsAt ? toInputDateTime(schedule.endsAt) : '');
   const [notes, setNotes] = useState(schedule?.notes || '');
   const [projectId, setProjectId] = useState(schedule?.projectId || '');
+  const [prompt, setPrompt] = useState(schedule?.prompt || '');
+  const [recurrence, setRecurrence] = useState<Schedule['recurrence']>(schedule?.recurrence || 'once');
+  const runs = useScheduleRuns(schedule?.id);
   return (
     <FormDialog title={schedule ? 'Sửa lịch trình' : 'Tạo lịch trình'} onClose={onClose}>
       <form
@@ -525,6 +730,8 @@ function ScheduleForm({
             endsAt: end?.toISOString() || null,
             notes: notes || null,
             projectId: projectId || null,
+            prompt,
+            recurrence,
           });
         }}
       >
@@ -535,6 +742,16 @@ function ScheduleForm({
             className="workspace-input"
             value={title}
             onChange={(event) => setTitle(event.target.value)}
+          />
+        </Field>
+        <Field label="Yêu cầu AI">
+          <textarea
+            required
+            className="workspace-input min-h-24"
+            maxLength={10_000}
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder="Ví dụ: Tổng hợp thông tin quan trọng và nêu việc cần làm."
           />
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -557,6 +774,17 @@ function ScheduleForm({
             />
           </Field>
         </div>
+        <Field label="Lặp lại">
+          <select
+            className="workspace-input"
+            value={recurrence}
+            onChange={(event) => setRecurrence(event.target.value as Schedule['recurrence'])}
+          >
+            <option value="once">Một lần</option>
+            <option value="daily">Hằng ngày</option>
+            <option value="weekly">Hằng tuần</option>
+          </select>
+        </Field>
         <Field label="Dự án">
           <select
             className="workspace-input"
@@ -583,6 +811,7 @@ function ScheduleForm({
           <FormError message="Thời điểm kết thúc phải sau thời điểm bắt đầu." />
         ) : null}
         {error ? <FormError message={error} /> : null}
+        {schedule ? <ScheduleRunHistory runs={runs.data || []} loading={runs.isLoading} /> : null}
         <div className="flex flex-wrap justify-between gap-2">
           {onDelete ? (
             <Button type="button" variant="destructive" onClick={() => void onDelete()} disabled={busy}>
@@ -591,10 +820,50 @@ function ScheduleForm({
           ) : (
             <span />
           )}
-          <FormActions busy={busy} onClose={onClose} submit={schedule ? 'Lưu thay đổi' : 'Tạo lịch'} />
+          <div className="flex gap-2">
+            {onRunNow ? (
+              <Button type="button" variant="secondary" disabled={runningNow} onClick={() => void onRunNow()}>
+                <CirclePlay /> {runningNow ? 'Đang xếp hàng...' : 'Chạy ngay'}
+              </Button>
+            ) : null}
+            <FormActions busy={busy} onClose={onClose} submit={schedule ? 'Lưu thay đổi' : 'Tạo lịch'} />
+          </div>
         </div>
       </form>
     </FormDialog>
+  );
+}
+
+function ScheduleRunHistory({
+  runs,
+  loading,
+}: {
+  runs: import('@/src/types').ScheduleRun[];
+  loading: boolean;
+}) {
+  return (
+    <section className="rounded-xl border bg-muted/20 p-3">
+      <h3 className="text-sm font-semibold">Lần chạy gần đây</h3>
+      {loading ? (
+        <p className="mt-2 text-xs text-muted-foreground">Đang tải nhật ký...</p>
+      ) : !runs.length ? (
+        <p className="mt-2 text-xs text-muted-foreground">Chưa có lần chạy nào.</p>
+      ) : (
+        <div className="mt-2 space-y-2">
+          {runs.slice(0, 5).map((run) => (
+            <div key={run.id} className="rounded-lg bg-background p-2 text-xs">
+              <p className="font-medium">
+                {run.status === 'succeeded' ? 'Hoàn tất' : run.status === 'failed' ? 'Thất bại' : 'Đang chạy'}{' '}
+                · {new Date(run.startedAt).toLocaleString('vi-VN')}
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                {run.error || run.summary || 'Đang chờ kết quả...'}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 

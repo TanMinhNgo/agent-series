@@ -109,7 +109,11 @@ button:not(:disabled):active {
   position: relative;
   border: 1px solid transparent;
   color: var(--muted-foreground);
-  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
 }
 .sidebar-nav-item:hover {
   color: var(--foreground);
@@ -138,7 +142,11 @@ button:not(:disabled):active {
   position: relative;
   border: 1px solid transparent;
   color: var(--muted-foreground);
-  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
 }
 .sidebar-chat-item:hover {
   color: var(--foreground);

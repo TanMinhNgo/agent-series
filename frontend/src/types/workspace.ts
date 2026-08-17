@@ -3,6 +3,8 @@ export type Project = {
   name: string;
   description: string | null;
   status: string;
+  instructions: string | null;
+  memoryMode: 'default' | 'project_only';
   createdAt: string;
   updatedAt: string;
 };
@@ -14,11 +16,24 @@ export type Schedule = {
   notes: string | null;
   projectId: string | null;
   prompt: string | null;
-  recurrence: 'once' | 'daily' | 'weekly' | 'monthly';
-  status: 'active' | 'paused';
+  recurrence: 'once' | 'daily' | 'weekly';
+  status: 'active' | 'paused' | 'completed';
   nextRunAt: string | null;
+  lastRunAt: string | null;
+  timezone: string;
+  chatId: string | null;
   createdAt: string;
   updatedAt: string;
+};
+export type ScheduleRun = {
+  id: string;
+  scheduleId: string;
+  scheduledFor: string;
+  status: 'running' | 'succeeded' | 'failed';
+  summary: string | null;
+  error: string | null;
+  startedAt: string;
+  finishedAt: string | null;
 };
 export type Plugin = {
   id: string;

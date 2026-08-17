@@ -4,7 +4,7 @@ import { request } from '@/src/hooks/client';
 import { queryKeys } from '@/src/hooks/query-keys';
 import type { Chat } from '@/src/types';
 
-type Variables = { provider?: string; model?: string; contextSourceChatId?: string };
+type Variables = { provider?: string; model?: string; contextSourceChatId?: string; projectId?: string };
 
 export const useCreateChat = () => {
   const queryClient = useQueryClient();

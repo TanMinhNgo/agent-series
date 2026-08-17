@@ -14,6 +14,7 @@ export function ChatShareDialog({ chat, onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [expiry, setExpiry] = useState<'never' | '1d' | '7d' | '30d'>('never');
   useEffect(() => {
     void request<Message[]>({ url: `/chats/${chat.id}/messages` })
       .then(setMessages)
@@ -25,9 +26,33 @@ export function ChatShareDialog({ chat, onClose }: Props) {
     setLoading(true);
     setError(null);
     try {
-      setShare(await request<PublicShare>({ url: `/chats/${chat.id}/share`, method: 'POST' }));
+      const expiresAt =
+        expiry === 'never'
+          ? null
+          : new Date(
+              Date.now() + { '1d': 1, '7d': 7, '30d': 30 }[expiry] * 24 * 60 * 60 * 1000,
+            ).toISOString();
+      setShare(
+        await request<PublicShare>({
+          url: `/chats/${chat.id}/share`,
+          method: 'POST',
+          data: { expiresAt },
+        }),
+      );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Không thể tạo liên kết chia sẻ.');
+    } finally {
+      setLoading(false);
+    }
+  };
+  const revoke = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await request<void>({ url: `/chats/${chat.id}/share`, method: 'DELETE' });
+      setShare(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Không thể thu hồi liên kết.');
     } finally {
       setLoading(false);
     }
@@ -97,9 +122,24 @@ export function ChatShareDialog({ chat, onClose }: Props) {
         </div>
         {error ? <p className="mb-3 text-sm text-destructive">{error}</p> : null}
         {!share ? (
-          <Button className="w-full" disabled={loading} onClick={() => void publish()}>
-            {loading ? <LoaderCircle className="animate-spin" /> : <Link />} Tạo liên kết chia sẻ
-          </Button>
+          <div className="space-y-3">
+            <label className="grid gap-1 text-sm font-medium">
+              Hết hạn
+              <select
+                className="rounded-xl border bg-background px-3 py-2 text-sm"
+                value={expiry}
+                onChange={(event) => setExpiry(event.target.value as typeof expiry)}
+              >
+                <option value="never">Không hết hạn</option>
+                <option value="1d">Sau 1 ngày</option>
+                <option value="7d">Sau 7 ngày</option>
+                <option value="30d">Sau 30 ngày</option>
+              </select>
+            </label>
+            <Button className="w-full" disabled={loading} onClick={() => void publish()}>
+              {loading ? <LoaderCircle className="animate-spin" /> : <Link />} Tạo liên kết chia sẻ
+            </Button>
+          </div>
         ) : (
           <>
             <div className="flex gap-2">
@@ -126,6 +166,16 @@ export function ChatShareDialog({ chat, onClose }: Props) {
             <p className="mt-4 text-center text-xs text-muted-foreground">
               Tệp đính kèm, kết quả tool và dữ liệu knowledge base không được chia sẻ.
             </p>
+            <div className="mt-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+              <span>
+                {share.expiresAt
+                  ? `Hết hạn: ${new Date(share.expiresAt).toLocaleString('vi-VN')}`
+                  : 'Không hết hạn'}
+              </span>
+              <Button size="sm" variant="destructive" disabled={loading} onClick={() => void revoke()}>
+                Ngừng chia sẻ
+              </Button>
+            </div>
           </>
         )}
       </section>

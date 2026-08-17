@@ -6,14 +6,19 @@ export const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? '/api';
 
 export const apiClient = axios.create({
   baseURL: apiBaseUrl,
-  headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+  headers: { Accept: 'application/json' },
 });
 
 export const request = async <T>(config: AxiosRequestConfig): Promise<T> => {
   try {
+    const isFormData = typeof FormData !== 'undefined' && config.data instanceof FormData;
     const response = await apiClient.request<T>({
       ...config,
-      headers: config.data instanceof FormData ? { Accept: 'application/json' } : config.headers,
+      headers: {
+        Accept: 'application/json',
+        ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+        ...config.headers,
+      },
     });
     return response.data;
   } catch (error) {

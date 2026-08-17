@@ -42,13 +42,27 @@ class MemoryService:
                 session.add(ChatMemoryChunk(chat_id=chat_id, role=role, fingerprint=fingerprint, content=content, chunk_index=chunk_index, embedding=embedding))
             session.commit()
 
-    def recall(self, query: str, limit: int = 6) -> str:
+    def recall(self, query: str, chat_id: str, source_chat_id: str | None = None, project_id: str | None = None, project_only: bool = False, limit: int = 6) -> str:
         if not query.strip():
             return ""
         vector = self._embed([query], "query")[0]
         with self.database.session() as session:
+            if project_only and project_id:
+                chat_ids = list(session.scalars(select(Chat.id).where(Chat.project_id == project_id)))
+            else:
+                chat_ids = [chat_id]
+                if source_chat_id and source_chat_id != chat_id:
+                    chat_ids.append(source_chat_id)
+            if not chat_ids:
+                return ""
             distance = ChatMemoryChunk.embedding.cosine_distance(vector)
-            rows = session.execute(select(ChatMemoryChunk, Chat.title, distance.label("distance")).join(Chat).where(ChatMemoryChunk.forgotten.is_(False)).order_by(distance).limit(limit)).all()
+            rows = session.execute(
+                select(ChatMemoryChunk, Chat.title, distance.label("distance"))
+                .join(Chat)
+                .where(ChatMemoryChunk.forgotten.is_(False), ChatMemoryChunk.chat_id.in_(chat_ids))
+                .order_by(distance)
+                .limit(limit)
+            ).all()
         if not rows:
             return ""
         facts = "\n\n".join(f"[Trí nhớ từ chat: {title}; {chunk.role}]\n{chunk.content}" for chunk, title, _ in rows)

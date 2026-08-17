@@ -8,4 +8,5 @@ export type PublicShare = {
   messages: Message[];
   createdAt: string;
   updatedAt: string;
+  expiresAt: string | null;
 };

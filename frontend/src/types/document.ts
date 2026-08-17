@@ -4,4 +4,5 @@ export type Document = {
   status: string;
   pageCount: number | null;
   error: string | null;
+  projectId: string | null;
 };

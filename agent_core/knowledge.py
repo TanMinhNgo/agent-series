@@ -52,11 +52,14 @@ class KnowledgeService:
         )
         return vectors.tolist()
 
-    def list_documents(self) -> list[Document]:
+    def list_documents(self, project_id: str | None = None) -> list[Document]:
         with self.database.session() as session:
-            return list(session.scalars(select(Document).order_by(Document.created_at.desc())))
+            statement = select(Document).order_by(Document.created_at.desc())
+            if project_id is not None:
+                statement = statement.where(Document.project_id == project_id)
+            return list(session.scalars(statement))
 
-    def upload(self, original_name: str, data: bytes) -> tuple[Document, bool]:
+    def upload(self, original_name: str, data: bytes, project_id: str | None = None) -> tuple[Document, bool]:
         if not original_name.lower().endswith(".pdf"):
             raise ValueError("Chỉ nhận file PDF.")
         if not data:
@@ -66,12 +69,12 @@ class KnowledgeService:
         digest = hashlib.sha256(data).hexdigest()
         self.knowledge_dir.mkdir(parents=True, exist_ok=True)
         with self.database.session() as session:
-            existing = session.scalar(select(Document).where(Document.sha256 == digest))
+            existing = session.scalar(select(Document).where(Document.sha256 == digest, Document.project_id == project_id))
             if existing:
                 return existing, False
             stored_name = f"{uuid4()}_{Path(original_name).name}"
             (self.knowledge_dir / stored_name).write_bytes(data)
-            document = Document(original_name=Path(original_name).name, stored_name=stored_name, sha256=digest)
+            document = Document(original_name=Path(original_name).name, stored_name=stored_name, sha256=digest, project_id=project_id)
             session.add(document)
             session.commit()
             return document, True
@@ -91,7 +94,9 @@ class KnowledgeService:
                 for page_number, page in enumerate(reader.pages, start=1):
                     parts.extend((page_number, item) for item in _chunks(page.extract_text() or ""))
                 if not parts:
-                    raise ValueError("PDF không có text layer; hãy OCR trước khi index.")
+                    document.status, document.error = "needs_ocr", "PDF không có text layer. Hãy OCR trước rồi thử index lại."
+                    session.commit()
+                    return document
                 embeddings = self._embed([content for _, content in parts], "passage")
                 for index, ((page_number, content), embedding) in enumerate(zip(parts, embeddings)):
                     session.add(DocumentChunk(document_id=document.id, chunk_index=index, page_number=page_number, content=content, embedding=embedding))
@@ -99,9 +104,23 @@ class KnowledgeService:
             except Exception as exc:  # noqa: BLE001
                 document.status, document.error = "failed", str(exc)
             session.commit()
+            if document.status == "failed":
+                raise RuntimeError(document.error or "Không thể index tài liệu.")
             return document
 
-    def search(self, query: str, top_k: int = 4) -> str:
+    def delete(self, document_id: str) -> bool:
+        with self.database.session() as session:
+            document = session.get(Document, document_id)
+            if document is None:
+                return False
+            path = self.knowledge_dir / document.stored_name
+            if path.exists():
+                path.unlink()
+            session.delete(document)
+            session.commit()
+            return True
+
+    def search(self, query: str, top_k: int = 4, project_id: str | None = None) -> str:
         if not query.strip():
             return "[Lỗi] Câu hỏi truy vấn đang trống."
         top_k = max(1, min(int(top_k), 8))
@@ -111,7 +130,7 @@ class KnowledgeService:
             rows = session.execute(
                 select(DocumentChunk, Document.original_name, distance.label("distance"))
                 .join(Document)
-                .where(Document.status == "ready")
+                .where(Document.status == "ready", Document.project_id == project_id)
                 .order_by(distance)
                 .limit(top_k)
             ).all()
@@ -123,10 +142,10 @@ class KnowledgeService:
         )
 
 
-def build_knowledge_tool(service: KnowledgeService) -> ToolSpec:
+def build_knowledge_tool(service: KnowledgeService, project_id: str | None = None) -> ToolSpec:
     return ToolSpec(
         name="search_knowledge_base",
         description="Tìm thông tin trong các PDF người dùng đã upload và index. Dùng khi câu hỏi liên quan đến tài liệu; câu trả lời phải nêu nguồn và số trang.",
         parameters={"type": "object", "properties": {"query": {"type": "string", "description": "Câu truy vấn rõ ràng bằng ngôn ngữ tự nhiên."}, "top_k": {"type": "integer", "description": "Số đoạn cần lấy, từ 1 đến 8; mặc định 4."}}, "required": ["query"]},
-        func=service.search,
+        func=lambda query, top_k=4: service.search(query, top_k, project_id),
     )

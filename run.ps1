@@ -51,6 +51,14 @@ $frontendJob = Start-Job -ScriptBlock {
     npm run dev -- --host 127.0.0.1
 } -ArgumentList $frontendPath
 
+# Worker riêng: xử lý jobs nền và lịch đến hạn từ PostgreSQL.
+$schedulerJob = Start-Job -ScriptBlock {
+    param($Path)
+    Set-Location $Path
+    . .\.venv\Scripts\Activate.ps1
+    python -m agent_core.worker
+} -ArgumentList $PSScriptRoot
+
 # 7) Chạy FastAPI ở foreground để Ctrl+C dừng toàn bộ stack local.
 Write-Host "Mo FastAPI tai http://localhost:8000..." -ForegroundColor Green
 Write-Host "Mo ung dung tai http://localhost:5173" -ForegroundColor Green
@@ -61,5 +69,9 @@ finally {
     if ($frontendJob) {
         Stop-Job -Job $frontendJob -ErrorAction SilentlyContinue
         Remove-Job -Job $frontendJob -Force -ErrorAction SilentlyContinue
+    }
+    if ($schedulerJob) {
+        Stop-Job -Job $schedulerJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $schedulerJob -Force -ErrorAction SilentlyContinue
     }
 }

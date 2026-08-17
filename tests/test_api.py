@@ -6,9 +6,22 @@ import pytest
 from pydantic import ValidationError
 from types import SimpleNamespace
 
-from api.main import ProjectRequest, ScheduleRequest, app, list_chats, model_error_message
+from api.main import (
+    ProjectRequest,
+    ScheduleRequest,
+    ScheduleUpdateRequest,
+    ShareRequest,
+    app,
+    list_chats,
+    model_error_message,
+    persisted_history,
+    recent_chat_history,
+)
+from agent_core.background import BackgroundWorker
 from agent_core.plugin_catalog import CATALOG, find_catalog_plugin
-from agent_core.storage import Chat
+from agent_core.plugin_execution import connected_read_tools
+from agent_core.memory import MemoryService
+from agent_core.storage import Chat, Plugin, Schedule, ScheduleRepository
 
 
 def test_health_and_public_config_do_not_expose_provider_keys(monkeypatch) -> None:
@@ -59,6 +72,136 @@ def test_chat_history_list_is_paginated(monkeypatch) -> None:
     assert page["nextOffset"] == 2
 
 
+def test_recent_chat_history_keeps_ten_complete_user_turns() -> None:
+    history = []
+    for index in range(12):
+        history.extend([
+            {"role": "user", "content": f"question {index}"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": f"tool-{index}"}]},
+            {"role": "tool", "id": f"tool-{index}", "name": "search", "content": "result"},
+            {"role": "assistant", "content": f"answer {index}"},
+        ])
+
+    recent = recent_chat_history(history)
+
+    assert recent[0] == {"role": "user", "content": "question 2"}
+    assert sum(item["role"] == "user" for item in recent) == 10
+    assert {item["id"] for item in recent if item["role"] == "tool"} == {f"tool-{index}" for index in range(2, 12)}
+
+
+def test_persisted_history_keeps_archived_context_and_appends_new_turn() -> None:
+    archived = [{"role": "user", "content": "old question"}, {"role": "assistant", "content": "old answer"}]
+    context = [{"role": "user", "content": "recent question"}]
+    generated = [*context, {"role": "assistant", "content": "new answer"}]
+
+    assert persisted_history(archived, generated, len(context)) == [
+        *archived,
+        {"role": "assistant", "content": "new answer"},
+    ]
+
+
+def test_memory_recall_is_scoped_to_the_current_chat_and_optional_source() -> None:
+    captured = []
+
+    class Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, statement):
+            captured.append(statement)
+            return SimpleNamespace(all=lambda: [])
+
+    service = MemoryService(SimpleNamespace(session=lambda: Session()), "unused")
+    service._embed = lambda _values, _prefix: [[0.1, 0.2]]  # type: ignore[method-assign]
+
+    assert service.recall("search term", "current-chat", "source-chat") == ""
+
+    params = captured[0].compile().params
+    assert ["current-chat", "source-chat"] in params.values()
+
+
+def test_share_request_accepts_an_optional_expiry() -> None:
+    assert ShareRequest.model_validate({"expiresAt": "2026-08-20T09:00:00+07:00"}).expires_at is not None
+    assert ShareRequest().expires_at is None
+
+
+def test_background_worker_indexes_a_document_job() -> None:
+    job = SimpleNamespace(id="job-1", type="document_index", payload={"document_id": "document-1"})
+    calls: list[tuple[str, object]] = []
+
+    class Jobs:
+        def claim(self, _now):
+            return job
+
+        def heartbeat(self, _now, current_job_type=None, last_error=None):
+            if current_job_type or last_error:
+                calls.append(("heartbeat", current_job_type or last_error))
+
+        def succeed(self, job_id):
+            calls.append(("succeed", job_id))
+
+        def fail(self, job_id, error, _now):
+            calls.append(("fail", (job_id, error)))
+
+    class Knowledge:
+        def index(self, document_id):
+            calls.append(("index", document_id))
+
+    assert BackgroundWorker(Jobs(), Knowledge()).run_once(datetime.now(UTC))
+    assert calls == [("heartbeat", "document_index"), ("index", "document-1"), ("succeed", "job-1")]
+
+
+def test_background_worker_retries_a_failed_document_index() -> None:
+    job = SimpleNamespace(id="job-1", type="document_index", payload={"document_id": "document-1"})
+    calls: list[tuple[str, object]] = []
+
+    class Jobs:
+        def claim(self, _now): return job
+        def heartbeat(self, _now, current_job_type=None, last_error=None):
+            if last_error: calls.append(("heartbeat", last_error))
+        def succeed(self, job_id): calls.append(("succeed", job_id))
+        def fail(self, job_id, error, _now): calls.append(("fail", (job_id, error)))
+
+    class Knowledge:
+        def index(self, _document_id):
+            return SimpleNamespace(status="failed", error="embedding unavailable")
+
+    assert BackgroundWorker(Jobs(), Knowledge()).run_once(datetime.now(UTC))
+    assert calls[0][0] == "fail"
+    assert "embedding unavailable" in str(calls[0][1])
+    assert not any(kind == "succeed" for kind, _ in calls)
+
+
+def test_background_worker_indexes_memory_from_persisted_history() -> None:
+    job = SimpleNamespace(id="job-2", type="memory_index", payload={"chat_id": "chat-1"})
+    calls: list[tuple[str, object]] = []
+
+    class Jobs:
+        def claim(self, _now): return job
+        def heartbeat(self, _now, current_job_type=None, last_error=None): pass
+        def succeed(self, job_id): calls.append(("succeed", job_id))
+        def fail(self, job_id, error, _now): calls.append(("fail", (job_id, error)))
+
+    class Knowledge: pass
+    class Chats:
+        def history(self, chat_id):
+            calls.append(("history", chat_id))
+            return [{"role": "user", "content": "hello"}]
+
+    class Memory:
+        def index_history(self, chat_id, history): calls.append(("memory", (chat_id, history)))
+
+    assert BackgroundWorker(Jobs(), Knowledge(), Memory(), Chats()).run_once(datetime.now(UTC))
+    assert calls == [
+        ("history", "chat-1"),
+        ("memory", ("chat-1", [{"role": "user", "content": "hello"}])),
+        ("succeed", "job-2"),
+    ]
+
+
 def test_project_status_is_limited_to_workspace_statuses() -> None:
     assert ProjectRequest(name="Agent Series").status == "active"
     assert ProjectRequest(name="Agent Series", status="completed").status == "completed"
@@ -69,6 +212,28 @@ def test_project_status_is_limited_to_workspace_statuses() -> None:
 def test_schedule_request_accepts_frontend_camel_case_fields() -> None:
     payload = ScheduleRequest.model_validate({"title": "Demo", "startsAt": "2026-08-13T09:00:00+07:00", "endsAt": None, "projectId": None})
     assert payload.starts_at.hour == 9
+
+
+def test_schedule_update_accepts_a_status_only_patch() -> None:
+    assert ScheduleUpdateRequest.model_validate({"status": "paused"}).status == "paused"
+
+
+def test_next_recurring_run_skips_missed_intervals() -> None:
+    schedule = Schedule(
+        id="schedule-1",
+        title="Daily digest",
+        starts_at=datetime(2026, 8, 10, 9, tzinfo=UTC),
+        recurrence="daily",
+        next_run_at=datetime(2026, 8, 10, 9, tzinfo=UTC),
+    )
+    assert ScheduleRepository.next_run_after(schedule, datetime(2026, 8, 17, 10, tzinfo=UTC)) == datetime(2026, 8, 18, 9, tzinfo=UTC)
+
+
+def test_plugin_tools_require_an_enabled_connected_read_plugin() -> None:
+    plugin = Plugin(id="plugin-1", slug="github", name="GitHub", enabled=True, connection_status="connected", capabilities=["search"])
+    assert connected_read_tools([plugin]) == []  # no executor is registered yet
+    plugin.enabled = False
+    assert connected_read_tools([plugin]) == []
 
 
 def test_plugin_catalog_has_unique_slugs_and_expected_core_apps() -> None:

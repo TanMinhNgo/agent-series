@@ -36,6 +36,7 @@ Thumbs.db
 # ===== Dữ liệu runtime cục bộ =====
 knowledge/
 data/
+docs/
 
 # ===== Frontend runtime =====
 frontend/node_modules/

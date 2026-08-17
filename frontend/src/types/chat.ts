@@ -7,4 +7,5 @@ export type Chat = {
   pinned: boolean;
   archived: boolean;
   contextSourceChatId: string | null;
+  projectId: string | null;
 };

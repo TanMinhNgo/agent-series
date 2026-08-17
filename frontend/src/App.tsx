@@ -21,10 +21,13 @@ import { useGetDocuments } from '@/src/hooks/use-get-documents';
 import { useStreamChat } from '@/src/hooks/use-stream-chat';
 import { useUploadDocuments } from '@/src/hooks/use-upload-documents';
 import { useUploadMedia } from '@/src/hooks/use-upload-media';
+import { useWorkspace } from '@/src/hooks/use-workspace';
 import type { Chat, Theme } from '@/src/types';
 
 const WorkspacePanel = lazy(() =>
-  import('@/src/components/workspace-panel').then(({ WorkspacePanel: Component }) => ({ default: Component })),
+  import('@/src/components/workspace-panel').then(({ WorkspacePanel: Component }) => ({
+    default: Component,
+  })),
 );
 
 export default function App() {
@@ -43,16 +46,28 @@ export default function App() {
 
   const token = /^\/share\/([^/]+)\/?$/.exec(pathname)?.[1];
   const chatId = /^\/chat\/([^/]+)\/?$/.exec(pathname)?.[1];
-  return token ? <PublicSharePage token={token} /> : <ChatWorkspace chatId={chatId} libraryPage={pathname === '/library'} navigate={navigate} />;
+  const workspaceView = /^\/(projects|schedules|plugins)\/?$/.exec(pathname)?.[1] as
+    WorkspaceView | undefined;
+  return token ? (
+    <PublicSharePage token={token} />
+  ) : (
+    <ChatWorkspace
+      chatId={chatId}
+      libraryPage={pathname === '/library'}
+      workspaceView={workspaceView}
+      navigate={navigate}
+    />
+  );
 }
 
 type ChatWorkspaceProps = {
   chatId?: string;
   libraryPage: boolean;
+  workspaceView?: WorkspaceView;
   navigate: (to: string) => void;
 };
 
-function ChatWorkspace({ chatId, libraryPage, navigate }: ChatWorkspaceProps) {
+function ChatWorkspace({ chatId, libraryPage, workspaceView, navigate }: ChatWorkspaceProps) {
   const [theme, setTheme] = useState<Theme>(
     () => (localStorage.getItem('agent-series.theme') as Theme) || 'system',
   );
@@ -62,7 +77,6 @@ function ChatWorkspace({ chatId, libraryPage, navigate }: ChatWorkspaceProps) {
   const [userScrollRequest, setUserScrollRequest] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [shareChat, setShareChat] = useState<Chat | null>(null);
-  const [workspaceView, setWorkspaceView] = useState<WorkspaceView | null>(null);
   const activeNavigation: SidebarNavigation | undefined = libraryPage
     ? 'library'
     : workspaceView || (chatId ? undefined : 'chat');
@@ -81,6 +95,7 @@ function ChatWorkspace({ chatId, libraryPage, navigate }: ChatWorkspaceProps) {
   const uploadDocuments = useUploadDocuments();
   const uploadMedia = useUploadMedia();
   const streamChat = useStreamChat();
+  const { projects } = useWorkspace();
 
   useEffect(() => {
     document.documentElement.classList.toggle(
@@ -122,7 +137,10 @@ function ChatWorkspace({ chatId, libraryPage, navigate }: ChatWorkspaceProps) {
     const model = config.data?.providers[provider]?.[0];
     if (model) await createAndSelect(provider, model, activeChat?.id);
   };
-  const updateChat = async (chat: Chat, values: { pinned?: boolean; archived?: boolean }) => {
+  const updateChat = async (
+    chat: Chat,
+    values: { pinned?: boolean; archived?: boolean; projectId?: string | null },
+  ) => {
     setUiError(null);
     await chatActions.update.mutateAsync({ chatId: chat.id, values });
     if (values.archived && chat.id === activeChat?.id) navigate('/');
@@ -137,20 +155,24 @@ function ChatWorkspace({ chatId, libraryPage, navigate }: ChatWorkspaceProps) {
     if (chat.id === activeChat?.id) navigate('/');
   };
   const send = async (contentValue: string, files: File[]) => {
-    if ((!contentValue.trim() && !files.length) || !activeChat || streamChat.isPending) return;
+    if ((!contentValue.trim() && !files.length) || createChat.isPending || streamChat.isPending) return;
     const content = contentValue.trim() || 'Hãy phân tích các tệp đính kèm này.';
     setPrompt('');
     setStatus(null);
     setUiError(null);
     try {
+      const chat = activeChat || (await createChat.mutateAsync({}));
+      if (!activeChat) navigate(`/chat/${chat.id}`);
       const pdfs = files.filter((file) => file.type === 'application/pdf');
       const images = files.filter((file) => file.type.startsWith('image/'));
       const [uploadedImages] = await Promise.all([
         images.length ? uploadMedia.mutateAsync(images) : Promise.resolve([]),
-        pdfs.length ? uploadDocuments.mutateAsync(pdfs) : Promise.resolve([]),
+        pdfs.length
+          ? uploadDocuments.mutateAsync({ files: pdfs, projectId: chat.projectId || undefined })
+          : Promise.resolve([]),
       ]);
       await streamChat.mutateAsync({
-        chatId: activeChat.id,
+        chatId: chat.id,
         content,
         attachments: uploadedImages,
         onEvent: (name, data) => {
@@ -173,6 +195,7 @@ function ChatWorkspace({ chatId, libraryPage, navigate }: ChatWorkspaceProps) {
         <div className="hidden lg:block">
           <AppSidebar
             chats={chats.data || []}
+            projects={projects.data || []}
             activeChatId={chatId}
             activeNavigation={activeNavigation}
             hasMoreChats={chats.hasNextPage}
@@ -182,11 +205,9 @@ function ChatWorkspace({ chatId, libraryPage, navigate }: ChatWorkspaceProps) {
             }}
             theme={theme}
             onCreateChat={() => {
-              setWorkspaceView(null);
               void createAndSelect();
             }}
             onSelectChat={(chat: Chat) => {
-              setWorkspaceView(null);
               navigate(`/chat/${chat.id}`);
             }}
             onThemeChange={setTheme}
@@ -195,11 +216,10 @@ function ChatWorkspace({ chatId, libraryPage, navigate }: ChatWorkspaceProps) {
             onDelete={(chat) => void deleteChat(chat)}
             onShare={setShareChat}
             onOpenLibrary={() => {
-              setWorkspaceView(null);
               navigate('/library');
             }}
             onOpenWorkspace={(view) => {
-              setWorkspaceView(view);
+              navigate(`/${view}`);
             }}
           />
         </div>
@@ -214,6 +234,7 @@ function ChatWorkspace({ chatId, libraryPage, navigate }: ChatWorkspaceProps) {
             <div className="absolute inset-y-0 left-0 w-[min(86vw,340px)] shadow-2xl">
               <AppSidebar
                 chats={chats.data || []}
+                projects={projects.data || []}
                 activeChatId={chatId}
                 activeNavigation={activeNavigation}
                 hasMoreChats={chats.hasNextPage}
@@ -224,11 +245,9 @@ function ChatWorkspace({ chatId, libraryPage, navigate }: ChatWorkspaceProps) {
                 theme={theme}
                 onCreateChat={() => {
                   setSidebarOpen(false);
-                  setWorkspaceView(null);
                   void createAndSelect();
                 }}
                 onSelectChat={(chat) => {
-                  setWorkspaceView(null);
                   setSidebarOpen(false);
                   navigate(`/chat/${chat.id}`);
                 }}
@@ -242,12 +261,11 @@ function ChatWorkspace({ chatId, libraryPage, navigate }: ChatWorkspaceProps) {
                 }}
                 onOpenLibrary={() => {
                   setSidebarOpen(false);
-                  setWorkspaceView(null);
                   navigate('/library');
                 }}
                 onOpenWorkspace={(view) => {
-                  setWorkspaceView(view);
                   setSidebarOpen(false);
+                  navigate(`/${view}`);
                 }}
               />
             </div>
@@ -256,7 +274,7 @@ function ChatWorkspace({ chatId, libraryPage, navigate }: ChatWorkspaceProps) {
         <section className="flex min-w-0 flex-col">
           {libraryPage ? null : workspaceView ? (
             <div className="sticky top-0 z-20 flex h-15 items-center border-b bg-background/95 px-4 backdrop-blur sm:px-8">
-              <Button variant="ghost" size="sm" onClick={() => setWorkspaceView(null)}>
+              <Button variant="ghost" size="sm" onClick={() => navigate('/')}>
                 ← Chat
               </Button>
             </div>
@@ -270,7 +288,9 @@ function ChatWorkspace({ chatId, libraryPage, navigate }: ChatWorkspaceProps) {
               onModelChange={(event) => void changeModel(event)}
             />
           )}
-          {libraryPage ? <LibraryPage /> : workspaceView ? (
+          {libraryPage ? (
+            <LibraryPage />
+          ) : workspaceView ? (
             <Suspense fallback={<WorkspacePanelFallback />}>
               <WorkspacePanel view={workspaceView} />
             </Suspense>
@@ -298,5 +318,14 @@ function ChatWorkspace({ chatId, libraryPage, navigate }: ChatWorkspaceProps) {
 }
 
 function WorkspacePanelFallback() {
-  return <div className="mx-auto w-full max-w-6xl space-y-5 px-4 py-6 sm:px-8 lg:px-12"><div className="h-8 w-44 animate-pulse rounded-lg bg-muted" /><div className="h-10 w-full animate-pulse rounded-lg bg-muted" /><div className="grid gap-3 md:grid-cols-2"><div className="h-32 animate-pulse rounded-xl bg-muted" /><div className="h-32 animate-pulse rounded-xl bg-muted" /></div></div>;
+  return (
+    <div className="mx-auto w-full max-w-6xl space-y-5 px-4 py-6 sm:px-8 lg:px-12">
+      <div className="h-8 w-44 animate-pulse rounded-lg bg-muted" />
+      <div className="h-10 w-full animate-pulse rounded-lg bg-muted" />
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="h-32 animate-pulse rounded-xl bg-muted" />
+        <div className="h-32 animate-pulse rounded-xl bg-muted" />
+      </div>
+    </div>
+  );
 }

@@ -2,10 +2,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { request } from '@/src/hooks/client';
 import { queryKeys } from '@/src/hooks/query-keys';
-import type { Plugin, PluginCatalogItem, Project, Schedule } from '@/src/types';
+import type { Plugin, PluginCatalogItem, Project, Schedule, ScheduleRun } from '@/src/types';
 
-type ProjectInput = Pick<Project, 'name' | 'description' | 'status'>;
-type ScheduleInput = Pick<Schedule, 'title' | 'startsAt' | 'endsAt' | 'notes' | 'projectId'> & Partial<Pick<Schedule, 'prompt' | 'recurrence' | 'status' | 'nextRunAt'>>;
+type ProjectInput = Pick<Project, 'name' | 'description' | 'status' | 'instructions' | 'memoryMode'>;
+type ScheduleInput = Pick<
+  Schedule,
+  'title' | 'startsAt' | 'endsAt' | 'notes' | 'projectId' | 'prompt' | 'recurrence'
+> &
+  Partial<Pick<Schedule, 'status' | 'nextRunAt' | 'timezone'>>;
 type PluginInput = Pick<Plugin, 'slug' | 'name' | 'description' | 'enabled' | 'config'>;
 
 const endpoints = {
@@ -53,7 +57,20 @@ export const useWorkspace = () => {
     queryFn: () => request<PluginCatalogItem[]>({ url: '/plugin-catalog' }),
   });
   const projectActions = useResourceActions<ProjectInput>('project');
+  const deleteProject = useMutation({
+    mutationFn: ({ id, confirmName }: { id: string; confirmName: string }) =>
+      request<void>({ url: `/projects/${id}`, method: 'DELETE', data: { confirmName } }),
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.projects }),
+  });
   const scheduleActions = useResourceActions<ScheduleInput>('schedule');
+  const runScheduleNow = useMutation({
+    mutationFn: (id: string) =>
+      request<{ status: string }>({ url: `/schedules/${id}/run-now`, method: 'POST' }),
+    onSuccess: (_, id) => {
+      void client.invalidateQueries({ queryKey: queryKeys.schedules });
+      void client.invalidateQueries({ queryKey: ['schedule-runs', id] });
+    },
+  });
   const pluginActions = useResourceActions<PluginInput>('plugin');
   const installCatalogPlugin = useMutation({
     mutationFn: (slug: string) => request<Plugin>({ url: `/plugin-catalog/${slug}/install`, method: 'POST' }),
@@ -69,8 +86,17 @@ export const useWorkspace = () => {
     plugins,
     pluginCatalog,
     projectActions,
+    deleteProject,
     scheduleActions,
+    runScheduleNow,
     pluginActions,
     installCatalogPlugin,
   };
 };
+
+export const useScheduleRuns = (scheduleId?: string) =>
+  useQuery({
+    queryKey: ['schedule-runs', scheduleId],
+    queryFn: () => request<ScheduleRun[]>({ url: `/schedules/${scheduleId}/runs` }),
+    enabled: Boolean(scheduleId),
+  });
