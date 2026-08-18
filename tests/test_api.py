@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 import pytest
+import api.main as main_module
 from pydantic import ValidationError
 from types import SimpleNamespace
 
@@ -24,7 +25,7 @@ from agent_core.plugin_catalog import CATALOG, find_catalog_plugin
 from agent_core.plugin_execution import connected_read_tools
 from agent_core.memory import MemoryService
 from agent_core.credentials import CredentialError, UserCredentialService
-from agent_core.storage import Chat, Plugin, Schedule, ScheduleRepository, document_scope_key
+from agent_core.storage import Chat, Plugin, Schedule, ScheduleRepository, current_user_id, document_scope_key
 
 
 def test_health_and_public_config_do_not_expose_provider_keys(monkeypatch) -> None:
@@ -71,6 +72,46 @@ def test_model_error_message_explains_tool_reasoning_conflict() -> None:
 
     assert "gpt-5.6-terra" in model_error_message(chat, error)
     assert "không hỗ trợ reasoning" in model_error_message(chat, error)
+
+
+def test_stream_chat_restores_the_chat_owner_in_its_worker_thread(monkeypatch) -> None:
+    chat = Chat(id="chat-1", user_id="user-1", provider="openai", model="gpt-5.6-terra")
+    observed: list[str | None] = []
+
+    class Chats:
+        database = object()
+        def get(self, _chat_id): return chat
+        def history(self, _chat_id):
+            observed.append(current_user_id.get())
+            return []
+        def replace_history(self, _chat_id, _history): pass
+
+    class AgentStub:
+        history: list[dict] = []
+        def run(self, _content, _attachments, on_step):
+            self.history = [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "world"},
+            ]
+            return SimpleNamespace(text="world", content_blocks=[])
+
+    class Jobs:
+        def __init__(self, _database): pass
+        def enqueue(self, _kind, _payload): pass
+
+    service = SimpleNamespace(
+        chats=Chats(),
+        memory=SimpleNamespace(recall=lambda *_args, **_kwargs: ""),
+        workspace=SimpleNamespace(get=lambda *_args, **_kwargs: None, list_plugins=lambda: []),
+    )
+    monkeypatch.setattr(main_module, "services", lambda: service)
+    monkeypatch.setattr(main_module, "make_agent", lambda *_args, **_kwargs: AgentStub())
+    monkeypatch.setattr(main_module, "BackgroundJobRepository", Jobs)
+
+    events = list(main_module.stream_chat("chat-1", "hello", []))
+
+    assert observed == ["user-1"]
+    assert any('event: message' in event for event in events)
 
 
 def test_chat_history_list_is_paginated(monkeypatch) -> None:

@@ -1409,6 +1409,11 @@ def stream_chat(chat_id: str, content: str, attachments: list[dict]) -> Iterator
     events: Queue[tuple[str, dict[str, Any]]] = Queue()
 
     def run() -> None:
+        # ContextVar values are local to a thread.  The SSE generator hands the
+        # actual agent work to a new thread, so restore the chat owner there;
+        # otherwise user-scoped repositories see no user and return no chat,
+        # history or credentials.
+        user_token = current_user_id.set(chat.user_id)
         try:
             events.put(("status", {"message": "Agent đang suy nghĩ..."}))
             full_history = app_services.chats.history(chat_id)
@@ -1442,6 +1447,7 @@ def stream_chat(chat_id: str, content: str, attachments: list[dict]) -> Iterator
         except Exception as exc:  # noqa: BLE001
             events.put(("error", {"message": model_error_message(chat, exc)}))
         finally:
+            current_user_id.reset(user_token)
             events.put(("close", {}))
 
     Thread(target=run, daemon=True).start()
