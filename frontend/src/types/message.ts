@@ -20,5 +20,5 @@ export type Message = {
   content: string;
   attachments?: MediaAttachment[];
   contentBlocks?: ResponseBlock[];
-  bookmarked?: boolean;
+  pinned?: boolean;
 };

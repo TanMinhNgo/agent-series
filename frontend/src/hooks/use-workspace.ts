@@ -2,7 +2,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { request } from '@/src/hooks/client';
 import { queryKeys } from '@/src/hooks/query-keys';
-import type { Plugin, PluginCatalogItem, Project, Schedule, ScheduleRun } from '@/src/types';
+import type {
+  ConnectorAuditLog,
+  GoogleConnectorStatus,
+  Plugin,
+  PluginCatalogItem,
+  Project,
+  Schedule,
+  ScheduleRun,
+} from '@/src/types';
 
 type ProjectInput = Pick<Project, 'name' | 'description' | 'status' | 'instructions' | 'memoryMode'>;
 type ScheduleInput = Pick<
@@ -56,6 +64,14 @@ export const useWorkspace = () => {
     queryKey: ['plugin-catalog'],
     queryFn: () => request<PluginCatalogItem[]>({ url: '/plugin-catalog' }),
   });
+  const googleConnector = useQuery({
+    queryKey: queryKeys.googleConnector,
+    queryFn: () => request<GoogleConnectorStatus>({ url: '/connectors/google' }),
+  });
+  const googleConnectorAudit = useQuery({
+    queryKey: queryKeys.googleConnectorAudit,
+    queryFn: () => request<ConnectorAuditLog[]>({ url: '/connectors/google/audit' }),
+  });
   const projectActions = useResourceActions<ProjectInput>('project');
   const deleteProject = useMutation({
     mutationFn: ({ id, confirmName }: { id: string; confirmName: string }) =>
@@ -71,7 +87,7 @@ export const useWorkspace = () => {
       void client.invalidateQueries({ queryKey: ['documents'] });
       void client.invalidateQueries({ queryKey: ['library-assets'] });
       void client.invalidateQueries({ queryKey: ['templates'] });
-      void client.invalidateQueries({ queryKey: ['bookmarks'] });
+      void client.invalidateQueries({ queryKey: ['chats'] });
       void client.invalidateQueries({ queryKey: queryKeys.collectionsRoot });
     },
   });
@@ -92,18 +108,34 @@ export const useWorkspace = () => {
       void client.invalidateQueries({ queryKey: ['plugin-catalog'] });
     },
   });
+  const authorizeGoogle = useMutation({
+    mutationFn: () =>
+      request<{ authorizationUrl: string }>({ url: '/connectors/google/authorize', method: 'POST' }),
+  });
+  const disconnectGoogle = useMutation({
+    mutationFn: () => request<void>({ url: '/connectors/google', method: 'DELETE' }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.plugins });
+      void client.invalidateQueries({ queryKey: queryKeys.googleConnector });
+      void client.invalidateQueries({ queryKey: queryKeys.googleConnectorAudit });
+    },
+  });
 
   return {
     projects,
     schedules,
     plugins,
     pluginCatalog,
+    googleConnector,
+    googleConnectorAudit,
     projectActions,
     deleteProject,
     scheduleActions,
     runScheduleNow,
     pluginActions,
     installCatalogPlugin,
+    authorizeGoogle,
+    disconnectGoogle,
   };
 };
 

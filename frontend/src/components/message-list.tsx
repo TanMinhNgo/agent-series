@@ -1,15 +1,22 @@
 import { useLayoutEffect, useRef } from 'react';
-import { Bookmark, Copy, GitBranch, Sparkles } from 'lucide-react';
+import { Bookmark, Copy, Sparkles } from 'lucide-react';
 
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { RichResponseLazy } from '@/src/components/rich-response-lazy';
 import type { Message } from '@/src/types';
 
-type Props = { messages: Message[]; status: string | null; error: string | null; userScrollRequest: number; onBranch?: (message: Message) => void; onBookmark?: (message: Message) => void };
+type Props = {
+  messages: Message[];
+  status: string | null;
+  error: string | null;
+  userScrollRequest: number;
+  onPin?: (message: Message) => void;
+};
 
-export function MessageList({ messages, status, error, userScrollRequest, onBranch, onBookmark }: Props) {
+export function MessageList({ messages, status, error, userScrollRequest, onPin }: Props) {
   const latestUserMessageRef = useRef<HTMLElement | null>(null);
 
   // This intentionally reacts only to a newly queued user message. AI status,
@@ -36,7 +43,7 @@ export function MessageList({ messages, status, error, userScrollRequest, onBran
           id={message.messageId ? `message-${message.messageId}` : undefined}
           key={message.messageId || `${message.role}-${index}`}
           ref={message.role === 'user' && index === messages.length - 1 ? latestUserMessageRef : undefined}
-          className={cn('flex gap-3 leading-7', message.role === 'user' && 'flex-row-reverse')}
+          className={cn('group flex gap-3 leading-7', message.role === 'user' && 'flex-row-reverse')}
         >
           <span
             className={cn(
@@ -49,34 +56,76 @@ export function MessageList({ messages, status, error, userScrollRequest, onBran
           <div
             className={cn(
               'min-w-0 max-w-[85%]',
-              message.role === 'user' ? 'rounded-2xl bg-primary px-4 py-2 text-primary-foreground' : 'pt-0.5',
+              message.role === 'user' ? 'flex flex-col items-end' : 'pt-0.5',
             )}
           >
-            {message.role === 'assistant' ? (
-              <RichResponseLazy content={message.content} blocks={message.contentBlocks} />
-            ) : (
-              <p className="m-0 whitespace-pre-wrap text-[.95rem]">{message.content}</p>
-            )}
-            {message.attachments?.length ? (
-              <div className={cn('mt-3 flex flex-wrap gap-2', message.role === 'user' && 'justify-end')}>
-                {message.attachments.map((item) => (
-                  <a
-                    key={item.id}
-                    href={item.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="overflow-hidden rounded-lg border border-white/30 bg-muted"
+            <div
+              className={cn(
+                message.role === 'user' && 'rounded-2xl bg-primary px-4 py-2 text-primary-foreground',
+              )}
+            >
+              {message.role === 'assistant' ? (
+                <RichResponseLazy content={message.content} blocks={message.contentBlocks} />
+              ) : (
+                <p className="m-0 whitespace-pre-wrap text-[.95rem]">{message.content}</p>
+              )}
+              {message.attachments?.length ? (
+                <div className={cn('mt-3 flex flex-wrap gap-2', message.role === 'user' && 'justify-end')}>
+                  {message.attachments.map((item) => (
+                    <a
+                      key={item.id}
+                      href={item.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="overflow-hidden rounded-lg border border-white/30 bg-muted"
+                    >
+                      <img src={item.url} alt={item.name} className="size-20 object-cover" />
+                    </a>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            {message.messageId && message.role === 'user' ? (
+              <div className="mt-1 flex justify-end gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        className="size-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                        onClick={() => void navigator.clipboard.writeText(message.content)}
+                        aria-label="Sao chép đoạn chat"
+                      />
+                    }
                   >
-                    <img src={item.url} alt={item.name} className="size-20 object-cover" />
-                  </a>
-                ))}
-              </div>
-            ) : null}
-            {message.messageId ? (
-              <div className={cn('mt-2 flex gap-1 opacity-70', message.role === 'user' && 'justify-end')}>
-                <Button size="icon-sm" variant="ghost" onClick={() => void navigator.clipboard.writeText(message.content)} aria-label="Sao chép"><Copy /></Button>
-                <Button size="icon-sm" variant="ghost" onClick={() => onBranch?.(message)} aria-label="Tạo branch"><GitBranch /></Button>
-                <Button size="icon-sm" variant={message.bookmarked ? 'secondary' : 'ghost'} onClick={() => onBookmark?.(message)} aria-label="Lưu message"><Bookmark /></Button>
+                    <Copy />
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" sideOffset={6}>
+                    Sao chép đoạn chat
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        className={cn(
+                          'size-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground',
+                          message.pinned && 'bg-muted text-foreground',
+                        )}
+                        onClick={() => onPin?.(message)}
+                        aria-label={message.pinned ? 'Bỏ ghim đoạn chat' : 'Ghim đoạn chat'}
+                      />
+                    }
+                  >
+                    <Bookmark />
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" sideOffset={6}>
+                    {message.pinned ? 'Bỏ ghim đoạn chat' : 'Ghim đoạn chat'}
+                  </TooltipContent>
+                </Tooltip>
               </div>
             ) : null}
           </div>

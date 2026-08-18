@@ -7,6 +7,9 @@ export const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? '/api';
 export const apiClient = axios.create({
   baseURL: apiBaseUrl,
   headers: { Accept: 'application/json' },
+  // Frontend (5173) and API (8000) are distinct origins in development.
+  // Keep the HTTP-only session cookie on every auth and workspace request.
+  withCredentials: true,
 });
 
 export const request = async <T>(config: AxiosRequestConfig): Promise<T> => {

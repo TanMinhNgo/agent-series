@@ -10,15 +10,20 @@ import {
   MoreHorizontal,
   Palette,
   Archive,
+  KeyRound,
+  LogOut,
   Pencil,
   Pin,
   Plug,
   Plus,
   Share2,
   Settings,
+  ShieldCheck,
   Sparkles,
   Sun,
   Trash2,
+  UserRound,
+  ChevronRight,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -37,8 +42,9 @@ import {
 import { Separator } from '@/components/ui/separator';
 import type { Chat, Project, Theme } from '@/src/types';
 import type { WorkspaceView } from '@/src/components/workspace-panel';
+import type { AuthUser } from '@/src/hooks/use-auth';
 
-export type SidebarNavigation = 'chat' | 'library' | WorkspaceView;
+export type SidebarNavigation = 'chat' | 'library' | WorkspaceView | 'admin' | 'settings';
 
 type Props = {
   chats: Chat[];
@@ -58,6 +64,11 @@ type Props = {
   onShare: (chat: Chat) => void;
   onOpenLibrary: () => void;
   onOpenWorkspace: (view: WorkspaceView) => void;
+  isSystemAdmin?: boolean;
+  onOpenAdmin?: () => void;
+  user?: AuthUser | null;
+  onOpenApiKeys?: () => void;
+  onLogout?: () => void;
 };
 
 const themeOptions = [
@@ -84,6 +95,11 @@ export function AppSidebar({
   onShare,
   onOpenLibrary,
   onOpenWorkspace,
+  isSystemAdmin = false,
+  onOpenAdmin,
+  user,
+  onOpenApiKeys,
+  onLogout,
 }: Props) {
   const recent = chats.filter((chat) => !chat.archived);
   const archived = chats.filter((chat) => chat.archived);
@@ -168,6 +184,17 @@ export function AppSidebar({
           <Plug size={16} />
           Plugin
         </Button>
+        {isSystemAdmin ? (
+          <Button
+            variant="ghost"
+            data-active={activeNavigation === 'admin'}
+            className="sidebar-nav-item justify-start"
+            onClick={onOpenAdmin}
+          >
+            <ShieldCheck size={16} />
+            Quản trị hệ thống
+          </Button>
+        ) : null}
       </nav>
       <div className="min-h-0 flex-1 overflow-y-auto" onScroll={handleHistoryScroll}>
         <p className="section-label">Gần đây</p>
@@ -218,20 +245,26 @@ export function AppSidebar({
       </div>
       <div className="mt-6 shrink-0 border-t pt-5">
         <DropdownMenu>
-          <DropdownMenuTrigger render={<Button variant="ghost" className="w-full justify-start" />}>
-            <Settings size={16} />
-            Settings
+          <DropdownMenuTrigger render={<Button variant="ghost" className="h-auto w-full justify-start px-2 py-2" />}>
+            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-pink-400 text-xs font-semibold text-white">{(user?.displayName || user?.email || 'U').slice(0, 2).toUpperCase()}</span>
+            <span className="min-w-0 flex-1 text-left"><span className="block truncate text-sm font-medium">{user?.displayName || user?.email || 'Tài khoản'}</span><span className="block text-xs text-muted-foreground">Tài khoản Google</span></span>
+            <Settings size={17} className="text-muted-foreground" />
           </DropdownMenuTrigger>
           <DropdownMenuContent
             side="top"
             sideOffset={12}
             align="start"
-            className="w-56 rounded-xl p-1.5 shadow-xl"
+            className="w-64 rounded-2xl p-2 shadow-xl"
           >
+            <div className="flex items-center gap-3 px-2 py-2.5"><span className="grid size-9 shrink-0 place-items-center rounded-full bg-pink-400 text-xs font-semibold text-white">{(user?.displayName || user?.email || 'U').slice(0, 2).toUpperCase()}</span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{user?.displayName || user?.email || 'Tài khoản'}</span><span className="block truncate text-xs text-muted-foreground">Tài khoản Google</span></span><ChevronRight size={16} className="text-muted-foreground" /></div>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={onOpenApiKeys}>
+              <KeyRound /> Thêm API key của bạn
+            </DropdownMenuItem>
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 <Palette />
-                Theme mode
+                Cá nhân hóa
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 <DropdownMenuRadioGroup
@@ -247,19 +280,11 @@ export function AppSidebar({
                 </DropdownMenuRadioGroup>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
-            <DropdownMenuItem>
-              <Palette />
-              Cá nhân hóa
-            </DropdownMenuItem>
-            <DropdownMenuItem>
-              <Settings />
-              Cài đặt
-            </DropdownMenuItem>
+            <DropdownMenuItem disabled><UserRound /> Hỗ trợ <span className="ml-auto text-xs">Sắp có</span></DropdownMenuItem>
+            <DropdownMenuItem disabled><Settings /> Cài đặt <span className="ml-auto text-xs">Sắp có</span></DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
-              <CircleHelp />
-              Trợ giúp
-            </DropdownMenuItem>
+            <DropdownMenuItem disabled><CircleHelp /> Trợ giúp <ChevronRight className="ml-auto" /></DropdownMenuItem>
+            <DropdownMenuItem onClick={onLogout} className="text-destructive focus:text-destructive"><LogOut /> Đăng xuất</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

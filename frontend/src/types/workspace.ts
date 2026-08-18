@@ -59,3 +59,18 @@ export type PluginCatalogItem = {
   featured: boolean;
   installedPluginId: string | null;
 };
+export type GoogleConnectorStatus = {
+  connectorSlug: 'google-workspace';
+  configured: boolean;
+  status: 'not_connected' | 'connected' | 'reauth_required';
+  accountEmail: string | null;
+  scopes: string[];
+  expiresAt: string | null;
+};
+export type ConnectorAuditLog = {
+  id: string;
+  eventType: string;
+  toolName: string | null;
+  summary: string | null;
+  createdAt: string;
+};

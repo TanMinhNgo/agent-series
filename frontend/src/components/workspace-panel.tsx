@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import {
   CalendarDays,
   ChevronLeft,
@@ -23,8 +22,15 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { PluginBrandIcon } from '@/src/components/plugin-brand-icon';
 import { useScheduleRuns, useWorkspace } from '@/src/hooks/use-workspace';
-import { request } from '@/src/hooks/client';
-import type { Plugin, PluginCatalogItem, Project, Schedule } from '@/src/types';
+import { useProjectDeletePreview } from '@/src/hooks/use-project-delete-preview';
+import type {
+  ConnectorAuditLog,
+  GoogleConnectorStatus,
+  Plugin,
+  PluginCatalogItem,
+  Project,
+  Schedule,
+} from '@/src/types';
 
 export type WorkspaceView = 'projects' | 'schedules' | 'plugins';
 
@@ -142,11 +148,7 @@ function ProjectsView() {
   const [status, setStatus] = useState<'all' | keyof typeof statusMeta>('all');
   const [editing, setEditing] = useState<Project | null | undefined>();
   const [deleting, setDeleting] = useState<Project | null>(null);
-  const deletionPreview = useQuery({
-    queryKey: ['project-delete-preview', deleting?.id],
-    queryFn: () => request<{ chats: unknown[]; documents: unknown[]; assets: unknown[]; schedules: unknown[] }>({ url: `/projects/${deleting?.id}` }),
-    enabled: Boolean(deleting?.id),
-  });
+  const deletionPreview = useProjectDeletePreview(deleting?.id);
   const [query, setQuery] = useState('');
   const items = useMemo(
     () =>
@@ -893,7 +895,16 @@ function ScheduleRunHistory({
 }
 
 function PluginsView() {
-  const { plugins, pluginCatalog, pluginActions, installCatalogPlugin } = useWorkspace();
+  const {
+    plugins,
+    pluginCatalog,
+    pluginActions,
+    installCatalogPlugin,
+    googleConnector,
+    googleConnectorAudit,
+    authorizeGoogle,
+    disconnectGoogle,
+  } = useWorkspace();
   const [editing, setEditing] = useState<Plugin | null | undefined>();
   const [query, setQuery] = useState('');
   const save = async (data: Pick<Plugin, 'slug' | 'name' | 'description' | 'enabled' | 'config'>) => {
@@ -964,6 +975,43 @@ function PluginsView() {
           />
         </label>
       </header>
+
+      <GoogleWorkspaceCard
+        plugin={installed.find((item) => item.catalogSlug === 'google-workspace')}
+        status={googleConnector.data}
+        audit={googleConnectorAudit.data || []}
+        busy={
+          installCatalogPlugin.isPending ||
+          authorizeGoogle.isPending ||
+          disconnectGoogle.isPending ||
+          pluginActions.update.isPending
+        }
+        error={
+          authorizeGoogle.error?.message || disconnectGoogle.error?.message || googleConnector.error?.message
+        }
+        onInstall={() => void installCatalogPlugin.mutateAsync('google-workspace')}
+        onConnect={async () => {
+          const result = await authorizeGoogle.mutateAsync();
+          window.location.assign(result.authorizationUrl);
+        }}
+        onDisconnect={async () => {
+          if (
+            window.confirm(
+              'Ngắt Google Workspace? Token đã lưu cục bộ sẽ bị xóa và chat sẽ không còn đọc Drive hoặc Calendar.',
+            )
+          ) {
+            await disconnectGoogle.mutateAsync();
+          }
+        }}
+        onToggle={async () => {
+          const googlePlugin = installed.find((item) => item.catalogSlug === 'google-workspace');
+          if (googlePlugin)
+            await pluginActions.update.mutateAsync({
+              id: googlePlugin.id,
+              data: { enabled: !googlePlugin.enabled },
+            });
+        }}
+      />
 
       {installed.length ? (
         <section className="mb-10">
@@ -1070,6 +1118,112 @@ function PluginsView() {
         />
       ) : null}
     </div>
+  );
+}
+
+function GoogleWorkspaceCard({
+  plugin,
+  status,
+  audit,
+  busy,
+  error,
+  onInstall,
+  onConnect,
+  onDisconnect,
+  onToggle,
+}: {
+  plugin?: Plugin;
+  status?: GoogleConnectorStatus;
+  audit: ConnectorAuditLog[];
+  busy: boolean;
+  error?: string;
+  onInstall: () => void;
+  onConnect: () => Promise<void>;
+  onDisconnect: () => Promise<void>;
+  onToggle: () => Promise<void>;
+}) {
+  const connected = status?.status === 'connected';
+  const configured = status?.configured ?? false;
+  return (
+    <section className="mb-10 rounded-2xl border border-border bg-card p-5 shadow-sm">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex gap-3">
+          <PluginBrandIcon name="Google Workspace" slug="google-workspace" size="md" />
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="font-semibold">Google Workspace</h2>
+              <Badge variant={connected ? 'default' : 'secondary'}>
+                {connected ? 'Đã kết nối' : configured ? 'Chưa kết nối' : 'Chưa cấu hình'}
+              </Badge>
+              {connected && plugin?.enabled ? <Badge variant="outline">Đang bật cho chat</Badge> : null}
+            </div>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+              Chỉ đọc metadata Drive và sự kiện Calendar. Không tạo, sửa, gửi hoặc import dữ liệu vào RAG.
+            </p>
+            {connected && status?.accountEmail ? (
+              <p className="mt-2 text-xs text-muted-foreground">Tài khoản: {status.accountEmail}</p>
+            ) : null}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {!plugin ? (
+            <Button size="sm" onClick={onInstall} disabled={busy}>
+              Thêm Google Workspace
+            </Button>
+          ) : !configured ? (
+            <Button size="sm" variant="outline" disabled>
+              Thiếu cấu hình .env
+            </Button>
+          ) : !connected ? (
+            <Button size="sm" onClick={() => void onConnect().catch(() => undefined)} disabled={busy}>
+              Kết nối Google
+            </Button>
+          ) : (
+            <>
+              <Button
+                size="sm"
+                variant={plugin.enabled ? 'secondary' : 'default'}
+                onClick={() => void onToggle().catch(() => undefined)}
+                disabled={busy}
+              >
+                {plugin.enabled ? 'Tắt trong chat' : 'Bật cho chat'}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void onDisconnect().catch(() => undefined)}
+                disabled={busy}
+              >
+                Ngắt kết nối
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+      {!configured && plugin ? (
+        <p className="mt-4 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+          Thêm GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET và CONNECTOR_ENCRYPTION_KEY vào `.env`, rồi
+          restart backend.
+        </p>
+      ) : null}
+      {error ? <FormError message={error} /> : null}
+      {audit.length ? (
+        <div className="mt-4 border-t border-border/60 pt-3">
+          <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Hoạt động gần đây
+          </h3>
+          <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+            {audit.slice(0, 4).map((item) => (
+              <li key={item.id} className="flex flex-wrap gap-x-2">
+                <span>{new Date(item.createdAt).toLocaleString('vi-VN')}</span>
+                <span>{item.toolName || item.eventType}</span>
+                {item.summary ? <span>— {item.summary}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </section>
   );
 }
 

@@ -84,7 +84,11 @@ export function ChatHeader({
               aria-label="Collection tài liệu"
             >
               <option value="">Chưa chọn tài liệu</option>
-              {collections.map((collection) => <option key={collection.id} value={collection.id}>{collection.name}</option>)}
+              {collections.map((collection) => (
+                <option key={collection.id} value={collection.id}>
+                  {collection.name}
+                </option>
+              ))}
             </select>
           ) : null}
           <select

@@ -6,11 +6,11 @@ export const queryKeys = {
   projects: ['projects'] as const,
   schedules: ['schedules'] as const,
   plugins: ['plugins'] as const,
+  googleConnector: ['connectors', 'google'] as const,
+  googleConnectorAudit: ['connectors', 'google', 'audit'] as const,
   messages: (chatId: string) => ['chats', chatId, 'messages'] as const,
   templates: (projectId?: string | null) => ['templates', projectId || 'global'] as const,
-  bookmarks: (projectId?: string | null) => ['bookmarks', projectId || 'all'] as const,
-  messageSearch: (query: string, projectId?: string | null) =>
-    ['message-search', query, projectId || 'all'] as const,
+  chatPins: (chatId?: string) => ['chats', chatId || 'none', 'pins'] as const,
   collectionsRoot: ['knowledge-collections'] as const,
   collections: (projectId?: string | null) => ['knowledge-collections', projectId || 'none'] as const,
 };
