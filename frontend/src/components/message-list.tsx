@@ -27,9 +27,9 @@ export function MessageList({ messages, status, error, userScrollRequest, onPin 
   }, [userScrollRequest]);
 
   return (
-    <div className="flex-1 space-y-6">
-      {!messages.length && !error && (
-        <div className="grid min-h-72 place-items-center text-center">
+    <div className="flex flex-1 flex-col space-y-6">
+      {!messages.length && !error && !status && (
+        <div className="flex flex-1 items-center justify-center text-center">
           <div>
             <h2 className="font-display text-4xl leading-none">Bạn muốn làm gì hôm nay?</h2>
             <p className="mt-3 text-muted-foreground">
