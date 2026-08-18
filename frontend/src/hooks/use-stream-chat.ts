@@ -20,6 +20,9 @@ export const useStreamChat = () => {
       const response = await fetch(`${apiBaseUrl}/chats/${chatId}/stream`, {
         method: 'POST',
         headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
+        // SSE uses fetch instead of the shared Axios client. Include the HTTP-only
+        // Google session cookie just as every other authenticated API request does.
+        credentials: 'include',
         body: JSON.stringify({ content, attachmentIds: attachments.map((item) => item.id) }),
       });
       if (!response.ok) {
