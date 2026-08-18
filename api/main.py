@@ -11,11 +11,12 @@ from pathlib import Path
 from queue import Empty, Queue
 from threading import Thread
 from typing import Any, Literal
+from urllib.parse import urlencode
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
@@ -24,14 +25,18 @@ from sqlalchemy import select
 from agent_core.agent import Agent
 from agent_core.artifacts import ArtifactService, build_artifact_tool
 from agent_core.config import Settings, load_settings
+from agent_core.credentials import CredentialError, UserCredentialService
 from agent_core.knowledge import KnowledgeService, build_knowledge_tool
 from agent_core.media import MediaService
 from agent_core.library import LibraryService
 from agent_core.memory import MemoryService
+from agent_core.google_workspace import GOOGLE_WORKSPACE_SLUG, GoogleConnectorError, GoogleWorkspaceExecutor, GoogleWorkspaceService
 from agent_core.plugin_catalog import CATALOG, catalog_json, find_catalog_plugin
+from agent_core.plugin_execution import EXECUTORS, connected_read_tools
 from agent_core.prompts import DEFAULT_SYSTEM_PROMPT
 from agent_core.providers import build_client
-from agent_core.storage import ArtifactChunk, BackgroundJob, BackgroundJobRepository, Chat, ChatMessage, ChatRepository, ChatShare, Database, Document, KnowledgeCollection, LibraryAsset, MediaAttachment, MediaRepository, Plugin, Project, PromptTemplate, Schedule, ScheduleRepository, ScheduleRun, WorkspaceRepository
+from agent_core.storage import ArtifactChunk, AuthRepository, BackgroundJob, BackgroundJobRepository, Chat, ChatMessage, ChatRepository, ChatShare, ConnectorRepository, Database, Document, KnowledgeCollection, LibraryAsset, MediaAttachment, MediaRepository, ModelRegistryRepository, Plugin, Project, PromptTemplate, Schedule, ScheduleRepository, ScheduleRun, WorkspaceRepository, current_user_id
+from agent_core.auth import AuthError, AuthService, SESSION_COOKIE
 from agent_core.tools import ToolSpec, build_default_registry
 
 
@@ -45,6 +50,10 @@ class Services:
     workspace: WorkspaceRepository
     library: LibraryService
     artifacts: ArtifactService
+    google_workspace: GoogleWorkspaceService
+    auth: AuthService
+    model_registry: ModelRegistryRepository
+    credentials: UserCredentialService
 
 
 class CreateChatRequest(BaseModel):
@@ -125,8 +134,26 @@ class PromptTemplateRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-class BookmarkRequest(BaseModel):
-    bookmarked: bool
+class PinMessageRequest(BaseModel):
+    pinned: bool
+
+
+class AdminUserStatusRequest(BaseModel):
+    is_active: bool = Field(alias="isActive")
+
+    model_config = {"populate_by_name": True}
+
+
+class AdminModelStatusRequest(BaseModel):
+    is_active: bool = Field(alias="isActive")
+
+    model_config = {"populate_by_name": True}
+
+
+class ApiKeyRequest(BaseModel):
+    api_key: str = Field(alias="apiKey", min_length=8, max_length=1000)
+
+    model_config = {"populate_by_name": True}
 
 
 class ScheduleRequest(BaseModel):
@@ -296,7 +323,10 @@ def make_agent(
     plugin_tools: list[ToolSpec] | None = None,
     history: list[dict[str, Any]] | None = None,
 ) -> Agent:
-    settings = app_services.settings.with_provider_model(chat.provider, chat.model)
+    try:
+        settings = selected_settings(chat.provider, chat.model, chat.user_id)
+    except (ValueError, CredentialError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     project = app_services.workspace.get(Project, chat.project_id) if chat.project_id else None
     source_context = ""
     if chat.context_source_chat_id:
@@ -335,6 +365,11 @@ async def lifespan(app: FastAPI):
     settings = load_settings()
     database = Database(settings.database_url)
     media = MediaService(MediaRepository(database), settings.media_dir)
+    google_workspace = GoogleWorkspaceService(ConnectorRepository(database), settings)
+    model_registry = ModelRegistryRepository(database)
+    model_registry.seed(settings.provider_models)
+    EXECUTORS[GOOGLE_WORKSPACE_SLUG] = GoogleWorkspaceExecutor(google_workspace)
+    auth_repository = AuthRepository(database)
     app.state.services = Services(
         settings=settings,
         chats=ChatRepository(database),
@@ -344,6 +379,10 @@ async def lifespan(app: FastAPI):
         artifacts=ArtifactService(database, settings.media_dir, settings.embedding_model),
         memory=MemoryService(database, settings.embedding_model),
         workspace=WorkspaceRepository(database),
+        google_workspace=google_workspace,
+        auth=AuthService(auth_repository, settings),
+        model_registry=model_registry,
+        credentials=UserCredentialService(auth_repository, settings),
     )
     queue_pending_artifacts(app.state.services)
     yield
@@ -366,6 +405,7 @@ app = FastAPI(
         {"name": "Schedules", "description": "Quản lý lịch trình trong workspace."},
         {"name": "Plugins", "description": "Quản lý plugin tích hợp trong workspace."},
         {"name": "Plugin catalog", "description": "Khám phá và cài catalog plugin mẫu cho workspace local."},
+        {"name": "Connectors", "description": "Kết nối OAuth và audit cho các tích hợp chỉ đọc."},
     ],
     lifespan=lifespan,
 )
@@ -381,8 +421,221 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def require_authenticated_api_user(request: Request, call_next):
+    path = request.url.path
+    public_prefixes = ("/api/health", "/api/config", "/api/auth/", "/api/public/shares/", "/docs", "/openapi.json")
+    if not path.startswith("/api/") or path.startswith(public_prefixes) or request.method == "OPTIONS":
+        return await call_next(request)
+    user = services().auth.session_user(request.cookies.get(SESSION_COOKIE))
+    if user is None:
+        return Response(content=json.dumps({"detail": "Cần đăng nhập để truy cập workspace."}, ensure_ascii=False), status_code=401, media_type="application/json")
+    token = current_user_id.set(user.id)
+    request.state.user = user
+    try:
+        return await call_next(request)
+    finally:
+        current_user_id.reset(token)
+
+
 def services() -> Services:
     return app.state.services
+
+
+def user_json(user) -> dict[str, Any]:
+    role = "system_admin" if services().auth.is_system_admin(user) else user.role
+    return {"id": user.id, "email": user.email, "displayName": user.display_name, "role": role, "isActive": user.is_active}
+
+
+def require_system_admin(request: Request):
+    user = getattr(request.state, "user", None)
+    if user is None or not services().auth.is_system_admin(user):
+        raise HTTPException(status_code=403, detail="Chỉ system admin mới được truy cập.")
+    return user
+
+
+def selected_settings(provider: str, model: str, user_id: str | None) -> Settings:
+    app_services = services()
+    if model not in app_services.model_registry.active().get(provider, ()):
+        raise ValueError("Model đang tắt hoặc chưa được hệ thống cho phép.")
+    return app_services.settings.with_provider_model(provider, model, app_services.credentials.api_key(user_id, provider))
+
+
+def available_provider_models(user_id: str | None) -> dict[str, list[str]]:
+    app_services = services()
+    configured = app_services.settings.configured_provider_models()
+    personal_providers = {item.provider for item in app_services.credentials.list_metadata(user_id)} if user_id else set()
+    active = app_services.model_registry.active()
+    return {
+        provider: [model for model in models if model in active.get(provider, ())]
+        for provider, models in app_services.settings.provider_models.items()
+        if (provider in configured or provider in personal_providers) and any(model in active.get(provider, ()) for model in models)
+    }
+
+
+def credential_json(item) -> dict[str, Any]:
+    return {
+        "provider": item.provider,
+        "keyHint": item.key_hint,
+        "validatedAt": item.validated_at.isoformat(),
+        "updatedAt": item.updated_at.isoformat(),
+    }
+
+
+@app.get("/api/auth/me", tags=["Authentication"])
+def auth_me(request: Request) -> dict[str, Any]:
+    user = services().auth.session_user(request.cookies.get(SESSION_COOKIE))
+    return {"user": user_json(user) if user else None}
+
+
+@app.get("/api/auth/google/authorize", tags=["Authentication"])
+def start_google_sign_in(email: str | None = Query(default=None, max_length=320)) -> RedirectResponse:
+    try:
+        return RedirectResponse(services().auth.google_authorization_url(email), status_code=302)
+    except AuthError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/auth/google/callback", tags=["Authentication"])
+def complete_google_sign_in(code: str | None = Query(default=None), state: str | None = Query(default=None), error: str | None = Query(default=None)) -> RedirectResponse:
+    base_url = services().settings.app_web_url
+    if error or not code or not state:
+        return RedirectResponse(f"{base_url}/login?{urlencode({'authError': 'Google sign-in đã bị hủy hoặc không hoàn tất.'})}", status_code=303)
+    try:
+        _user, session_token = services().auth.complete_google_sign_in(code, state)
+    except AuthError as exc:
+        return RedirectResponse(f"{base_url}/login?{urlencode({'authError': str(exc)})}", status_code=303)
+    response = RedirectResponse(f"{base_url}/?auth=google", status_code=303)
+    response.set_cookie(SESSION_COOKIE, session_token, httponly=True, samesite="lax", secure=base_url.startswith("https://"), max_age=services().settings.auth_session_days * 86400, path="/")
+    return response
+
+
+@app.post("/api/auth/logout", status_code=204, tags=["Authentication"])
+def auth_logout(request: Request, response: Response) -> None:
+    services().auth.logout(request.cookies.get(SESSION_COOKIE))
+    response.delete_cookie(SESSION_COOKIE, path="/")
+
+
+@app.get("/api/admin/overview", tags=["System admin"])
+def admin_overview(request: Request) -> dict[str, Any]:
+    require_system_admin(request)
+    configured = services().settings.configured_provider_models()
+    providers: dict[str, dict[str, Any]] = {
+        name: {"models": [], "configured": bool(configured.get(name))}
+        for name in services().settings.provider_models
+    }
+    for model in services().model_registry.list():
+        providers.setdefault(model.provider, {"models": [], "configured": bool(configured.get(model.provider))})
+        providers[model.provider]["models"].append({"id": model.model_id, "displayName": model.display_name, "isActive": model.is_active})
+    return {
+        "counts": services().auth.repository.system_counts(),
+        "worker": BackgroundJobRepository(services().chats.database).worker_status(datetime.now(UTC)),
+        "providers": providers,
+    }
+
+
+@app.get("/api/settings/api-keys", tags=["Settings"])
+def list_api_keys(request: Request) -> dict[str, Any]:
+    user = getattr(request.state, "user", None)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Cần đăng nhập.")
+    return {"items": [credential_json(item) for item in services().credentials.list_metadata(user.id)]}
+
+
+@app.put("/api/settings/api-keys/{provider}", tags=["Settings"])
+def save_api_key(provider: str, payload: ApiKeyRequest, request: Request) -> dict[str, Any]:
+    user = getattr(request.state, "user", None)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Cần đăng nhập.")
+    try:
+        item = services().credentials.save(user.id, provider, payload.api_key)
+    except CredentialError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    services().auth.repository.add_system_audit("user_api_key_saved", actor_user_id=user.id, summary=f"Cập nhật API key {provider}.")
+    return credential_json(item)
+
+
+@app.delete("/api/settings/api-keys/{provider}", status_code=204, tags=["Settings"])
+def delete_api_key(provider: str, request: Request) -> None:
+    user = getattr(request.state, "user", None)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Cần đăng nhập.")
+    try:
+        deleted = services().credentials.delete(user.id, provider)
+    except CredentialError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Chưa có API key cho provider này.")
+    services().auth.repository.add_system_audit("user_api_key_deleted", actor_user_id=user.id, summary=f"Xóa API key {provider}.")
+
+
+@app.get("/api/admin/users", tags=["System admin"])
+def admin_users(request: Request, q: str | None = Query(default=None, max_length=160), offset: int = Query(default=0, ge=0), limit: int = Query(default=25, ge=1, le=100)) -> dict[str, Any]:
+    require_system_admin(request)
+    rows, total = services().auth.repository.list_users(q, offset, limit)
+    return {
+        "items": [
+            {**user_json(user), "createdAt": user.created_at.isoformat(), "lastSignInAt": last_sign_in.isoformat() if last_sign_in else None}
+            for user, last_sign_in in rows
+        ],
+        "total": total,
+    }
+
+
+@app.patch("/api/admin/users/{user_id}/active", tags=["System admin"])
+def admin_set_user_active(user_id: str, payload: AdminUserStatusRequest, request: Request) -> dict[str, Any]:
+    admin = require_system_admin(request)
+    active = payload.is_active
+    if user_id == admin.id and not active:
+        raise HTTPException(status_code=422, detail="Không thể tự vô hiệu hóa system admin.")
+    user = services().auth.repository.set_user_active(user_id, active)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy user.")
+    services().auth.repository.add_system_audit(
+        "user_activated" if active else "user_deactivated",
+        actor_user_id=admin.id,
+        subject_user_id=user.id,
+        summary=f"{'Kích hoạt' if active else 'Vô hiệu hóa'} user.",
+    )
+    return user_json(user)
+
+
+@app.patch("/api/admin/models/{provider}/{model_id}/active", tags=["System admin"])
+def admin_set_model_active(provider: str, model_id: str, payload: AdminModelStatusRequest, request: Request) -> dict[str, Any]:
+    admin = require_system_admin(request)
+    model = services().model_registry.set_active(provider, model_id, payload.is_active)
+    if model is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy model.")
+    services().auth.repository.add_system_audit(
+        "model_activated" if model.is_active else "model_deactivated",
+        actor_user_id=admin.id,
+        summary=f"{'Kích hoạt' if model.is_active else 'Vô hiệu hóa'} {model.provider}/{model.model_id}.",
+    )
+    return {"id": model.model_id, "displayName": model.display_name, "isActive": model.is_active}
+
+
+@app.get("/api/admin/credentials", tags=["System admin"])
+def admin_credentials(request: Request, offset: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=100)) -> dict[str, Any]:
+    require_system_admin(request)
+    rows, total = services().auth.repository.provider_credential_metadata(offset, limit)
+    return {
+        "items": [
+            {"id": credential.id, "userId": user.id, "userEmail": user.email, "provider": credential.provider, "keyHint": credential.key_hint, "validatedAt": credential.validated_at.isoformat(), "updatedAt": credential.updated_at.isoformat()}
+            for credential, user in rows
+        ],
+        "total": total,
+    }
+
+
+@app.get("/api/admin/audit", tags=["System admin"])
+def admin_audit(request: Request, offset: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=100)) -> dict[str, Any]:
+    require_system_admin(request)
+    rows, total = services().auth.repository.list_system_audit(offset, limit)
+    def audit_json(item) -> dict[str, Any]:
+        actor = services().auth.repository.get_user(item.actor_user_id) if item.actor_user_id else None
+        subject = services().auth.repository.get_user(item.subject_user_id) if item.subject_user_id else None
+        return {"id": item.id, "eventType": item.event_type, "actorUserId": item.actor_user_id, "actorEmail": actor.email if actor else None, "subjectUserId": item.subject_user_id, "subjectEmail": subject.email if subject else None, "summary": item.summary, "createdAt": item.created_at.isoformat()}
+    return {"items": [audit_json(item) for item in rows], "total": total}
 
 
 def enqueue_document_index(document: Document) -> BackgroundJob:
@@ -452,12 +705,16 @@ def health() -> dict[str, str]:
 
 
 @app.get("/api/config", tags=["System"])
-def config() -> dict[str, Any]:
+def config(request: Request) -> dict[str, Any]:
     settings = services().settings
+    user = services().auth.session_user(request.cookies.get(SESSION_COOKIE))
+    providers = available_provider_models(user.id if user else None)
+    default_provider = settings.provider if settings.active_model in providers.get(settings.provider, []) else next(iter(providers), settings.provider)
+    default_model = settings.active_model if settings.active_model in providers.get(default_provider, []) else (providers.get(default_provider) or [settings.active_model])[0]
     return {
-        "providers": {key: list(value) for key, value in settings.configured_provider_models().items()},
-        "defaultProvider": settings.provider,
-        "defaultModel": settings.active_model,
+        "providers": providers,
+        "defaultProvider": default_provider,
+        "defaultModel": default_model,
     }
 
 
@@ -478,10 +735,12 @@ def list_chats(
 @app.post("/api/chats", status_code=201, tags=["Chats"])
 def create_chat(payload: CreateChatRequest) -> dict[str, Any]:
     settings = services().settings
-    provider, model = payload.provider or settings.provider, payload.model or settings.active_model
+    available = available_provider_models(current_user_id.get())
+    provider = payload.provider or (settings.provider if settings.provider in available else next(iter(available), settings.provider))
+    model = payload.model or (settings.active_model if settings.active_model in available.get(provider, []) else (available.get(provider) or [settings.active_model])[0])
     try:
-        selected = settings.with_provider_model(provider, model)
-    except ValueError as exc:
+        selected = selected_settings(provider, model, current_user_id.get())
+    except (ValueError, CredentialError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     source_id = payload.context_source_chat_id
     if source_id and services().chats.get(source_id) is None:
@@ -649,30 +908,19 @@ def messages(chat_id: str) -> list[dict[str, Any]]:
     return [message_json(item) for item in services().chats.history(chat_id) if item["role"] in {"user", "assistant"}]
 
 
-@app.post("/api/chats/{chat_id}/branch/{message_id}", status_code=201, tags=["Chats"])
-def branch_chat(chat_id: str, message_id: str) -> dict[str, Any]:
-    chat = services().chats.branch(chat_id, message_id)
-    if chat is None:
-        raise HTTPException(status_code=404, detail="Không tìm thấy message trong cuộc trò chuyện.")
-    return chat_json(chat)
-
-
-@app.patch("/api/messages/{message_id}/bookmark", tags=["Chats"])
-def bookmark_message(message_id: str, payload: BookmarkRequest) -> dict[str, Any]:
-    message = services().chats.set_bookmark(message_id, payload.bookmarked)
+@app.patch("/api/messages/{message_id}/pin", tags=["Chats"])
+def pin_message(message_id: str, payload: PinMessageRequest) -> dict[str, Any]:
+    message = services().chats.set_message_pin(message_id, payload.pinned)
     if message is None:
-        raise HTTPException(status_code=404, detail="Không tìm thấy message.")
-    return {"messageId": message.id, "bookmarked": message.bookmarked}
+        raise HTTPException(status_code=404, detail="Chỉ có thể ghim message của bạn.")
+    return {"messageId": message.id, "pinned": message.pinned}
 
 
-@app.get("/api/bookmarks", tags=["Chats"])
-def list_bookmarks(project_id: str | None = Query(default=None, alias="projectId")) -> list[dict[str, Any]]:
-    return [{"messageId": message.id, "position": message.position, "content": message.content, "role": message.role, "chat": chat_json(chat)} for message, chat in services().chats.bookmarks(project_id)]
-
-
-@app.get("/api/messages/search", tags=["Chats"])
-def search_chat_messages(q: str = Query(min_length=1, max_length=300), chat_id: str | None = Query(default=None, alias="chatId"), project_id: str | None = Query(default=None, alias="projectId")) -> list[dict[str, Any]]:
-    return [{"messageId": message.id, "position": message.position, "content": message.content[:500], "role": message.role, "chat": chat_json(chat)} for message, chat in services().chats.search_messages(q, chat_id, project_id)]
+@app.get("/api/chats/{chat_id}/pins", tags=["Chats"])
+def list_chat_pins(chat_id: str) -> list[dict[str, Any]]:
+    if services().chats.get(chat_id) is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy chat.")
+    return [{"messageId": message.id, "position": message.position, "content": message.content} for message in services().chats.chat_pins(chat_id)]
 
 
 @app.get("/api/templates", tags=["Workspace"])
@@ -716,7 +964,7 @@ def update_chat(chat_id: str, payload: UpdateChatRequest) -> dict[str, Any]:
         if chat is None:
             raise HTTPException(status_code=404, detail="Không tìm thấy chat.")
         provider, model = payload.provider or chat.provider, payload.model or chat.model
-        services().settings.with_provider_model(provider, model)
+        selected_settings(provider, model, current_user_id.get())
         if payload.project_id and services().workspace.get(Project, payload.project_id) is None:
             raise HTTPException(status_code=422, detail="Dự án được chọn không tồn tại.")
         values = {"provider": provider, "model": model}
@@ -1028,6 +1276,66 @@ def list_plugins() -> list[dict[str, Any]]:
     return [plugin_json(item) for item in services().workspace.list(Plugin)]
 
 
+def google_audit_json(item) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "eventType": item.event_type,
+        "toolName": item.tool_name,
+        "summary": item.summary,
+        "createdAt": item.created_at.isoformat(),
+    }
+
+
+def set_google_plugin_connection(status: str, enabled: bool | None = None) -> None:
+    plugin = services().workspace.get_plugin_by_catalog_slug(GOOGLE_WORKSPACE_SLUG)
+    if plugin is None:
+        return
+    values: dict[str, Any] = {"connection_status": status}
+    if enabled is not None:
+        values["enabled"] = enabled
+    services().workspace.update(Plugin, plugin.id, **values)
+
+
+@app.get("/api/connectors/google", tags=["Connectors"])
+def google_connector_status() -> dict[str, Any]:
+    return services().google_workspace.status()
+
+
+@app.get("/api/connectors/google/audit", tags=["Connectors"])
+def google_connector_audit(limit: int = Query(default=12, ge=1, le=50)) -> list[dict[str, Any]]:
+    return [google_audit_json(item) for item in services().google_workspace.repository.list_audit(GOOGLE_WORKSPACE_SLUG, limit)]
+
+
+@app.post("/api/connectors/google/authorize", tags=["Connectors"])
+def google_authorize() -> dict[str, str]:
+    if services().workspace.get_plugin_by_catalog_slug(GOOGLE_WORKSPACE_SLUG) is None:
+        raise HTTPException(status_code=422, detail="Hãy thêm Google Workspace từ catalog trước khi kết nối.")
+    try:
+        return {"authorizationUrl": services().google_workspace.authorization_url()}
+    except GoogleConnectorError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/connectors/google/callback", include_in_schema=False)
+def google_callback(code: str | None = None, state: str | None = None, error: str | None = None) -> RedirectResponse:
+    base_url = services().settings.app_web_url
+    if error or not code or not state:
+        return RedirectResponse(f"{base_url}/plugins?{urlencode({'google': 'cancelled'})}", status_code=303)
+    try:
+        services().google_workspace.complete_authorization(code, state)
+        set_google_plugin_connection("connected")
+        result = "connected"
+    except GoogleConnectorError:
+        result = "failed"
+    return RedirectResponse(f"{base_url}/plugins?{urlencode({'google': result})}", status_code=303)
+
+
+@app.delete("/api/connectors/google", status_code=204, tags=["Connectors"])
+def google_disconnect() -> None:
+    services().google_workspace.disconnect()
+    set_google_plugin_connection("not_connected", enabled=False)
+
+
 @app.get("/api/plugin-catalog", tags=["Plugin catalog"])
 def plugin_catalog() -> list[dict[str, Any]]:
     installed = services().workspace.catalog_plugin_ids()
@@ -1075,7 +1383,8 @@ def update_plugin(plugin_id: str, payload: PluginUpdateRequest) -> dict[str, Any
     current = services().workspace.get(Plugin, plugin_id)
     if current is None:
         raise HTTPException(status_code=404, detail="Không tìm thấy plugin.")
-    if payload.enabled and current.catalog_slug and current.connection_status != "connected":
+    google_connected = services().google_workspace.status()["status"] == "connected" if current.catalog_slug == GOOGLE_WORKSPACE_SLUG else current.connection_status == "connected"
+    if payload.enabled and current.catalog_slug and not google_connected:
         raise HTTPException(status_code=422, detail="Plugin catalog chưa được kết nối nên chưa thể bật.")
     try:
         item = services().workspace.update(Plugin, plugin_id, **payload.model_dump(exclude_unset=True))
@@ -1117,7 +1426,8 @@ def stream_chat(chat_id: str, content: str, attachments: list[dict]) -> Iterator
                 # model must never prevent the current conversation from working.
                 memory_context = ""
                 events.put(("status", {"message": "Không thể đọc Thư viện, vẫn tiếp tục trả lời..."}))
-            agent = make_agent(app_services, chat, memory_context, history=full_history)
+            plugin_tools = connected_read_tools(app_services.workspace.list_plugins())
+            agent = make_agent(app_services, chat, memory_context, plugin_tools=plugin_tools, history=full_history)
             initial_history_length = len(agent.history)
             result = agent.run(content, attachments, on_step=lambda item: events.put((item["type"], item)))
             if result.content_blocks:

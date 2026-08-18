@@ -23,6 +23,7 @@ from agent_core.artifacts import extract_artifact_text
 from agent_core.plugin_catalog import CATALOG, find_catalog_plugin
 from agent_core.plugin_execution import connected_read_tools
 from agent_core.memory import MemoryService
+from agent_core.credentials import CredentialError, UserCredentialService
 from agent_core.storage import Chat, Plugin, Schedule, ScheduleRepository, document_scope_key
 
 
@@ -39,6 +40,29 @@ def test_health_and_public_config_do_not_expose_provider_keys(monkeypatch) -> No
 
     assert payload["providers"] == {"gemini": ["gemini-test"]}
     assert "key" not in str(payload).lower()
+
+
+def test_user_credential_service_encrypts_and_hides_plaintext(monkeypatch) -> None:
+    from cryptography.fernet import Fernet
+
+    saved = {}
+    class Repository:
+        def save_user_provider_credential(self, user_id, provider, ciphertext, key_hint):
+            saved.update(user_id=user_id, provider=provider, ciphertext=ciphertext, key_hint=key_hint)
+            return SimpleNamespace(provider=provider, ciphertext=ciphertext, key_hint=key_hint)
+        def user_provider_credential(self, user_id, provider):
+            return SimpleNamespace(ciphertext=saved["ciphertext"]) if saved else None
+        def user_provider_credentials(self, _user_id): return []
+
+    service = UserCredentialService(Repository(), SimpleNamespace(user_credential_encryption_key=Fernet.generate_key().decode(), provider_models={"anthropic": ("claude-test",)}))
+    monkeypatch.setattr(service, "validate", lambda _provider, _key: None)
+    service.save("user-1", "openai", "sk-secret-value")
+
+    assert saved["key_hint"] == "••••alue"
+    assert "sk-secret-value" not in saved["ciphertext"]
+    assert service.api_key("user-1", "openai") == "sk-secret-value"
+    with pytest.raises(CredentialError):
+        service.save("user-1", "unknown", "sk-secret-value")
 
 
 def test_model_error_message_explains_tool_reasoning_conflict() -> None:

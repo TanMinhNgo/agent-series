@@ -11,6 +11,7 @@ python-dotenv>=1.0.0     # đọc biến môi trường từ file .env
 
 # --- Nhà cung cấp LLM (chỉ cái bạn dùng mới thực sự cần key) ---
 google-genai>=1.0.0      # Gemini — provider MẶC ĐỊNH của series
+google-auth>=2.0.0       # xác minh ID token của Google Sign-In
 anthropic>=0.40.0        # Claude — tuỳ chọn (cần key mới dùng được)
 openai>=1.40.0           # GPT/Codex — tuỳ chọn (cần key mới dùng được)
 
@@ -28,3 +29,4 @@ python-docx>=1.1.2
 openpyxl>=3.1.5
 python-pptx>=1.0.2
 reportlab>=4.2.0
+cryptography>=42.0.0       # mã hóa refresh token của connector OAuth

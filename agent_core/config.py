@@ -55,6 +55,23 @@ class Settings:
     knowledge_dir: Path
     media_dir: Path
     provider_models: dict[str, tuple[str, ...]]
+    google_oauth_client_id: str
+    google_oauth_client_secret: str
+    google_oauth_redirect_uri: str
+    google_auth_client_id: str
+    google_auth_client_secret: str
+    google_auth_redirect_uri: str
+    connector_encryption_key: str
+    user_credential_encryption_key: str
+    app_web_url: str
+    system_admin_email: str
+    auth_session_days: int
+    smtp_host: str
+    smtp_port: int
+    smtp_username: str
+    smtp_password: str
+    smtp_from: str
+    smtp_use_tls: bool
 
     # ---- Vài tiện ích đọc nhanh cấu hình của provider đang chọn ----
     @property
@@ -85,12 +102,16 @@ class Settings:
             }[provider]
         }
 
-    def with_provider_model(self, provider: str, model: str) -> "Settings":
+    def with_provider_model(self, provider: str, model: str, api_key: str | None = None) -> "Settings":
         """Create settings for a model selected in the UI without exposing keys."""
-        if model not in self.configured_provider_models().get(provider, ()):
-            raise ValueError("Provider hoặc model chưa được cấu hình trong .env.")
+        if provider not in self.provider_models or model not in self.provider_models[provider]:
+            raise ValueError("Provider hoặc model chưa được hệ thống cho phép.")
+        resolved_key = api_key or {"gemini": self.gemini_api_key, "anthropic": self.anthropic_api_key, "openai": self.openai_api_key}[provider]
+        if not resolved_key:
+            raise ValueError("Bạn chưa thêm API key cho provider này.")
         field_name = f"{provider}_model"
-        return replace(self, provider=provider, **{field_name: model})
+        key_field = f"{provider}_api_key"
+        return replace(self, provider=provider, **{field_name: model, key_field: resolved_key})
 
 
 def _model_list(env_name: str, fallback: str) -> tuple[str, ...]:
@@ -137,19 +158,29 @@ def load_settings() -> Settings:
             "anthropic": _model_list("ANTHROPIC_MODELS", os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")),
             "openai": _model_list("OPENAI_MODELS", os.getenv("OPENAI_MODEL", "gpt-5.6-terra")),
         },
+        google_oauth_client_id=os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip(),
+        google_oauth_client_secret=os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "").strip(),
+        google_oauth_redirect_uri=os.getenv(
+            "GOOGLE_OAUTH_REDIRECT_URI", "http://localhost:8000/api/connectors/google/callback"
+        ).strip(),
+        # Google Sign-In can reuse the same Google Cloud OAuth client as the
+        # Workspace connector, but must have its own callback and narrow scopes.
+        google_auth_client_id=os.getenv("GOOGLE_AUTH_CLIENT_ID", os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")).strip(),
+        google_auth_client_secret=os.getenv("GOOGLE_AUTH_CLIENT_SECRET", os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")).strip(),
+        google_auth_redirect_uri=os.getenv(
+            "GOOGLE_AUTH_REDIRECT_URI", "http://localhost:8000/api/auth/google/callback"
+        ).strip(),
+        connector_encryption_key=os.getenv("CONNECTOR_ENCRYPTION_KEY", "").strip(),
+        user_credential_encryption_key=os.getenv("USER_CREDENTIAL_ENCRYPTION_KEY", "").strip(),
+        app_web_url=os.getenv("APP_WEB_URL", "http://localhost:5173").strip().rstrip("/"),
+        system_admin_email=os.getenv("SYSTEM_ADMIN_EMAIL", "").strip().lower(),
+        auth_session_days=int(os.getenv("AUTH_SESSION_DAYS", "14")),
+        smtp_host=os.getenv("SMTP_HOST", "").strip(),
+        smtp_port=int(os.getenv("SMTP_PORT", "587")),
+        smtp_username=os.getenv("SMTP_USERNAME", "").strip(),
+        smtp_password=os.getenv("SMTP_PASSWORD", "").strip(),
+        smtp_from=os.getenv("SMTP_FROM", "").strip(),
+        smtp_use_tls=os.getenv("SMTP_USE_TLS", "true").strip().lower() != "false",
     )
-
-    # Kiểm tra key của ĐÚNG provider đang chọn (các provider khác không cần key).
-    if not settings.active_api_key:
-        env_name = {
-            "gemini": "GEMINI_API_KEY",
-            "anthropic": "ANTHROPIC_API_KEY",
-            "openai": "OPENAI_API_KEY",
-        }[provider]
-        raise RuntimeError(
-            f"Thiếu {env_name} cho provider '{provider}'.\n"
-            "-> Hãy sao chép .env.example thành .env rồi điền API key tương ứng.\n"
-            "   (Với Gemini: lấy key miễn phí ở https://aistudio.google.com/apikey)"
-        )
 
     return settings

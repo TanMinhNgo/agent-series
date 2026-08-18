@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 from secrets import token_urlsafe
 from uuid import uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, create_engine, delete, desc, func, or_, select, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, create_engine, delete, desc, event, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker, with_loader_criteria
 
 GLOBAL_DOCUMENT_SCOPE = "__library__"
 
@@ -23,7 +24,113 @@ class Base(DeclarativeBase):
     pass
 
 
-class Chat(Base):
+current_user_id: ContextVar[str | None] = ContextVar("current_user_id", default=None)
+
+
+class UserOwned:
+    """Mixin automatically scoped on HTTP requests; internal workers run unscoped."""
+
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+
+
+class User(Base):
+    __tablename__ = "users"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    role: Mapped[str] = mapped_column(String(24), default="member")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AuthIdentity(Base):
+    __tablename__ = "auth_identities"
+    __table_args__ = (UniqueConstraint("provider", "provider_subject", name="uq_auth_identity_provider_subject"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    provider: Mapped[str] = mapped_column(String(32))
+    provider_subject: Mapped[str] = mapped_column(String(320))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class UserProviderCredential(Base):
+    __tablename__ = "user_provider_credentials"
+    __table_args__ = (UniqueConstraint("user_id", "provider", name="uq_user_provider_credential"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    provider: Mapped[str] = mapped_column(String(32))
+    ciphertext: Mapped[str] = mapped_column(Text)
+    key_version: Mapped[str] = mapped_column(String(32), default="v1")
+    key_hint: Mapped[str] = mapped_column(String(8))
+    validated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ProviderModel(Base):
+    __tablename__ = "provider_models"
+    __table_args__ = (UniqueConstraint("provider", "model_id", name="uq_provider_model"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    model_id: Mapped[str] = mapped_column(String(200))
+    display_name: Mapped[str] = mapped_column(String(255))
+    lifecycle: Mapped[str] = mapped_column(String(32), default="unknown")
+    approved: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    supports_tools: Mapped[bool] = mapped_column(Boolean, default=False)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class SystemSetting(Base):
+    __tablename__ = "system_settings"
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[str] = mapped_column(String(500))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class SystemAuditLog(Base):
+    __tablename__ = "system_audit_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    actor_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    subject_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), index=True)
+    summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, index=True)
+
+
+@event.listens_for(Session, "do_orm_execute")
+def _scope_user_owned_models(execute_state):
+    user_id = current_user_id.get()
+    if user_id and execute_state.is_select and not execute_state.execution_options.get("skip_user_scope"):
+        execute_state.statement = execute_state.statement.options(
+            with_loader_criteria(UserOwned, lambda cls: cls.user_id == user_id, include_aliases=True)
+        )
+
+
+@event.listens_for(Session, "before_flush")
+def _assign_current_user(session, _flush_context, _instances):
+    user_id = current_user_id.get()
+    if not user_id:
+        return
+    for item in session.new:
+        if isinstance(item, UserOwned) and item.user_id is None:
+            item.user_id = user_id
+
+
+class Chat(UserOwned, Base):
     __tablename__ = "chats"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
@@ -41,7 +148,7 @@ class Chat(Base):
     collection_id: Mapped[str | None] = mapped_column(ForeignKey("knowledge_collections.id", ondelete="SET NULL"), nullable=True, index=True)
 
 
-class ChatMemoryChunk(Base):
+class ChatMemoryChunk(UserOwned, Base):
     __tablename__ = "chat_memory_chunks"
     __table_args__ = (UniqueConstraint("chat_id", "fingerprint", "chunk_index", name="uq_chat_memory_chunk"),)
 
@@ -56,7 +163,7 @@ class ChatMemoryChunk(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
-class ChatShare(Base):
+class ChatShare(UserOwned, Base):
     __tablename__ = "chat_shares"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
@@ -71,7 +178,7 @@ class ChatShare(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class ChatMessage(Base):
+class ChatMessage(UserOwned, Base):
     __tablename__ = "chat_messages"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
@@ -84,10 +191,10 @@ class ChatMessage(Base):
     tool_calls: Mapped[list | None] = mapped_column(JSON, nullable=True)
     attachments: Mapped[list | None] = mapped_column(JSON, nullable=True)
     content_blocks: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    bookmarked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
 
-class PromptTemplate(Base):
+class PromptTemplate(UserOwned, Base):
     __tablename__ = "prompt_templates"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
@@ -98,7 +205,7 @@ class PromptTemplate(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class MediaAttachment(Base):
+class MediaAttachment(UserOwned, Base):
     __tablename__ = "media_attachments"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
@@ -109,7 +216,7 @@ class MediaAttachment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
-class LibraryAsset(Base):
+class LibraryAsset(UserOwned, Base):
     __tablename__ = "library_assets"
     __table_args__ = (UniqueConstraint("artifact_id", "version", name="uq_library_assets_artifact_version"),)
 
@@ -129,7 +236,7 @@ class LibraryAsset(Base):
     chunks: Mapped[list["ArtifactChunk"]] = relationship(back_populates="asset", cascade="all, delete-orphan")
 
 
-class ArtifactChunk(Base):
+class ArtifactChunk(UserOwned, Base):
     __tablename__ = "artifact_chunks"
     __table_args__ = (UniqueConstraint("asset_id", "chunk_index", name="uq_artifact_chunks_asset_index"),)
 
@@ -141,7 +248,7 @@ class ArtifactChunk(Base):
     asset: Mapped[LibraryAsset] = relationship(back_populates="chunks")
 
 
-class Project(Base):
+class Project(UserOwned, Base):
     __tablename__ = "projects"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
@@ -154,7 +261,7 @@ class Project(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class Schedule(Base):
+class Schedule(UserOwned, Base):
     __tablename__ = "schedules"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
@@ -174,7 +281,7 @@ class Schedule(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class ScheduleRun(Base):
+class ScheduleRun(UserOwned, Base):
     __tablename__ = "schedule_runs"
     __table_args__ = (UniqueConstraint("schedule_id", "scheduled_for", name="uq_schedule_runs_schedule_time"),)
 
@@ -188,7 +295,7 @@ class ScheduleRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class Plugin(Base):
+class Plugin(UserOwned, Base):
     __tablename__ = "plugins"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
@@ -205,7 +312,42 @@ class Plugin(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class Document(Base):
+class ConnectorConnection(UserOwned, Base):
+    __tablename__ = "connector_connections"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    connector_slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    encrypted_token: Mapped[str] = mapped_column(Text)
+    account_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    scopes: Mapped[list] = mapped_column(JSON, default=list)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="connected")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class OAuthState(UserOwned, Base):
+    __tablename__ = "oauth_states"
+
+    state: Mapped[str] = mapped_column(String(128), primary_key=True)
+    connector_slug: Mapped[str] = mapped_column(String(80), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class ConnectorAuditLog(UserOwned, Base):
+    __tablename__ = "connector_audit_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    connector_slug: Mapped[str] = mapped_column(String(80), index=True)
+    connection_id: Mapped[str | None] = mapped_column(ForeignKey("connector_connections.id", ondelete="SET NULL"), nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), index=True)
+    tool_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, index=True)
+
+
+class Document(UserOwned, Base):
     __tablename__ = "documents"
     __table_args__ = (UniqueConstraint("scope_key", "sha256", name="uq_documents_scope_sha256"),)
 
@@ -224,7 +366,7 @@ class Document(Base):
     )
 
 
-class DocumentChunk(Base):
+class DocumentChunk(UserOwned, Base):
     __tablename__ = "document_chunks"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
@@ -236,7 +378,7 @@ class DocumentChunk(Base):
     document: Mapped[Document] = relationship(back_populates="chunks")
 
 
-class KnowledgeCollection(Base):
+class KnowledgeCollection(UserOwned, Base):
     __tablename__ = "knowledge_collections"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
@@ -255,7 +397,7 @@ class KnowledgeCollectionDocument(Base):
     document_id: Mapped[str] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True)
 
 
-class BackgroundJob(Base):
+class BackgroundJob(UserOwned, Base):
     __tablename__ = "background_jobs"
     __table_args__ = (
         Index(
@@ -301,6 +443,41 @@ class Database:
         return self.session_factory()
 
 
+class ModelRegistryRepository:
+    def __init__(self, database: Database): self.database = database
+    def seed(self, models: dict[str, tuple[str, ...]]) -> None:
+        with self.database.session() as s:
+            for provider, items in models.items():
+                for model in items:
+                    if not s.scalar(select(ProviderModel).where(ProviderModel.provider == provider, ProviderModel.model_id == model)):
+                        s.add(ProviderModel(provider=provider, model_id=model, display_name=model, approved=True, is_active=True))
+            s.commit()
+    def list(self) -> list[ProviderModel]:
+        with self.database.session() as s: return list(s.scalars(select(ProviderModel).order_by(ProviderModel.provider, ProviderModel.model_id)))
+    def active(self) -> dict[str, tuple[str, ...]]:
+        with self.database.session() as s:
+            rows = s.scalars(select(ProviderModel).where(ProviderModel.is_active.is_(True))).all(); result: dict[str, list[str]] = {}
+            for row in rows: result.setdefault(row.provider, []).append(row.model_id)
+            return {key: tuple(value) for key, value in result.items()}
+    def set_active(self, provider: str, model_id: str, is_active: bool) -> ProviderModel | None:
+        with self.database.session() as s:
+            item = s.scalar(select(ProviderModel).where(ProviderModel.provider == provider, ProviderModel.model_id == model_id))
+            if item is None:
+                return None
+            item.is_active = is_active
+            s.commit()
+            s.refresh(item)
+            return item
+    def setting(self, key: str) -> str | None:
+        with self.database.session() as s: item = s.get(SystemSetting, key); return item.value if item else None
+    def set_setting(self, key: str, value: str) -> None:
+        with self.database.session() as s:
+            item = s.get(SystemSetting, key)
+            if item: item.value = value
+            else: s.add(SystemSetting(key=key, value=value))
+            s.commit()
+
+
 class ChatRepository:
     def __init__(self, database: Database):
         self.database = database
@@ -312,59 +489,22 @@ class ChatRepository:
             session.commit()
             return chat
 
-    def branch(self, chat_id: str, message_id: str) -> Chat | None:
-        with self.database.session() as session:
-            source = session.get(Chat, chat_id)
-            message = session.get(ChatMessage, message_id)
-            if source is None or message is None or message.chat_id != chat_id:
-                return None
-            branch = Chat(
-                title=f"Branch: {source.title}"[:160], provider=source.provider, model=source.model,
-                project_id=source.project_id, collection_id=source.collection_id, parent_chat_id=source.id, branch_from_position=message.position,
-            )
-            session.add(branch)
-            session.flush()
-            records = session.scalars(select(ChatMessage).where(ChatMessage.chat_id == chat_id, ChatMessage.position <= message.position).order_by(ChatMessage.position)).all()
-            for record in records:
-                session.add(ChatMessage(
-                    chat_id=branch.id, position=record.position, role=record.role, content=record.content,
-                    tool_call_id=record.tool_call_id, tool_name=record.tool_name, tool_calls=record.tool_calls,
-                    attachments=record.attachments, content_blocks=record.content_blocks, bookmarked=record.bookmarked,
-                ))
-            session.commit()
-            return branch
-
-    def set_bookmark(self, message_id: str, bookmarked: bool) -> ChatMessage | None:
+    def set_message_pin(self, message_id: str, pinned: bool) -> ChatMessage | None:
         with self.database.session() as session:
             message = session.get(ChatMessage, message_id)
-            if message is None:
+            if message is None or message.role != "user":
                 return None
-            message.bookmarked = bookmarked
+            message.pinned = pinned
             session.commit()
             return message
 
-    def bookmarks(self, project_id: str | None = None) -> list[tuple[ChatMessage, Chat]]:
+    def chat_pins(self, chat_id: str) -> list[ChatMessage]:
         with self.database.session() as session:
-            statement = select(ChatMessage, Chat).join(Chat).where(ChatMessage.bookmarked.is_(True)).order_by(Chat.updated_at.desc())
-            if project_id:
-                statement = statement.where(Chat.project_id == project_id)
-            return list(session.execute(statement).all())
-
-    def search_messages(self, query: str, chat_id: str | None = None, project_id: str | None = None) -> list[tuple[ChatMessage, Chat]]:
-        with self.database.session() as session:
-            phrase = query.strip()
-            search_vector = func.to_tsvector("simple", ChatMessage.content)
-            statement = select(ChatMessage, Chat).join(Chat).where(
-                or_(
-                    search_vector.op("@@")(func.plainto_tsquery("simple", phrase)),
-                    ChatMessage.content.ilike(f"%{phrase}%"),
-                )
-            )
-            if chat_id:
-                statement = statement.where(ChatMessage.chat_id == chat_id)
-            if project_id:
-                statement = statement.where(Chat.project_id == project_id)
-            return list(session.execute(statement.order_by(Chat.updated_at.desc()).limit(50)).all())
+            return list(session.scalars(select(ChatMessage).where(
+                ChatMessage.chat_id == chat_id,
+                ChatMessage.role == "user",
+                ChatMessage.pinned.is_(True),
+            ).order_by(ChatMessage.position)).all())
 
     def list(self, offset: int = 0, limit: int = 40) -> tuple[list[Chat], int]:
         with self.database.session() as session:
@@ -495,7 +635,7 @@ class ChatRepository:
                     "name": message.tool_name, "tool_calls": message.tool_calls,
                     "attachments": message.attachments,
                     "content_blocks": message.content_blocks,
-                    "bookmarked": message.bookmarked,
+                    "pinned": message.pinned,
                 }.items() if value is not None}
                 for message in messages
             ]
@@ -551,6 +691,232 @@ class WorkspaceRepository:
             session.delete(item)
             session.commit()
             return True
+
+
+class ConnectorRepository:
+    """Persistence for OAuth connections, short-lived CSRF state, and audit metadata."""
+
+    def __init__(self, database: Database):
+        self.database = database
+
+    def get_connection(self, connector_slug: str) -> ConnectorConnection | None:
+        with self.database.session() as session:
+            return session.scalar(select(ConnectorConnection).where(ConnectorConnection.connector_slug == connector_slug))
+
+    def save_connection(self, connector_slug: str, encrypted_token: str, account_email: str | None, scopes: list[str], expires_at: datetime | None, status: str = "connected") -> ConnectorConnection:
+        with self.database.session() as session:
+            item = session.scalar(select(ConnectorConnection).where(ConnectorConnection.connector_slug == connector_slug))
+            if item is None:
+                item = ConnectorConnection(connector_slug=connector_slug, encrypted_token=encrypted_token, account_email=account_email, scopes=scopes, expires_at=expires_at, status=status)
+                session.add(item)
+            else:
+                item.encrypted_token = encrypted_token
+                item.account_email = account_email
+                item.scopes = scopes
+                item.expires_at = expires_at
+                item.status = status
+                item.updated_at = datetime.utcnow()
+            session.commit()
+            return item
+
+    def set_connection_status(self, connector_slug: str, status: str) -> ConnectorConnection | None:
+        with self.database.session() as session:
+            item = session.scalar(select(ConnectorConnection).where(ConnectorConnection.connector_slug == connector_slug))
+            if item is None:
+                return None
+            item.status = status
+            item.updated_at = datetime.utcnow()
+            session.commit()
+            return item
+
+    def delete_connection(self, connector_slug: str) -> bool:
+        with self.database.session() as session:
+            item = session.scalar(select(ConnectorConnection).where(ConnectorConnection.connector_slug == connector_slug))
+            if item is None:
+                return False
+            session.delete(item)
+            session.commit()
+            return True
+
+    def create_oauth_state(self, state: str, connector_slug: str, expires_at: datetime) -> None:
+        with self.database.session() as session:
+            session.add(OAuthState(state=state, connector_slug=connector_slug, expires_at=expires_at))
+            session.commit()
+
+    def consume_oauth_state(self, state: str, now: datetime) -> OAuthState | None:
+        with self.database.session() as session:
+            item = session.get(OAuthState, state)
+            if item is None:
+                return None
+            session.delete(item)
+            session.commit()
+            return item if item.expires_at > now else None
+
+    def audit(self, connector_slug: str, event_type: str, connection_id: str | None = None, tool_name: str | None = None, summary: str | None = None) -> ConnectorAuditLog:
+        with self.database.session() as session:
+            item = ConnectorAuditLog(connector_slug=connector_slug, connection_id=connection_id, event_type=event_type, tool_name=tool_name, summary=summary)
+            session.add(item)
+            session.commit()
+            return item
+
+    def list_audit(self, connector_slug: str, limit: int = 20) -> list[ConnectorAuditLog]:
+        with self.database.session() as session:
+            return list(session.scalars(select(ConnectorAuditLog).where(ConnectorAuditLog.connector_slug == connector_slug).order_by(desc(ConnectorAuditLog.created_at)).limit(limit)))
+
+
+class AuthRepository:
+    def __init__(self, database: Database):
+        self.database = database
+
+    def user_count(self) -> int:
+        with self.database.session() as session:
+            return int(session.scalar(select(func.count()).select_from(User).execution_options(skip_user_scope=True)) or 0)
+
+    def get_user(self, user_id: str) -> User | None:
+        with self.database.session() as session:
+            return session.get(User, user_id, execution_options={"skip_user_scope": True})
+
+    def get_user_by_email(self, email: str) -> User | None:
+        with self.database.session() as session:
+            return session.scalar(select(User).where(User.email == email).execution_options(skip_user_scope=True))
+
+    def create_user(self, email: str, display_name: str | None = None, role: str = "member") -> User:
+        with self.database.session() as session:
+            item = User(email=email, display_name=display_name, role=role)
+            session.add(item); session.commit(); return item
+
+    def list_users(self, query: str | None, offset: int, limit: int) -> tuple[list[tuple[User, datetime | None]], int]:
+        with self.database.session() as session:
+            last_sign_in = select(AuthSession.user_id.label("user_id"), func.max(AuthSession.created_at).label("last_sign_in_at")).group_by(AuthSession.user_id).subquery()
+            statement = select(User, last_sign_in.c.last_sign_in_at).outerjoin(last_sign_in, last_sign_in.c.user_id == User.id).execution_options(skip_user_scope=True)
+            if query:
+                statement = statement.where(User.email.ilike(f"%{query.strip()}%"))
+            total = int(session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
+            rows = list(session.execute(statement.order_by(desc(User.created_at)).offset(offset).limit(limit)).all())
+            return rows, total
+
+    def set_user_active(self, user_id: str, active: bool) -> User | None:
+        with self.database.session() as session:
+            user = session.get(User, user_id, execution_options={"skip_user_scope": True})
+            if user is None:
+                return None
+            user.is_active = active
+            if not active:
+                session.execute(delete(AuthSession).where(AuthSession.user_id == user_id))
+            session.commit()
+            return user
+
+    def provider_credential_metadata(self, offset: int, limit: int) -> tuple[list[tuple[UserProviderCredential, User]], int]:
+        with self.database.session() as session:
+            statement = select(UserProviderCredential, User).join(User, User.id == UserProviderCredential.user_id).execution_options(skip_user_scope=True)
+            total = int(session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
+            rows = list(session.execute(statement.order_by(desc(UserProviderCredential.updated_at)).offset(offset).limit(limit)).all())
+            return rows, total
+
+    def user_provider_credentials(self, user_id: str) -> list[UserProviderCredential]:
+        with self.database.session() as session:
+            return list(session.scalars(select(UserProviderCredential).where(UserProviderCredential.user_id == user_id).order_by(UserProviderCredential.provider)))
+
+    def user_provider_credential(self, user_id: str, provider: str) -> UserProviderCredential | None:
+        with self.database.session() as session:
+            return session.scalar(select(UserProviderCredential).where(UserProviderCredential.user_id == user_id, UserProviderCredential.provider == provider))
+
+    def save_user_provider_credential(self, user_id: str, provider: str, ciphertext: str, key_hint: str) -> UserProviderCredential:
+        with self.database.session() as session:
+            item = session.scalar(select(UserProviderCredential).where(UserProviderCredential.user_id == user_id, UserProviderCredential.provider == provider))
+            if item is None:
+                item = UserProviderCredential(user_id=user_id, provider=provider, ciphertext=ciphertext, key_hint=key_hint)
+                session.add(item)
+            else:
+                item.ciphertext, item.key_hint, item.validated_at, item.updated_at = ciphertext, key_hint, datetime.utcnow(), datetime.utcnow()
+            session.commit()
+            return item
+
+    def delete_user_provider_credential(self, user_id: str, provider: str) -> bool:
+        with self.database.session() as session:
+            item = session.scalar(select(UserProviderCredential).where(UserProviderCredential.user_id == user_id, UserProviderCredential.provider == provider))
+            if item is None:
+                return False
+            session.delete(item)
+            session.commit()
+            return True
+
+    def add_system_audit(self, event_type: str, actor_user_id: str | None = None, subject_user_id: str | None = None, summary: str | None = None, metadata_json: dict | None = None) -> SystemAuditLog:
+        with self.database.session() as session:
+            item = SystemAuditLog(actor_user_id=actor_user_id, subject_user_id=subject_user_id, event_type=event_type, summary=summary, metadata_json=metadata_json)
+            session.add(item); session.commit(); return item
+
+    def list_system_audit(self, offset: int, limit: int) -> tuple[list[SystemAuditLog], int]:
+        with self.database.session() as session:
+            statement = select(SystemAuditLog).execution_options(skip_user_scope=True)
+            total = int(session.scalar(select(func.count()).select_from(SystemAuditLog).execution_options(skip_user_scope=True)) or 0)
+            return list(session.scalars(statement.order_by(desc(SystemAuditLog.created_at)).offset(offset).limit(limit))), total
+
+    def system_counts(self) -> dict[str, int]:
+        with self.database.session() as session:
+            return {
+                "users": int(session.scalar(select(func.count()).select_from(User).execution_options(skip_user_scope=True)) or 0),
+                "activeUsers": int(session.scalar(select(func.count()).select_from(User).where(User.is_active.is_(True)).execution_options(skip_user_scope=True)) or 0),
+                "chats": int(session.scalar(select(func.count()).select_from(Chat).execution_options(skip_user_scope=True)) or 0),
+                "projects": int(session.scalar(select(func.count()).select_from(Project).execution_options(skip_user_scope=True)) or 0),
+                "documents": int(session.scalar(select(func.count()).select_from(Document).execution_options(skip_user_scope=True)) or 0),
+            }
+
+    def get_user_for_identity(self, provider: str, subject: str) -> User | None:
+        with self.database.session() as session:
+            row = session.execute(
+                select(User).join(AuthIdentity, AuthIdentity.user_id == User.id).where(
+                    AuthIdentity.provider == provider,
+                    AuthIdentity.provider_subject == subject,
+                ).execution_options(skip_user_scope=True)
+            ).first()
+            return row[0] if row else None
+
+    def link_or_get_identity(self, user_id: str, provider: str, subject: str) -> User:
+        with self.database.session() as session:
+            identity = session.scalar(select(AuthIdentity).where(
+                AuthIdentity.provider == provider,
+                AuthIdentity.provider_subject == subject,
+            ).with_for_update().execution_options(skip_user_scope=True))
+            if identity is None:
+                session.add(AuthIdentity(user_id=user_id, provider=provider, provider_subject=subject))
+                session.commit()
+                return session.get(User, user_id, execution_options={"skip_user_scope": True})
+            return session.get(User, identity.user_id, execution_options={"skip_user_scope": True})
+
+    def create_auth_oauth_state(self, state: str, purpose: str, expires_at: datetime) -> None:
+        with self.database.session() as session:
+            session.add(OAuthState(state=state, connector_slug=purpose, expires_at=expires_at)); session.commit()
+
+    def consume_auth_oauth_state(self, state: str, now: datetime) -> str | None:
+        with self.database.session() as session:
+            item = session.get(OAuthState, state, execution_options={"skip_user_scope": True})
+            if item is None:
+                return None
+            session.delete(item); session.commit()
+            return item.connector_slug if item.expires_at > now else None
+
+    def create_session(self, user_id: str, token_hash: str, expires_at: datetime) -> None:
+        with self.database.session() as session:
+            session.add(AuthSession(user_id=user_id, token_hash=token_hash, expires_at=expires_at)); session.commit()
+
+    def user_for_session(self, token_hash: str, now: datetime) -> User | None:
+        with self.database.session() as session:
+            row = session.execute(
+                select(AuthSession, User).join(User, User.id == AuthSession.user_id).where(AuthSession.token_hash == token_hash, AuthSession.expires_at > now).execution_options(skip_user_scope=True)
+            ).first()
+            return row[1] if row else None
+
+    def revoke_session(self, token_hash: str) -> None:
+        with self.database.session() as session:
+            session.execute(delete(AuthSession).where(AuthSession.token_hash == token_hash)); session.commit()
+
+    def claim_legacy_data(self, user_id: str) -> None:
+        entities = (Chat, ChatMemoryChunk, ChatShare, ChatMessage, PromptTemplate, MediaAttachment, LibraryAsset, ArtifactChunk, Project, Schedule, ScheduleRun, Plugin, ConnectorConnection, OAuthState, ConnectorAuditLog, Document, DocumentChunk, KnowledgeCollection, BackgroundJob)
+        with self.database.session() as session:
+            for entity in entities:
+                session.execute(entity.__table__.update().where(entity.user_id.is_(None)).values(user_id=user_id))
+            session.commit()
 
 
 class ScheduleRepository:

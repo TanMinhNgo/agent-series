@@ -2,7 +2,7 @@
 
 Ứng dụng AI agent đa nhà cung cấp với giao diện chat hiện đại, lưu hội thoại, RAG PDF cục bộ và bộ nhớ dài hạn có thể kiểm soát. Dự án dùng **React + Vite + TypeScript** ở frontend, **FastAPI** ở backend và **PostgreSQL + pgvector** cho dữ liệu/embedding.
 
-> Trạng thái hiện tại: ứng dụng local cho **một người dùng**, chưa có đăng nhập. Thư viện memory là của người đang dùng instance database đó.
+> Trạng thái hiện tại: ứng dụng local đăng nhập Google Sign-In và ownership theo user. BYOK và model catalog sync là các mốc tiếp theo.
 
 ## Điểm nổi bật
 
@@ -14,6 +14,7 @@
 - Stream trạng thái agent/tool qua SSE, hỗ trợ file/ảnh đính kèm, giao diện sáng/tối/system.
 - Lên lịch tác vụ AI một lần, hằng ngày hoặc hằng tuần; mỗi lịch có chat kết quả, run log và timeout recovery riêng.
 - Chia sẻ bản snapshot chat công khai bằng token, có thể đặt hạn dùng hoặc thu hồi.
+- Google Workspace connector read-only: tìm metadata file Drive và đọc Calendar sau OAuth; token được mã hóa cục bộ và có audit log.
 
 ## Kiến trúc
 
@@ -72,10 +73,28 @@ Các biến quan trọng trong `.env`:
 | `EMBEDDING_MODEL` | Embedding multilingual chạy local, dùng cho PDF và memory |
 | `KNOWLEDGE_DIR` | Thư mục lưu PDF gốc |
 | `MEDIA_DIR` | Thư mục lưu media người dùng upload |
+| `GOOGLE_OAUTH_*` | OAuth Web Client cho Google Workspace connector (tuỳ chọn) |
+| `CONNECTOR_ENCRYPTION_KEY` | Fernet key mã hóa token connector trong PostgreSQL |
 
 Lần đầu dùng RAG/memory, `sentence-transformers` có thể tải embedding model từ Hugging Face. Nếu bước này lỗi, chat thường vẫn hoạt động nhưng chưa đọc/lưu được memory ở lượt đó.
 
 PDF scan không có text layer sẽ được đánh dấu **Cần OCR** thay vì index lỗi; OCR engine chưa được cài trong bản local này.
+
+## Đăng nhập bằng Google
+
+Sau migration `0018`, API private yêu cầu session Google. Trong Google Cloud Console, thêm `http://localhost:8000/api/auth/google/callback` vào **Authorized redirect URIs** của OAuth Web application. Có thể dùng cùng Client ID/Secret với Google Workspace connector; backend tự fallback về `GOOGLE_OAUTH_CLIENT_ID` và `GOOGLE_OAUTH_CLIENT_SECRET` nếu các biến `GOOGLE_AUTH_*` để trống. User Google đầu tiên sẽ claim dữ liệu local đã có và nhận role owner.
+
+SMTP được giữ lại cho email thông báo trong tương lai, không dùng để đăng nhập.
+
+Không dùng phiên ChatGPT, Gemini web hay Claude.ai làm API credential: Gemini API dùng API key; OpenAI/Anthropic API dùng credential platform riêng. API key không được đặt ở frontend.
+
+## Kết nối Google Workspace (chỉ đọc)
+
+1. Trong Google Cloud Console, tạo **OAuth client type: Web application** và thêm `http://localhost:8000/api/connectors/google/callback` vào Authorized redirect URIs.
+2. Chép Client ID, Client Secret vào `.env`; tạo key mã hóa bằng lệnh đã ghi trong `.env.example` và đặt vào `CONNECTOR_ENCRYPTION_KEY`.
+3. Restart backend, mở **Plugin**, thêm Google Workspace rồi bấm **Kết nối Google**. Sau khi cấp quyền, chỉ bấm **Bật cho chat** nếu muốn agent dùng Drive/Calendar.
+
+Connector chỉ xin quyền đọc metadata Drive và Calendar. Nó không upload, import vào RAG, gửi email, tạo hoặc sửa sự kiện. **Ngắt kết nối** sẽ xóa token đã lưu cục bộ; audit log chỉ ghi hành động/tóm tắt, không ghi token hay nội dung file/sự kiện.
 
 ## Thư viện memory cá nhân
 
