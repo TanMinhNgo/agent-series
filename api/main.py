@@ -356,7 +356,12 @@ def make_agent(
         max_steps=settings.max_steps,
     )
     stored_history = history if history is not None else app_services.chats.history(chat.id)
-    agent.history = app_services.media.hydrate_history(recent_chat_history(stored_history))
+    # `persisted_history()` appends the agent's new turn to `stored_history`.
+    # Never hand that same list to Agent: `Agent.run()` appends in place and
+    # would make both references contain the new turn, which then persists it
+    # twice. A new list also keeps the no-attachment hydration fast path safe.
+    agent_history = [dict(item) for item in recent_chat_history(stored_history)]
+    agent.history = app_services.media.hydrate_history(agent_history)
     return agent
 
 

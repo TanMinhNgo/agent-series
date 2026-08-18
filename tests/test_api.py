@@ -15,6 +15,7 @@ from api.main import (
     ShareRequest,
     app,
     list_chats,
+    make_agent,
     model_error_message,
     persisted_history,
     recent_chat_history,
@@ -165,6 +166,25 @@ def test_persisted_history_keeps_archived_context_and_appends_new_turn() -> None
         *archived,
         {"role": "assistant", "content": "new answer"},
     ]
+
+
+def test_make_agent_does_not_mutate_the_history_being_persisted(monkeypatch) -> None:
+    history = [{"role": "user", "content": "Câu hỏi cũ"}]
+    chat = Chat(id="chat-1", provider="openai", model="gpt-5.6-terra")
+    services = SimpleNamespace(
+        workspace=SimpleNamespace(get=lambda *_args, **_kwargs: None),
+        media=SimpleNamespace(hydrate_history=lambda value: value),
+        knowledge=SimpleNamespace(),
+    )
+    monkeypatch.setattr(main_module, "selected_settings", lambda *_args: SimpleNamespace(max_steps=5))
+    monkeypatch.setattr(main_module, "build_client", lambda _settings: object())
+    monkeypatch.setattr(main_module, "build_knowledge_tool", lambda *_args: None)
+    monkeypatch.setattr(main_module, "build_default_registry", lambda *_args, **_kwargs: object())
+
+    agent = make_agent(services, chat, history=history)
+    agent.history.append({"role": "assistant", "content": "Câu trả lời mới"})
+
+    assert history == [{"role": "user", "content": "Câu hỏi cũ"}]
 
 
 def test_memory_recall_is_scoped_to_the_current_chat_and_optional_source() -> None:
