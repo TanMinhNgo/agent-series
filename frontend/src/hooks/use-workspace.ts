@@ -72,6 +72,7 @@ export const useWorkspace = () => {
       void client.invalidateQueries({ queryKey: ['library-assets'] });
       void client.invalidateQueries({ queryKey: ['templates'] });
       void client.invalidateQueries({ queryKey: ['bookmarks'] });
+      void client.invalidateQueries({ queryKey: queryKeys.collectionsRoot });
     },
   });
   const scheduleActions = useResourceActions<ScheduleInput>('schedule');
