@@ -52,6 +52,7 @@ class Settings:
     max_tokens: int
     database_url: str
     embedding_model: str
+    hf_token: str
     knowledge_dir: Path
     media_dir: Path
     provider_models: dict[str, tuple[str, ...]]
@@ -119,6 +120,11 @@ def _model_list(env_name: str, fallback: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(item for item in values if item))
 
 
+def _env_or_fallback(env_name: str, fallback_env_name: str) -> str:
+    """Use the primary value only when it is actually configured."""
+    return os.getenv(env_name, "").strip() or os.getenv(fallback_env_name, "").strip()
+
+
 def load_settings() -> Settings:
     """Đọc cấu hình từ môi trường và trả về đối tượng Settings.
 
@@ -151,6 +157,10 @@ def load_settings() -> Settings:
             "DATABASE_URL", "postgresql+psycopg://agent:agent@localhost:5433/agent_series"
         ).strip(),
         embedding_model=os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-small").strip(),
+        # sentence-transformers / huggingface_hub reads HF_TOKEN directly from
+        # the environment; retain it here too so all runtime configuration has
+        # one explicit, discoverable contract.
+        hf_token=os.getenv("HF_TOKEN", "").strip(),
         knowledge_dir=(PROJECT_ROOT / os.getenv("KNOWLEDGE_DIR", "knowledge").strip()).resolve(),
         media_dir=(PROJECT_ROOT / os.getenv("MEDIA_DIR", "uploads").strip()).resolve(),
         provider_models={
@@ -165,8 +175,8 @@ def load_settings() -> Settings:
         ).strip(),
         # Google Sign-In can reuse the same Google Cloud OAuth client as the
         # Workspace connector, but must have its own callback and narrow scopes.
-        google_auth_client_id=os.getenv("GOOGLE_AUTH_CLIENT_ID", os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")).strip(),
-        google_auth_client_secret=os.getenv("GOOGLE_AUTH_CLIENT_SECRET", os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")).strip(),
+        google_auth_client_id=_env_or_fallback("GOOGLE_AUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_ID"),
+        google_auth_client_secret=_env_or_fallback("GOOGLE_AUTH_CLIENT_SECRET", "GOOGLE_OAUTH_CLIENT_SECRET"),
         google_auth_redirect_uri=os.getenv(
             "GOOGLE_AUTH_REDIRECT_URI", "http://localhost:8000/api/auth/google/callback"
         ).strip(),
