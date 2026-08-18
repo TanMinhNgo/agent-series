@@ -10,7 +10,7 @@ from uuid import uuid4
 from pypdf import PdfReader
 from sqlalchemy import select
 
-from .storage import Database, Document, DocumentChunk
+from .storage import Database, Document, DocumentChunk, KnowledgeCollection, KnowledgeCollectionDocument, document_scope_key
 from .tools.base import ToolSpec
 
 CHUNK_SIZE = 800
@@ -59,6 +59,53 @@ class KnowledgeService:
                 statement = statement.where(Document.project_id == project_id)
             return list(session.scalars(statement))
 
+    def list_collections(self, project_id: str) -> list[KnowledgeCollection]:
+        with self.database.session() as session:
+            return list(session.scalars(select(KnowledgeCollection).where(KnowledgeCollection.project_id == project_id).order_by(KnowledgeCollection.updated_at.desc())))
+
+    def get_collection(self, collection_id: str) -> KnowledgeCollection | None:
+        with self.database.session() as session:
+            return session.get(KnowledgeCollection, collection_id)
+
+    def create_collection(self, project_id: str, name: str, description: str | None = None) -> KnowledgeCollection:
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Tên collection không được để trống.")
+        with self.database.session() as session:
+            item = KnowledgeCollection(project_id=project_id, name=clean_name[:160], description=(description or "").strip()[:10_000] or None)
+            session.add(item); session.commit(); return item
+
+    def update_collection(self, collection_id: str, name: str, description: str | None = None) -> KnowledgeCollection | None:
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Tên collection không được để trống.")
+        with self.database.session() as session:
+            item = session.get(KnowledgeCollection, collection_id)
+            if item is None: return None
+            item.name, item.description = clean_name[:160], (description or "").strip()[:10_000] or None
+            session.commit(); return item
+
+    def delete_collection(self, collection_id: str) -> bool:
+        with self.database.session() as session:
+            item = session.get(KnowledgeCollection, collection_id)
+            if item is None: return False
+            session.delete(item); session.commit(); return True
+
+    def collection_documents(self, collection_id: str) -> list[Document]:
+        with self.database.session() as session:
+            return list(session.scalars(select(Document).join(KnowledgeCollectionDocument).where(KnowledgeCollectionDocument.collection_id == collection_id).order_by(Document.original_name)))
+
+    def set_collection_documents(self, collection_id: str, document_ids: list[str]) -> list[Document]:
+        with self.database.session() as session:
+            collection = session.get(KnowledgeCollection, collection_id)
+            if collection is None: raise ValueError("Không tìm thấy collection.")
+            documents = list(session.scalars(select(Document).where(Document.id.in_(set(document_ids)))).all()) if document_ids else []
+            if len(documents) != len(set(document_ids)) or any(item.project_id != collection.project_id for item in documents):
+                raise ValueError("Tài liệu phải thuộc cùng Project với collection.")
+            session.query(KnowledgeCollectionDocument).filter(KnowledgeCollectionDocument.collection_id == collection_id).delete()
+            session.add_all(KnowledgeCollectionDocument(collection_id=collection_id, document_id=item.id) for item in documents)
+            session.commit(); return documents
+
     def upload(self, original_name: str, data: bytes, project_id: str | None = None) -> tuple[Document, bool]:
         if not original_name.lower().endswith(".pdf"):
             raise ValueError("Chỉ nhận file PDF.")
@@ -67,14 +114,21 @@ class KnowledgeService:
         if len(data) > 25 * 1024 * 1024:
             raise ValueError("PDF vượt giới hạn 25 MB.")
         digest = hashlib.sha256(data).hexdigest()
+        scope_key = document_scope_key(project_id)
         self.knowledge_dir.mkdir(parents=True, exist_ok=True)
         with self.database.session() as session:
-            existing = session.scalar(select(Document).where(Document.sha256 == digest, Document.project_id == project_id))
+            existing = session.scalar(select(Document).where(Document.sha256 == digest, Document.scope_key == scope_key))
             if existing:
                 return existing, False
             stored_name = f"{uuid4()}_{Path(original_name).name}"
             (self.knowledge_dir / stored_name).write_bytes(data)
-            document = Document(original_name=Path(original_name).name, stored_name=stored_name, sha256=digest, project_id=project_id)
+            document = Document(
+                original_name=Path(original_name).name,
+                stored_name=stored_name,
+                sha256=digest,
+                scope_key=scope_key,
+                project_id=project_id,
+            )
             session.add(document)
             session.commit()
             return document, True
@@ -120,32 +174,35 @@ class KnowledgeService:
             session.commit()
             return True
 
-    def search(self, query: str, top_k: int = 4, project_id: str | None = None) -> str:
+    def search(self, query: str, top_k: int = 4, project_id: str | None = None, collection_id: str | None = None) -> str:
         if not query.strip():
             return "[Lỗi] Câu hỏi truy vấn đang trống."
         top_k = max(1, min(int(top_k), 8))
         vector = self._embed([query], "query")[0]
         with self.database.session() as session:
             distance = DocumentChunk.embedding.cosine_distance(vector)
-            rows = session.execute(
+            statement = (
                 select(DocumentChunk, Document.original_name, distance.label("distance"))
                 .join(Document)
                 .where(Document.status == "ready", Document.project_id == project_id)
-                .order_by(distance)
-                .limit(top_k)
-            ).all()
+            )
+            if collection_id:
+                statement = statement.join(KnowledgeCollectionDocument).where(KnowledgeCollectionDocument.collection_id == collection_id)
+            rows = session.execute(statement.order_by(distance).limit(top_k)).all()
         if not rows:
             return "Không có tài liệu nào đã index để trả lời câu hỏi này."
         return "\n\n".join(
-            f"[Nguồn {number}: {name}, trang {chunk.page_number}]\n{chunk.content}"
+            f"[Nguồn {number}: [{name}](/api/documents/{chunk.document_id}/file#page={chunk.page_number}), trang {chunk.page_number}]\n{chunk.content}"
             for number, (chunk, name, _) in enumerate(rows, start=1)
         )
 
 
-def build_knowledge_tool(service: KnowledgeService, project_id: str | None = None) -> ToolSpec:
+def build_knowledge_tool(service: KnowledgeService, project_id: str | None = None, collection_id: str | None = None) -> ToolSpec | None:
+    if not collection_id:
+        return None
     return ToolSpec(
         name="search_knowledge_base",
         description="Tìm thông tin trong các PDF người dùng đã upload và index. Dùng khi câu hỏi liên quan đến tài liệu; câu trả lời phải nêu nguồn và số trang.",
         parameters={"type": "object", "properties": {"query": {"type": "string", "description": "Câu truy vấn rõ ràng bằng ngôn ngữ tự nhiên."}, "top_k": {"type": "integer", "description": "Số đoạn cần lấy, từ 1 đến 8; mặc định 4."}}, "required": ["query"]},
-        func=lambda query, top_k=4: service.search(query, top_k, project_id),
+        func=lambda query, top_k=4: service.search(query, top_k, project_id, collection_id),
     )

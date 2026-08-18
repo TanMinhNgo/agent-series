@@ -8,4 +8,7 @@ export type Chat = {
   archived: boolean;
   contextSourceChatId: string | null;
   projectId: string | null;
+  parentChatId: string | null;
+  branchFromPosition: number | null;
+  collectionId: string | null;
 };

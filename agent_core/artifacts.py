@@ -1,0 +1,125 @@
+"""Versioned Project artifacts with preview extraction and pgvector retrieval."""
+
+from __future__ import annotations
+
+import csv
+import json
+from io import BytesIO, StringIO
+from pathlib import Path
+
+from pypdf import PdfReader
+from sqlalchemy import select
+
+from .knowledge import _chunks
+from .storage import ArtifactChunk, Database, LibraryAsset
+from .tools.base import ToolSpec
+
+PREVIEW_LIMIT = 30_000
+
+
+def extract_artifact_text(path: Path, suffix: str) -> str:
+    """Extract safe plain text from the document types the Library can create."""
+    suffix = suffix.lower()
+    data = path.read_bytes()
+    if suffix in {".md", ".txt", ".csv", ".json"}:
+        return data.decode("utf-8", errors="replace")
+    if suffix == ".pdf":
+        return "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(data)).pages)
+    if suffix == ".docx":
+        from docx import Document
+        return "\n".join(item.text for item in Document(BytesIO(data)).paragraphs)
+    if suffix == ".xlsx":
+        from openpyxl import load_workbook
+        book = load_workbook(BytesIO(data), read_only=True, data_only=True)
+        rows = []
+        for sheet in book.worksheets:
+            rows.append(f"# {sheet.title}")
+            rows.extend("\t".join("" if value is None else str(value) for value in row) for row in sheet.iter_rows(values_only=True))
+        return "\n".join(rows)
+    if suffix == ".pptx":
+        from pptx import Presentation
+        presentation = Presentation(BytesIO(data))
+        return "\n".join(
+            text for slide in presentation.slides for shape in slide.shapes if hasattr(shape, "text") for text in [shape.text]
+        )
+    raise ValueError("File này chưa hỗ trợ trích xuất nội dung.")
+
+
+class ArtifactService:
+    def __init__(self, database: Database, directory: Path, embedding_model: str):
+        self.database, self.directory, self.embedding_model_name = database, directory, embedding_model
+        self._embedder = None
+
+    def _embed(self, values: list[str], prefix: str) -> list[list[float]]:
+        if self._embedder is None:
+            from sentence_transformers import SentenceTransformer
+            self._embedder = SentenceTransformer(self.embedding_model_name)
+        return self._embedder.encode([f"{prefix}: {value}" for value in values], normalize_embeddings=True).tolist()
+
+    def preview(self, asset_id: str) -> dict:
+        with self.database.session() as session:
+            asset = session.get(LibraryAsset, asset_id)
+            if asset is None:
+                raise ValueError("Không tìm thấy artifact.")
+            suffix = Path(asset.name).suffix.lower()
+            if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+                return {"kind": "image"}
+            if suffix == ".pdf":
+                return {"kind": "pdf"}
+            try:
+                content = extract_artifact_text(self.directory / asset.stored_name, suffix)
+            except ValueError:
+                return {"kind": "download"}
+            return {"kind": "text", "content": content[:PREVIEW_LIMIT], "truncated": len(content) > PREVIEW_LIMIT}
+
+    def index(self, asset_id: str) -> LibraryAsset:
+        with self.database.session() as session:
+            asset = session.get(LibraryAsset, asset_id)
+            if asset is None:
+                raise ValueError("Không tìm thấy artifact.")
+            asset.index_status, asset.index_error = "indexing", None
+            session.query(ArtifactChunk).filter(ArtifactChunk.asset_id == asset_id).delete()
+            session.commit()
+            try:
+                content = extract_artifact_text(self.directory / asset.stored_name, Path(asset.name).suffix)
+                parts = _chunks(content)
+                if not parts:
+                    asset.index_status, asset.index_error = "failed", "Artifact không có nội dung văn bản để truy hồi."
+                    session.commit()
+                    raise RuntimeError(asset.index_error)
+                vectors = self._embed(parts, "passage")
+                session.add_all(ArtifactChunk(asset_id=asset.id, chunk_index=index, content=part, embedding=vector) for index, (part, vector) in enumerate(zip(parts, vectors)))
+                asset.index_status = "ready"
+            except Exception as exc:  # noqa: BLE001
+                asset.index_status, asset.index_error = "failed", str(exc)
+            session.commit()
+            if asset.index_status == "failed":
+                raise RuntimeError(asset.index_error or "Không thể index artifact.")
+            return asset
+
+    def search(self, query: str, project_id: str, top_k: int = 4) -> str:
+        vector = self._embed([query], "query")[0]
+        with self.database.session() as session:
+            distance = ArtifactChunk.embedding.cosine_distance(vector)
+            rows = session.execute(
+                select(ArtifactChunk, LibraryAsset.name, LibraryAsset.version, distance.label("distance"))
+                .join(LibraryAsset)
+                .where(LibraryAsset.project_id == project_id, LibraryAsset.is_project_source.is_(True), LibraryAsset.index_status == "ready")
+                .order_by(distance)
+                .limit(max(1, min(top_k, 8)))
+            ).all()
+        if not rows:
+            return "Không có Project Source phù hợp đã index."
+        return "\n\n".join(
+            f"[Artifact {number}: {name}, v{version}]\n{chunk.content}"
+            for number, (chunk, name, version, _) in enumerate(rows, start=1)
+        )
+
+
+def build_artifact_tool(service: ArtifactService, project_id: str) -> ToolSpec:
+    return ToolSpec(
+        name="search_project_sources",
+        description="Tìm trong artifact đã ghim vào Project. Khi dùng, nêu tên artifact và version làm nguồn.",
+        parameters={"type": "object", "properties": {"query": {"type": "string"}, "top_k": {"type": "integer"}}, "required": ["query"]},
+        func=lambda query, top_k=4: service.search(query, project_id, top_k),
+    )

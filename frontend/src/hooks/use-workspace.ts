@@ -59,8 +59,20 @@ export const useWorkspace = () => {
   const projectActions = useResourceActions<ProjectInput>('project');
   const deleteProject = useMutation({
     mutationFn: ({ id, confirmName }: { id: string; confirmName: string }) =>
-      request<void>({ url: `/projects/${id}`, method: 'DELETE', data: { confirmName } }),
-    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.projects }),
+      request<{ deleted: Record<string, number>; fileCleanupQueued: boolean }>({
+        url: `/projects/${id}`,
+        method: 'DELETE',
+        data: { confirmName },
+      }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.projects });
+      void client.invalidateQueries({ queryKey: queryKeys.chats });
+      void client.invalidateQueries({ queryKey: queryKeys.schedules });
+      void client.invalidateQueries({ queryKey: ['documents'] });
+      void client.invalidateQueries({ queryKey: ['library-assets'] });
+      void client.invalidateQueries({ queryKey: ['templates'] });
+      void client.invalidateQueries({ queryKey: ['bookmarks'] });
+    },
   });
   const scheduleActions = useResourceActions<ScheduleInput>('schedule');
   const runScheduleNow = useMutation({

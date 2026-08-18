@@ -11,6 +11,9 @@ export const useUpdateChat = () => {
   return useMutation({
     mutationFn: ({ chatId, provider, model }: Variables) =>
       request<Chat>({ url: `/chats/${chatId}`, method: 'PATCH', data: { provider, model } }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
+    onSuccess: (chat) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.chats });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.chat(chat.id) });
+    },
   });
 };

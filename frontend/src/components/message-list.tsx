@@ -1,14 +1,15 @@
 import { useLayoutEffect, useRef } from 'react';
-import { Sparkles } from 'lucide-react';
+import { Bookmark, Copy, GitBranch, Sparkles } from 'lucide-react';
 
 import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { RichResponseLazy } from '@/src/components/rich-response-lazy';
 import type { Message } from '@/src/types';
 
-type Props = { messages: Message[]; status: string | null; error: string | null; userScrollRequest: number };
+type Props = { messages: Message[]; status: string | null; error: string | null; userScrollRequest: number; onBranch?: (message: Message) => void; onBookmark?: (message: Message) => void };
 
-export function MessageList({ messages, status, error, userScrollRequest }: Props) {
+export function MessageList({ messages, status, error, userScrollRequest, onBranch, onBookmark }: Props) {
   const latestUserMessageRef = useRef<HTMLElement | null>(null);
 
   // This intentionally reacts only to a newly queued user message. AI status,
@@ -32,7 +33,8 @@ export function MessageList({ messages, status, error, userScrollRequest }: Prop
       )}
       {messages.map((message, index) => (
         <article
-          key={`${message.role}-${index}`}
+          id={message.messageId ? `message-${message.messageId}` : undefined}
+          key={message.messageId || `${message.role}-${index}`}
           ref={message.role === 'user' && index === messages.length - 1 ? latestUserMessageRef : undefined}
           className={cn('flex gap-3 leading-7', message.role === 'user' && 'flex-row-reverse')}
         >
@@ -68,6 +70,13 @@ export function MessageList({ messages, status, error, userScrollRequest }: Prop
                     <img src={item.url} alt={item.name} className="size-20 object-cover" />
                   </a>
                 ))}
+              </div>
+            ) : null}
+            {message.messageId ? (
+              <div className={cn('mt-2 flex gap-1 opacity-70', message.role === 'user' && 'justify-end')}>
+                <Button size="icon-sm" variant="ghost" onClick={() => void navigator.clipboard.writeText(message.content)} aria-label="Sao chép"><Copy /></Button>
+                <Button size="icon-sm" variant="ghost" onClick={() => onBranch?.(message)} aria-label="Tạo branch"><GitBranch /></Button>
+                <Button size="icon-sm" variant={message.bookmarked ? 'secondary' : 'ghost'} onClick={() => onBookmark?.(message)} aria-label="Lưu message"><Bookmark /></Button>
               </div>
             ) : null}
           </div>

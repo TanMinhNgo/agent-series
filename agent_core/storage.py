@@ -7,9 +7,16 @@ from secrets import token_urlsafe
 from uuid import uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, create_engine, delete, desc, func, select, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, create_engine, delete, desc, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
+
+GLOBAL_DOCUMENT_SCOPE = "__library__"
+
+
+def document_scope_key(project_id: str | None) -> str:
+    """Return a stable uniqueness scope for a project or the global Library."""
+    return project_id or GLOBAL_DOCUMENT_SCOPE
 
 
 class Base(DeclarativeBase):
@@ -29,6 +36,9 @@ class Chat(Base):
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
     context_source_chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id", ondelete="SET NULL"), nullable=True)
     project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
+    parent_chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id", ondelete="SET NULL"), nullable=True, index=True)
+    branch_from_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    collection_id: Mapped[str | None] = mapped_column(ForeignKey("knowledge_collections.id", ondelete="SET NULL"), nullable=True, index=True)
 
 
 class ChatMemoryChunk(Base):
@@ -74,6 +84,18 @@ class ChatMessage(Base):
     tool_calls: Mapped[list | None] = mapped_column(JSON, nullable=True)
     attachments: Mapped[list | None] = mapped_column(JSON, nullable=True)
     content_blocks: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    bookmarked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+
+class PromptTemplate(Base):
+    __tablename__ = "prompt_templates"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    name: Mapped[str] = mapped_column(String(160))
+    content: Mapped[str] = mapped_column(Text)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class MediaAttachment(Base):
@@ -89,6 +111,7 @@ class MediaAttachment(Base):
 
 class LibraryAsset(Base):
     __tablename__ = "library_assets"
+    __table_args__ = (UniqueConstraint("artifact_id", "version", name="uq_library_assets_artifact_version"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     name: Mapped[str] = mapped_column(String(255))
@@ -97,7 +120,25 @@ class LibraryAsset(Base):
     size_bytes: Mapped[int] = mapped_column(Integer)
     source: Mapped[str] = mapped_column(String(24), default="upload")
     project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
+    artifact_id: Mapped[str] = mapped_column(String(36), default=lambda: str(uuid4()), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    is_project_source: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    index_status: Mapped[str] = mapped_column(String(16), default="pending")
+    index_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    chunks: Mapped[list["ArtifactChunk"]] = relationship(back_populates="asset", cascade="all, delete-orphan")
+
+
+class ArtifactChunk(Base):
+    __tablename__ = "artifact_chunks"
+    __table_args__ = (UniqueConstraint("asset_id", "chunk_index", name="uq_artifact_chunks_asset_index"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    asset_id: Mapped[str] = mapped_column(ForeignKey("library_assets.id", ondelete="CASCADE"), index=True)
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    content: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float]] = mapped_column(Vector(384))
+    asset: Mapped[LibraryAsset] = relationship(back_populates="chunks")
 
 
 class Project(Base):
@@ -121,7 +162,7 @@ class Schedule(Base):
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
     chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id", ondelete="SET NULL"), nullable=True)
     prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     recurrence: Mapped[str] = mapped_column(String(16), default="once")
@@ -166,11 +207,13 @@ class Plugin(Base):
 
 class Document(Base):
     __tablename__ = "documents"
+    __table_args__ = (UniqueConstraint("scope_key", "sha256", name="uq_documents_scope_sha256"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     original_name: Mapped[str] = mapped_column(String(255))
     stored_name: Mapped[str] = mapped_column(String(255), unique=True)
-    sha256: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    sha256: Mapped[str] = mapped_column(String(64), index=True)
+    scope_key: Mapped[str] = mapped_column(String(36), default=GLOBAL_DOCUMENT_SCOPE)
     status: Mapped[str] = mapped_column(String(16), default="pending")
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -191,6 +234,25 @@ class DocumentChunk(Base):
     content: Mapped[str] = mapped_column(Text)
     embedding: Mapped[list[float]] = mapped_column(Vector(384))
     document: Mapped[Document] = relationship(back_populates="chunks")
+
+
+class KnowledgeCollection(Base):
+    __tablename__ = "knowledge_collections"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class KnowledgeCollectionDocument(Base):
+    __tablename__ = "knowledge_collection_documents"
+    __table_args__ = (UniqueConstraint("collection_id", "document_id", name="uq_knowledge_collection_document"),)
+
+    collection_id: Mapped[str] = mapped_column(ForeignKey("knowledge_collections.id", ondelete="CASCADE"), primary_key=True)
+    document_id: Mapped[str] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True)
 
 
 class BackgroundJob(Base):
@@ -243,12 +305,66 @@ class ChatRepository:
     def __init__(self, database: Database):
         self.database = database
 
-    def create(self, provider: str, model: str, context_source_chat_id: str | None = None, project_id: str | None = None) -> Chat:
+    def create(self, provider: str, model: str, context_source_chat_id: str | None = None, project_id: str | None = None, collection_id: str | None = None) -> Chat:
         with self.database.session() as session:
-            chat = Chat(provider=provider, model=model, context_source_chat_id=context_source_chat_id, project_id=project_id)
+            chat = Chat(provider=provider, model=model, context_source_chat_id=context_source_chat_id, project_id=project_id, collection_id=collection_id)
             session.add(chat)
             session.commit()
             return chat
+
+    def branch(self, chat_id: str, message_id: str) -> Chat | None:
+        with self.database.session() as session:
+            source = session.get(Chat, chat_id)
+            message = session.get(ChatMessage, message_id)
+            if source is None or message is None or message.chat_id != chat_id:
+                return None
+            branch = Chat(
+                title=f"Branch: {source.title}"[:160], provider=source.provider, model=source.model,
+                project_id=source.project_id, collection_id=source.collection_id, parent_chat_id=source.id, branch_from_position=message.position,
+            )
+            session.add(branch)
+            session.flush()
+            records = session.scalars(select(ChatMessage).where(ChatMessage.chat_id == chat_id, ChatMessage.position <= message.position).order_by(ChatMessage.position)).all()
+            for record in records:
+                session.add(ChatMessage(
+                    chat_id=branch.id, position=record.position, role=record.role, content=record.content,
+                    tool_call_id=record.tool_call_id, tool_name=record.tool_name, tool_calls=record.tool_calls,
+                    attachments=record.attachments, content_blocks=record.content_blocks, bookmarked=record.bookmarked,
+                ))
+            session.commit()
+            return branch
+
+    def set_bookmark(self, message_id: str, bookmarked: bool) -> ChatMessage | None:
+        with self.database.session() as session:
+            message = session.get(ChatMessage, message_id)
+            if message is None:
+                return None
+            message.bookmarked = bookmarked
+            session.commit()
+            return message
+
+    def bookmarks(self, project_id: str | None = None) -> list[tuple[ChatMessage, Chat]]:
+        with self.database.session() as session:
+            statement = select(ChatMessage, Chat).join(Chat).where(ChatMessage.bookmarked.is_(True)).order_by(Chat.updated_at.desc())
+            if project_id:
+                statement = statement.where(Chat.project_id == project_id)
+            return list(session.execute(statement).all())
+
+    def search_messages(self, query: str, chat_id: str | None = None, project_id: str | None = None) -> list[tuple[ChatMessage, Chat]]:
+        with self.database.session() as session:
+            phrase = query.strip()
+            search_vector = func.to_tsvector("simple", ChatMessage.content)
+            statement = select(ChatMessage, Chat).join(Chat).where(
+                or_(
+                    search_vector.op("@@")(func.plainto_tsquery("simple", phrase)),
+                    ChatMessage.content.ilike(f"%{phrase}%"),
+                )
+            )
+            if chat_id:
+                statement = statement.where(ChatMessage.chat_id == chat_id)
+            if project_id:
+                statement = statement.where(Chat.project_id == project_id)
+            return list(session.execute(statement.order_by(Chat.updated_at.desc()).limit(50)).all())
 
     def list(self, offset: int = 0, limit: int = 40) -> tuple[list[Chat], int]:
         with self.database.session() as session:
@@ -297,13 +413,16 @@ class ChatRepository:
             session.commit()
 
     def update(self, chat_id: str, **values) -> Chat | None:
-        allowed = {"title", "pinned", "archived", "provider", "model"}
+        allowed = {"title", "pinned", "archived", "provider", "model", "project_id", "collection_id"}
         with self.database.session() as session:
             chat = session.get(Chat, chat_id)
             if chat is None:
                 return None
             for key, value in values.items():
-                if key in allowed and value is not None:
+                # project_id must be nullable so a chat can be moved back to
+                # the global workspace; all other optional values retain their
+                # existing "not supplied" behavior.
+                if key in allowed and (key in {"project_id", "collection_id"} or value is not None):
                     setattr(chat, key, value)
             chat.updated_at = datetime.utcnow()
             session.commit()
@@ -370,11 +489,13 @@ class ChatRepository:
             ).all()
             return [
                 {key: value for key, value in {
+                    "message_id": message.id,
                     "position": message.position,
                     "role": message.role, "content": message.content, "id": message.tool_call_id,
                     "name": message.tool_name, "tool_calls": message.tool_calls,
                     "attachments": message.attachments,
                     "content_blocks": message.content_blocks,
+                    "bookmarked": message.bookmarked,
                 }.items() if value is not None}
                 for message in messages
             ]
@@ -580,14 +701,14 @@ class BackgroundJobRepository:
     def succeed(self, job_id: str) -> None:
         with self.database.session() as session:
             job = session.get(BackgroundJob, job_id)
-            if job:
+            if job and job.status == "running":
                 job.status, job.locked_at, job.last_error = "succeeded", None, None
                 session.commit()
 
     def fail(self, job_id: str, error: str, now: datetime) -> None:
         with self.database.session() as session:
             job = session.get(BackgroundJob, job_id)
-            if job is None:
+            if job is None or job.status != "running":
                 return
             job.last_error, job.locked_at = error[:10_000], None
             if job.attempts >= job.max_attempts:
@@ -595,6 +716,24 @@ class BackgroundJobRepository:
             else:
                 job.status, job.run_after = "queued", now + timedelta(seconds=2 ** job.attempts)
             session.commit()
+
+    def cancel_document_jobs(self, document_ids: list[str]) -> int:
+        """Stop queued/running index jobs for documents removed by a Project deletion."""
+        if not document_ids:
+            return 0
+        keys = [f"document:{document_id}" for document_id in document_ids]
+        with self.database.session() as session:
+            jobs = session.scalars(
+                select(BackgroundJob).where(
+                    BackgroundJob.type == "document_index",
+                    BackgroundJob.dedupe_key.in_(keys),
+                    BackgroundJob.status.in_(("queued", "running")),
+                )
+            ).all()
+            for job in jobs:
+                job.status, job.locked_at, job.last_error = "cancelled", None, "Tài liệu đã bị xóa."
+            session.commit()
+            return len(jobs)
 
     def recover_stale(self, now: datetime, timeout: timedelta = timedelta(minutes=20)) -> int:
         with self.database.session() as session:

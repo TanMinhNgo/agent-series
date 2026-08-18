@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   CalendarDays,
   ChevronLeft,
@@ -22,6 +23,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { PluginBrandIcon } from '@/src/components/plugin-brand-icon';
 import { useScheduleRuns, useWorkspace } from '@/src/hooks/use-workspace';
+import { request } from '@/src/hooks/client';
 import type { Plugin, PluginCatalogItem, Project, Schedule } from '@/src/types';
 
 export type WorkspaceView = 'projects' | 'schedules' | 'plugins';
@@ -140,6 +142,11 @@ function ProjectsView() {
   const [status, setStatus] = useState<'all' | keyof typeof statusMeta>('all');
   const [editing, setEditing] = useState<Project | null | undefined>();
   const [deleting, setDeleting] = useState<Project | null>(null);
+  const deletionPreview = useQuery({
+    queryKey: ['project-delete-preview', deleting?.id],
+    queryFn: () => request<{ chats: unknown[]; documents: unknown[]; assets: unknown[]; schedules: unknown[] }>({ url: `/projects/${deleting?.id}` }),
+    enabled: Boolean(deleting?.id),
+  });
   const [query, setQuery] = useState('');
   const items = useMemo(
     () =>
@@ -229,6 +236,16 @@ function ProjectsView() {
           project={deleting}
           busy={deleteProject.isPending}
           error={deleteProject.error?.message}
+          counts={
+            deletionPreview.data
+              ? {
+                  chats: deletionPreview.data.chats.length,
+                  documents: deletionPreview.data.documents.length,
+                  assets: deletionPreview.data.assets.length,
+                  schedules: deletionPreview.data.schedules.length,
+                }
+              : undefined
+          }
           onClose={() => setDeleting(null)}
           onConfirm={async (confirmName) => {
             await deleteProject.mutateAsync({ id: deleting.id, confirmName });
@@ -291,6 +308,7 @@ function ProjectForm({
   project: Project | null;
   busy: boolean;
   error?: string;
+  counts?: { chats: number; documents: number; assets: number; schedules: number };
   onClose: () => void;
   onSave: (
     data: Pick<Project, 'name' | 'description' | 'status' | 'instructions' | 'memoryMode'>,
@@ -376,12 +394,14 @@ function DeleteProjectDialog({
   project,
   busy,
   error,
+  counts,
   onClose,
   onConfirm,
 }: {
   project: Project;
   busy: boolean;
   error?: string;
+  counts?: { chats: number; documents: number; assets: number; schedules: number };
   onClose: () => void;
   onConfirm: (name: string) => Promise<void>;
 }) {
@@ -396,6 +416,11 @@ function DeleteProjectDialog({
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
             Toàn bộ chat, PDF RAG, file, lịch trình và memory thuộc dự án sẽ bị xóa vĩnh viễn.
+          </p>
+          <p className="rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
+            {counts
+              ? `${counts.chats} chat · ${counts.documents} PDF RAG · ${counts.assets} file · ${counts.schedules} lịch trình`
+              : 'Đang kiểm tra dữ liệu sẽ bị xóa...'}
           </p>
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={onClose}>

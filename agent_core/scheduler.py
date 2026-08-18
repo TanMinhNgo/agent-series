@@ -5,7 +5,8 @@ from __future__ import annotations
 import time
 from datetime import UTC, datetime
 
-from api.main import Services, make_agent, persisted_history
+from api.main import Services, make_agent, persisted_history, queue_pending_artifacts
+from agent_core.artifacts import ArtifactService
 from agent_core.config import load_settings
 from agent_core.knowledge import KnowledgeService
 from agent_core.library import LibraryService
@@ -78,9 +79,11 @@ def build_worker() -> ScheduleWorker:
         knowledge=KnowledgeService(database, settings.knowledge_dir, settings.embedding_model),
         media=media,
         library=LibraryService(database, settings.media_dir),
+        artifacts=ArtifactService(database, settings.media_dir, settings.embedding_model),
         memory=MemoryService(database, settings.embedding_model),
         workspace=WorkspaceRepository(database),
     )
+    queue_pending_artifacts(services)
     return ScheduleWorker(services)
 
 

@@ -22,6 +22,9 @@ import { useStreamChat } from '@/src/hooks/use-stream-chat';
 import { useUploadDocuments } from '@/src/hooks/use-upload-documents';
 import { useUploadMedia } from '@/src/hooks/use-upload-media';
 import { useWorkspace } from '@/src/hooks/use-workspace';
+import { queryKeys } from '@/src/hooks/query-keys';
+import { request } from '@/src/hooks/client';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Chat, Theme } from '@/src/types';
 
 const WorkspacePanel = lazy(() =>
@@ -77,6 +80,7 @@ function ChatWorkspace({ chatId, libraryPage, workspaceView, navigate }: ChatWor
   const [userScrollRequest, setUserScrollRequest] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [shareChat, setShareChat] = useState<Chat | null>(null);
+  const [messageSearch, setMessageSearch] = useState('');
   const activeNavigation: SidebarNavigation | undefined = libraryPage
     ? 'library'
     : workspaceView || (chatId ? undefined : 'chat');
@@ -96,6 +100,51 @@ function ChatWorkspace({ chatId, libraryPage, workspaceView, navigate }: ChatWor
   const uploadMedia = useUploadMedia();
   const streamChat = useStreamChat();
   const { projects } = useWorkspace();
+  const queryClient = useQueryClient();
+  const collections = useQuery({
+    queryKey: queryKeys.collections(activeChat?.projectId),
+    queryFn: () => request<{ id: string; name: string; documentIds: string[] }[]>({ url: `/projects/${activeChat?.projectId}/collections` }),
+    enabled: Boolean(activeChat?.projectId),
+  });
+  const templates = useQuery({
+    queryKey: queryKeys.templates(activeChat?.projectId),
+    queryFn: () => request<{ id: string; name: string; content: string; projectId: string | null }[]>({ url: '/templates', params: activeChat?.projectId ? { projectId: activeChat.projectId } : {} }),
+  });
+  const searchResults = useQuery({
+    queryKey: queryKeys.messageSearch(messageSearch, activeChat?.projectId),
+    queryFn: () => request<{ messageId: string; content: string; chat: Chat }[]>({ url: '/messages/search', params: { q: messageSearch, ...(activeChat?.projectId ? { projectId: activeChat.projectId } : {}) } }),
+    enabled: messageSearch.trim().length > 1,
+  });
+  const bookmarks = useQuery({
+    queryKey: queryKeys.bookmarks(activeChat?.projectId),
+    queryFn: () => request<{ messageId: string; content: string; chat: Chat }[]>({ url: '/bookmarks', params: activeChat?.projectId ? { projectId: activeChat.projectId } : {} }),
+  });
+  const branchChat = useMutation({
+    mutationFn: (messageId: string) => request<Chat>({ url: `/chats/${activeChat?.id}/branch/${messageId}`, method: 'POST' }),
+    onSuccess: (chat) => {
+      void queryClient.invalidateQueries({ queryKey: ['chats'] });
+      navigate(`/chat/${chat.id}`);
+    },
+  });
+  const bookmark = useMutation({
+    mutationFn: ({ messageId, bookmarked }: { messageId: string; bookmarked: boolean }) => request({ url: `/messages/${messageId}/bookmark`, method: 'PATCH', data: { bookmarked } }),
+    onSuccess: () => {
+      if (activeChat) void queryClient.invalidateQueries({ queryKey: queryKeys.messages(activeChat.id) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.bookmarks(activeChat?.projectId) });
+    },
+  });
+  const saveTemplate = useMutation({
+    mutationFn: ({ name, content }: { name: string; content: string }) => request({ url: '/templates', method: 'POST', data: { name, content, projectId: activeChat?.projectId || null } }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['templates'] }),
+  });
+  const updateTemplate = useMutation({
+    mutationFn: ({ id, name, content, projectId }: { id: string; name: string; content: string; projectId: string | null }) => request({ url: `/templates/${id}`, method: 'PATCH', data: { name, content, projectId } }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['templates'] }),
+  });
+  const deleteTemplate = useMutation({
+    mutationFn: (id: string) => request<void>({ url: `/templates/${id}`, method: 'DELETE' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['templates'] }),
+  });
 
   useEffect(() => {
     document.documentElement.classList.toggle(
@@ -286,6 +335,8 @@ function ChatWorkspace({ chatId, libraryPage, workspaceView, navigate }: ChatWor
               onOpenSidebar={() => setSidebarOpen(true)}
               onProviderChange={(event) => void changeProvider(event)}
               onModelChange={(event) => void changeModel(event)}
+              collections={collections.data || []}
+              onCollectionChange={(collectionId) => activeChat && chatActions.update.mutate({ chatId: activeChat.id, values: { collectionId } })}
             />
           )}
           {libraryPage ? (
@@ -296,17 +347,27 @@ function ChatWorkspace({ chatId, libraryPage, workspaceView, navigate }: ChatWor
             </Suspense>
           ) : (
             <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 py-5 sm:px-8 lg:px-12">
+              <label className="mb-3 flex items-center gap-2 rounded-lg border px-3 text-sm"><span>⌕</span><input className="w-full bg-transparent py-2 outline-none" value={messageSearch} onChange={(event) => setMessageSearch(event.target.value)} placeholder="Tìm trong chat…" /></label>
+              {messageSearch.trim().length > 1 ? <div className="mb-4 space-y-2 rounded-lg border p-3 text-sm">{(searchResults.data || []).map((result) => <button key={result.messageId} className="block w-full text-left hover:underline" onClick={() => navigate(`/chat/${result.chat.id}#message-${result.messageId}`)}><span className="font-medium">{result.chat.title}: </span>{result.content}</button>)}{!searchResults.isLoading && !searchResults.data?.length ? <p className="text-muted-foreground">Không có kết quả.</p> : null}</div> : null}
+              {bookmarks.data?.length ? <div className="mb-4 flex gap-2 overflow-x-auto"><span className="shrink-0 text-xs text-muted-foreground">Đã lưu:</span>{bookmarks.data.slice(0, 5).map((item) => <button key={item.messageId} className="shrink-0 rounded-full border px-2 py-1 text-xs hover:bg-muted" onClick={() => navigate(`/chat/${item.chat.id}#message-${item.messageId}`)}>{item.content.slice(0, 36)}</button>)}</div> : null}
               <MessageList
                 messages={messages.data || []}
                 status={status}
                 error={error}
                 userScrollRequest={userScrollRequest}
+                onBranch={(message) => message.messageId && branchChat.mutate(message.messageId)}
+                onBookmark={(message) => message.messageId && bookmark.mutate({ messageId: message.messageId, bookmarked: !message.bookmarked })}
               />
               <ChatComposer
                 prompt={prompt}
                 busy={streamChat.isPending || uploadDocuments.isPending || uploadMedia.isPending}
                 onPromptChange={setPrompt}
                 onSubmit={(content, attachments) => void send(content, attachments)}
+                templates={templates.data || []}
+                onSelectTemplate={(content) => setPrompt(content)}
+                onSaveTemplate={(name, content) => saveTemplate.mutate({ name, content })}
+                onEditTemplate={(template) => { const name = window.prompt('Tên template', template.name); const content = name ? window.prompt('Nội dung template', template.content) : null; if (name?.trim() && content?.trim()) updateTemplate.mutate({ id: template.id, name, content, projectId: template.projectId }); }}
+                onDeleteTemplate={(id) => deleteTemplate.mutate(id)}
               />
             </div>
           )}

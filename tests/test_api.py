@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -18,10 +19,11 @@ from api.main import (
     recent_chat_history,
 )
 from agent_core.background import BackgroundWorker
+from agent_core.artifacts import extract_artifact_text
 from agent_core.plugin_catalog import CATALOG, find_catalog_plugin
 from agent_core.plugin_execution import connected_read_tools
 from agent_core.memory import MemoryService
-from agent_core.storage import Chat, Plugin, Schedule, ScheduleRepository
+from agent_core.storage import Chat, Plugin, Schedule, ScheduleRepository, document_scope_key
 
 
 def test_health_and_public_config_do_not_expose_provider_keys(monkeypatch) -> None:
@@ -200,6 +202,54 @@ def test_background_worker_indexes_memory_from_persisted_history() -> None:
         ("memory", ("chat-1", [{"role": "user", "content": "hello"}])),
         ("succeed", "job-2"),
     ]
+
+
+def test_file_cleanup_worker_deletes_only_a_file_inside_known_storage(tmp_path: Path) -> None:
+    knowledge_dir = tmp_path / "knowledge"
+    media_dir = tmp_path / "uploads"
+    knowledge_dir.mkdir()
+    media_dir.mkdir()
+    file_path = knowledge_dir / "document.pdf"
+    file_path.write_text("content", encoding="utf-8")
+
+    worker = BackgroundWorker(
+        SimpleNamespace(),
+        SimpleNamespace(knowledge_dir=knowledge_dir),
+        media_dir=media_dir,
+    )
+    worker._cleanup_files([{"storage": "knowledge", "stored_name": "document.pdf"}])
+
+    assert not file_path.exists()
+    with pytest.raises(ValueError, match="Đường dẫn"):
+        worker._cleanup_files([{"storage": "media", "stored_name": "../outside.txt"}])
+
+
+def test_document_sha_is_deduplicated_per_project_scope() -> None:
+    assert document_scope_key(None) == "__library__"
+    assert document_scope_key("project-a") == "project-a"
+
+
+def test_artifact_text_preview_extracts_utf8_source(tmp_path: Path) -> None:
+    path = tmp_path / "brief.md"
+    path.write_text("# Kế hoạch\nArtifact có thể được truy hồi.", encoding="utf-8")
+    assert "truy hồi" in extract_artifact_text(path, ".md")
+
+
+def test_background_worker_indexes_an_artifact_job() -> None:
+    job = SimpleNamespace(id="job-artifact", type="artifact_index", payload={"asset_id": "asset-1"})
+    calls: list[tuple[str, str]] = []
+
+    class Jobs:
+        def claim(self, _now): return job
+        def heartbeat(self, *_args, **_kwargs): pass
+        def succeed(self, job_id): calls.append(("succeed", job_id))
+        def fail(self, job_id, _error, _now): calls.append(("fail", job_id))
+
+    class Artifacts:
+        def index(self, asset_id): calls.append(("index", asset_id))
+
+    assert BackgroundWorker(Jobs(), SimpleNamespace(), artifacts=Artifacts()).run_once(datetime.now(UTC))
+    assert calls == [("index", "asset-1"), ("succeed", "job-artifact")]
 
 
 def test_project_status_is_limited_to_workspace_statuses() -> None:

@@ -1,8 +1,10 @@
 import { useDeferredValue, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FileUp, LoaderCircle, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { Eye, FilePlus2, FileUp, FolderKanban, LoaderCircle, Pencil, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { request } from '@/src/hooks/client';
+import { useWorkspace } from '@/src/hooks/use-workspace';
+import { queryKeys } from '@/src/hooks/query-keys';
 
 type Asset = {
   id: string;
@@ -10,6 +12,12 @@ type Asset = {
   mimeType: string;
   sizeBytes: number;
   source: string;
+  projectId: string | null;
+  artifactId: string;
+  version: number;
+  isProjectSource: boolean;
+  indexStatus: string;
+  indexError: string | null;
   createdAt: string;
   url: string;
 };
@@ -23,7 +31,10 @@ type Document = {
   jobAttempts: number;
   jobMaxAttempts: number;
   jobError: string | null;
+  projectId: string | null;
+  url: string;
 };
+type Collection = { id: string; projectId: string; name: string; description: string | null; documentIds: string[] };
 type WorkerStatus = {
   online: boolean;
   lastHeartbeatAt: string | null;
@@ -40,13 +51,31 @@ const size = (value: number) =>
 export function LibraryPage() {
   const [tab, setTab] = useState<'files' | 'memory' | 'documents'>('files');
   const [query, setQuery] = useState('');
+  const [assetScope, setAssetScope] = useState<'all' | 'global' | 'project'>('all');
+  const [assetProjectId, setAssetProjectId] = useState('');
+  const [pinningAssetId, setPinningAssetId] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState<Asset | null>(null);
+  const [versioningId, setVersioningId] = useState<string | null>(null);
   const [uploadErrors, setUploadErrors] = useState<{ name: string; message: string }[]>([]);
+  const [collectionProjectId, setCollectionProjectId] = useState('');
+  const [collectionName, setCollectionName] = useState('');
+  const [editingCollectionId, setEditingCollectionId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const versionInputRef = useRef<HTMLInputElement>(null);
   const deferredQuery = useDeferredValue(query);
   const queryClient = useQueryClient();
+  const { projects } = useWorkspace();
   const assets = useQuery({
-    queryKey: ['library-assets', deferredQuery],
-    queryFn: () => request<Asset[]>({ url: '/library/assets', params: { query: deferredQuery } }),
+    queryKey: ['library-assets', deferredQuery, assetScope, assetProjectId],
+    queryFn: () =>
+      request<Asset[]>({
+        url: '/library/assets',
+        params: {
+          query: deferredQuery,
+          scope: assetScope,
+          ...(assetScope === 'project' ? { projectId: assetProjectId } : {}),
+        },
+      }),
   });
   const memories = useQuery({
     queryKey: ['memories', deferredQuery],
@@ -65,11 +94,27 @@ export function LibraryPage() {
     queryFn: () => request<WorkerStatus>({ url: '/worker/status' }),
     refetchInterval: 3000,
   });
+  const collections = useQuery({
+    queryKey: queryKeys.collections(collectionProjectId),
+    queryFn: () => request<Collection[]>({ url: `/projects/${collectionProjectId}/collections` }),
+    enabled: Boolean(collectionProjectId),
+  });
+  const preview = useQuery({
+    queryKey: ['artifact-preview', previewing?.id],
+    queryFn: () => request<{ kind: 'text' | 'image' | 'pdf' | 'download'; content?: string; truncated?: boolean }>({ url: `/library/assets/${previewing?.id}/preview` }),
+    enabled: Boolean(previewing),
+  });
+  const versions = useQuery({
+    queryKey: ['artifact-versions', previewing?.id],
+    queryFn: () => request<Asset[]>({ url: `/library/assets/${previewing?.id}/versions` }),
+    enabled: Boolean(previewing),
+  });
   const invalidateLibrary = () => void queryClient.invalidateQueries({ queryKey: ['library-assets'] });
   const upload = useMutation({
     mutationFn: async (files: File[]) => {
       const data = new FormData();
       files.forEach((file) => data.append('files', file));
+      if (assetScope === 'project' && assetProjectId) data.append('projectId', assetProjectId);
       return request<UploadResult>({ url: '/library/assets', method: 'POST', data });
     },
     onSuccess: (result) => {
@@ -79,6 +124,26 @@ export function LibraryPage() {
   });
   const deleteAsset = useMutation({
     mutationFn: (id: string) => request<void>({ url: `/library/assets/${id}`, method: 'DELETE' }),
+    onSuccess: invalidateLibrary,
+  });
+  const updateAsset = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Partial<Pick<Asset, 'name' | 'projectId' | 'isProjectSource'>> }) =>
+      request<Asset>({ url: `/library/assets/${id}`, method: 'PATCH', data }),
+    onSuccess: invalidateLibrary,
+  });
+  const createVersion = useMutation({
+    mutationFn: async ({ id, file }: { id: string; file: File }) => {
+      const data = new FormData();
+      data.append('file', file);
+      return request<Asset>({ url: `/library/assets/${id}/versions`, method: 'POST', data });
+    },
+    onSuccess: () => {
+      invalidateLibrary();
+      void queryClient.invalidateQueries({ queryKey: ['artifact-versions'] });
+    },
+  });
+  const reindexArtifact = useMutation({
+    mutationFn: (id: string) => request<Asset>({ url: `/library/assets/${id}/reindex`, method: 'POST' }),
     onSuccess: invalidateLibrary,
   });
   const deleteMemory = useMutation({
@@ -91,7 +156,25 @@ export function LibraryPage() {
   });
   const deleteDocument = useMutation({
     mutationFn: (id: string) => request<void>({ url: `/documents/${id}`, method: 'DELETE' }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['documents'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.documents });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.collectionsRoot });
+    },
+  });
+  const createCollection = useMutation({
+    mutationFn: (name: string) => request<Collection>({ url: `/projects/${collectionProjectId}/collections`, method: 'POST', data: { name } }),
+    onSuccess: () => { setCollectionName(''); void queryClient.invalidateQueries({ queryKey: queryKeys.collectionsRoot }); },
+  });
+  const saveCollectionDocuments = useMutation({
+    mutationFn: ({ id, documentIds }: { id: string; documentIds: string[] }) => request<Collection>({ url: `/collections/${id}/documents`, method: 'PUT', data: { documentIds } }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.collectionsRoot }),
+  });
+  const deleteCollection = useMutation({
+    mutationFn: (id: string) => request<void>({ url: `/collections/${id}`, method: 'DELETE' }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.collectionsRoot });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.chats });
+    },
   });
   const loading =
     tab === 'files' ? assets.isLoading : tab === 'memory' ? memories.isLoading : documents.isLoading;
@@ -101,6 +184,9 @@ export function LibraryPage() {
     documents.error ||
     upload.error ||
     deleteAsset.error ||
+    updateAsset.error ||
+    createVersion.error ||
+    reindexArtifact.error ||
     deleteMemory.error ||
     reindex.error ||
     deleteDocument.error;
@@ -125,6 +211,18 @@ export function LibraryPage() {
               const files = Array.from(event.target.files || []);
               if (files.length) upload.mutate(files);
               event.target.value = '';
+            }}
+          />
+          <input
+            ref={versionInputRef}
+            className="sr-only"
+            type="file"
+            accept=".pdf,.docx,.xlsx,.pptx,.md,.csv,.json,.txt,image/*"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file && versioningId) createVersion.mutate({ id: versioningId, file });
+              event.target.value = '';
+              setVersioningId(null);
             }}
           />
           <Button type="button" disabled={upload.isPending} onClick={() => fileInputRef.current?.click()}>
@@ -174,6 +272,33 @@ export function LibraryPage() {
             placeholder="Tìm trong Thư viện..."
           />
         </label>
+        {tab === 'files' ? (
+          <div className="flex gap-2">
+            <select
+              className="min-w-40 rounded-lg border bg-background px-3 py-2 text-sm"
+              value={assetScope === 'project' ? `project:${assetProjectId}` : assetScope}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (value.startsWith('project:')) {
+                  setAssetScope('project');
+                  setAssetProjectId(value.slice('project:'.length));
+                } else {
+                  setAssetScope(value as 'all' | 'global');
+                  setAssetProjectId('');
+                }
+              }}
+              aria-label="Lọc file theo Project"
+            >
+              <option value="all">Tất cả file</option>
+              <option value="global">Không thuộc Project</option>
+              {(projects.data || []).map((project) => (
+                <option key={project.id} value={`project:${project.id}`}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
       </div>
       {loading ? (
         <p className="mt-8 flex items-center gap-2 text-sm text-muted-foreground">
@@ -186,32 +311,54 @@ export function LibraryPage() {
         <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {(assets.data || []).map((item) => (
             <article key={item.id} className="rounded-xl border p-4">
-              <a
-                className="block truncate font-medium hover:underline"
-                href={item.url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {item.name}
-              </a>
+              <button className="block max-w-full truncate text-left font-medium hover:underline" onClick={() => setPreviewing(item)}>{item.name}</button>
               <p className="mt-1 text-xs text-muted-foreground">
                 {item.mimeType} · {size(item.sizeBytes)} ·{' '}
                 {new Date(item.createdAt).toLocaleDateString('vi-VN')}
               </p>
+              <div className="mt-2 flex flex-wrap gap-1 text-xs">
+                <span className="rounded bg-muted px-2 py-1">v{item.version}</span>
+                {item.isProjectSource ? <span className="rounded bg-emerald-500/10 px-2 py-1 text-emerald-700">Project source</span> : null}
+                {item.isProjectSource && item.indexStatus !== 'ready' ? <span className="rounded bg-amber-500/10 px-2 py-1 text-amber-700">{item.indexStatus === 'failed' ? 'Index lỗi' : 'Đang index'}</span> : null}
+              </div>
+              {item.indexError ? <p className="mt-2 text-xs text-destructive">{item.indexError}</p> : null}
               <div className="mt-4 flex justify-between">
                 <span className="text-xs text-muted-foreground">
                   {item.source === 'generated' ? 'AI tạo' : 'Đã tải lên'}
+                  {item.projectId
+                    ? ` · ${(projects.data || []).find((project) => project.id === item.projectId)?.name || 'Project'}`
+                    : ' · Thư viện chung'}
                 </span>
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  className="text-destructive"
-                  onClick={() => deleteAsset.mutate(item.id)}
-                  aria-label={`Xóa ${item.name}`}
-                >
-                  <Trash2 />
-                </Button>
+                <div className="flex gap-1">
+                  <Button size="icon-sm" variant="ghost" onClick={() => setPreviewing(item)} aria-label={`Xem ${item.name}`}><Eye /></Button>
+                  <Button size="icon-sm" variant="ghost" onClick={() => {
+                    const name = window.prompt('Tên artifact', item.name);
+                    if (name?.trim() && name !== item.name) updateAsset.mutate({ id: item.id, data: { name } });
+                  }} aria-label={`Đổi tên ${item.name}`}><Pencil /></Button>
+                  <Button size="icon-sm" variant="ghost" onClick={() => { setVersioningId(item.id); versionInputRef.current?.click(); }} aria-label={`Tạo version mới cho ${item.name}`}><FilePlus2 /></Button>
+                  {item.isProjectSource && item.indexStatus === 'failed' ? <Button size="icon-sm" variant="ghost" onClick={() => reindexArtifact.mutate(item.id)} aria-label={`Index lại ${item.name}`}><RefreshCw /></Button> : null}
+                  <Button size="icon-sm" variant={item.isProjectSource ? 'secondary' : 'ghost'} onClick={() => {
+                    if (item.isProjectSource) updateAsset.mutate({ id: item.id, data: { isProjectSource: false } });
+                    else if (item.projectId) updateAsset.mutate({ id: item.id, data: { isProjectSource: true } });
+                    else setPinningAssetId(item.id);
+                  }} aria-label={`Ghim ${item.name} vào Project`}><FolderKanban /></Button>
+                  <Button size="icon-sm" variant="ghost" className="text-destructive" onClick={() => deleteAsset.mutate(item.id)} aria-label={`Xóa ${item.name}`}><Trash2 /></Button>
+                </div>
               </div>
+              {pinningAssetId === item.id ? (
+                <select
+                  className="mt-3 w-full rounded-md border bg-background px-2 py-1 text-xs"
+                  autoFocus
+                  defaultValue=""
+                  onChange={(event) => {
+                    if (event.target.value) updateAsset.mutate({ id: item.id, data: { projectId: event.target.value, isProjectSource: true } });
+                    setPinningAssetId(null);
+                  }}
+                >
+                  <option value="">Chọn Project để ghim…</option>
+                  {(projects.data || []).map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                </select>
+              ) : null}
             </article>
           ))}
           {!assets.data?.length ? (
@@ -270,6 +417,16 @@ export function LibraryPage() {
               ) : null}
             </section>
           ) : null}
+          <section className="rounded-xl border p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div><h2 className="font-semibold">Knowledge collections</h2><p className="text-sm text-muted-foreground">Chọn PDF theo từng Project để chat chỉ tìm đúng bộ nguồn.</p></div>
+              <select className="rounded-lg border bg-background px-3 py-2 text-sm" value={collectionProjectId} onChange={(event) => { setCollectionProjectId(event.target.value); setEditingCollectionId(null); }}>
+                <option value="">Chọn Project…</option>{(projects.data || []).map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+              </select>
+            </div>
+            {collectionProjectId ? <><form className="mt-3 flex gap-2" onSubmit={(event) => { event.preventDefault(); if (collectionName.trim()) createCollection.mutate(collectionName.trim()); }}><input className="min-w-0 flex-1 rounded-lg border bg-background px-3 py-2 text-sm" value={collectionName} onChange={(event) => setCollectionName(event.target.value)} placeholder="Tên collection, ví dụ: Báo cáo quý"/><Button size="sm" disabled={createCollection.isPending}>Tạo collection</Button></form>
+              <div className="mt-3 space-y-2">{(collections.data || []).map((collection) => <article key={collection.id} className="rounded-lg border p-3"><div className="flex items-center justify-between gap-3"><button className="text-left font-medium hover:underline" onClick={() => setEditingCollectionId(editingCollectionId === collection.id ? null : collection.id)}>{collection.name} <span className="text-xs font-normal text-muted-foreground">· {collection.documentIds.length} PDF</span></button><Button size="sm" variant="ghost" className="text-destructive" onClick={() => deleteCollection.mutate(collection.id)}><Trash2 /> Xóa</Button></div>{editingCollectionId === collection.id ? <div className="mt-3 space-y-2">{(documents.data || []).filter((document) => document.projectId === collectionProjectId).map((document) => <label key={document.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={collection.documentIds.includes(document.id)} onChange={(event) => { const documentIds = event.target.checked ? [...collection.documentIds, document.id] : collection.documentIds.filter((id) => id !== document.id); saveCollectionDocuments.mutate({ id: collection.id, documentIds }); }}/>{document.name}</label>)}{!(documents.data || []).some((document) => document.projectId === collectionProjectId) ? <p className="text-sm text-muted-foreground">Project này chưa có PDF RAG.</p> : null}</div> : null}</article>)}{!collections.isLoading && !collections.data?.length ? <p className="text-sm text-muted-foreground">Chưa có collection nào cho Project này.</p> : null}</div></> : null}
+          </section>
           {(documents.data || []).map((item) => (
             <article key={item.id} className="rounded-xl border p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -325,6 +482,18 @@ export function LibraryPage() {
           Google Drive, OneDrive/SharePoint và Dropbox đang cập nhật tính năng kết nối.
         </p>
       </section>
+      {previewing ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" role="dialog" aria-modal="true">
+          <section className="max-h-[90dvh] w-full max-w-3xl overflow-auto rounded-2xl border bg-card p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4"><div><h2 className="font-semibold">{previewing.name} · v{previewing.version}</h2><p className="text-sm text-muted-foreground">Preview và lịch sử version</p></div><Button variant="ghost" size="sm" onClick={() => setPreviewing(null)}>Đóng</Button></div>
+            <div className="mt-4 rounded-lg border bg-muted/20 p-3">
+              {preview.isLoading ? <p className="text-sm text-muted-foreground">Đang tải preview…</p> : preview.data?.kind === 'image' ? <img className="max-h-96 max-w-full object-contain" src={previewing.url} alt={previewing.name} /> : preview.data?.kind === 'pdf' ? <iframe className="h-[70dvh] w-full rounded border bg-white" src={previewing.url} title={`Preview ${previewing.name}`} /> : preview.data?.kind === 'text' ? <pre className="max-h-[70dvh] overflow-auto whitespace-pre-wrap text-xs">{preview.data.content}</pre> : <p className="text-sm text-muted-foreground">Không thể preview trực tiếp; hãy tải file để xem.</p>}
+              {preview.data?.truncated ? <p className="mt-2 text-xs text-muted-foreground">Preview đã được rút gọn.</p> : null}
+            </div>
+            <div className="mt-4"><a className="text-sm text-primary hover:underline" href={previewing.url} target="_blank" rel="noreferrer">Mở hoặc tải file gốc</a><h3 className="mt-4 text-sm font-medium">Lịch sử version</h3><div className="mt-2 space-y-2">{(versions.data || []).map((item) => <div key={item.id} className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm"><span>v{item.version} · {new Date(item.createdAt).toLocaleDateString('vi-VN')}</span><a className="text-primary hover:underline" href={item.url} target="_blank" rel="noreferrer">Mở file</a></div>)}</div></div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

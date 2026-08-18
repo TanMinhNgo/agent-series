@@ -15,13 +15,14 @@ from typing import Any, Literal
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 
 from agent_core.agent import Agent
+from agent_core.artifacts import ArtifactService, build_artifact_tool
 from agent_core.config import Settings, load_settings
 from agent_core.knowledge import KnowledgeService, build_knowledge_tool
 from agent_core.media import MediaService
@@ -30,7 +31,7 @@ from agent_core.memory import MemoryService
 from agent_core.plugin_catalog import CATALOG, catalog_json, find_catalog_plugin
 from agent_core.prompts import DEFAULT_SYSTEM_PROMPT
 from agent_core.providers import build_client
-from agent_core.storage import BackgroundJob, BackgroundJobRepository, Chat, ChatRepository, ChatShare, Database, Document, LibraryAsset, MediaAttachment, MediaRepository, Plugin, Project, Schedule, ScheduleRepository, ScheduleRun, WorkspaceRepository
+from agent_core.storage import ArtifactChunk, BackgroundJob, BackgroundJobRepository, Chat, ChatMessage, ChatRepository, ChatShare, Database, Document, KnowledgeCollection, LibraryAsset, MediaAttachment, MediaRepository, Plugin, Project, PromptTemplate, Schedule, ScheduleRepository, ScheduleRun, WorkspaceRepository
 from agent_core.tools import ToolSpec, build_default_registry
 
 
@@ -43,6 +44,7 @@ class Services:
     memory: MemoryService
     workspace: WorkspaceRepository
     library: LibraryService
+    artifacts: ArtifactService
 
 
 class CreateChatRequest(BaseModel):
@@ -50,6 +52,7 @@ class CreateChatRequest(BaseModel):
     model: str | None = None
     context_source_chat_id: str | None = Field(default=None, alias="contextSourceChatId")
     project_id: str | None = Field(default=None, alias="projectId")
+    collection_id: str | None = Field(default=None, alias="collectionId")
 
     model_config = {"populate_by_name": True}
 
@@ -61,6 +64,7 @@ class UpdateChatRequest(BaseModel):
     pinned: bool | None = None
     archived: bool | None = None
     project_id: str | None = Field(default=None, alias="projectId")
+    collection_id: str | None = Field(default=None, alias="collectionId")
 
     model_config = {"populate_by_name": True}
 
@@ -88,10 +92,41 @@ class ProjectRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class KnowledgeCollectionRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=10_000)
+
+
+class CollectionDocumentsRequest(BaseModel):
+    document_ids: list[str] = Field(default_factory=list, alias="documentIds")
+
+    model_config = {"populate_by_name": True}
+
+
 class DeleteProjectRequest(BaseModel):
     confirm_name: str = Field(alias="confirmName", min_length=1, max_length=160)
 
     model_config = {"populate_by_name": True}
+
+
+class UpdateArtifactRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    project_id: str | None = Field(default=None, alias="projectId")
+    is_project_source: bool | None = Field(default=None, alias="isProjectSource")
+
+    model_config = {"populate_by_name": True}
+
+
+class PromptTemplateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    content: str = Field(min_length=1, max_length=20_000)
+    project_id: str | None = Field(default=None, alias="projectId")
+
+    model_config = {"populate_by_name": True}
+
+
+class BookmarkRequest(BaseModel):
+    bookmarked: bool
 
 
 class ScheduleRequest(BaseModel):
@@ -152,6 +187,9 @@ def chat_json(chat: Chat) -> dict[str, Any]:
         "archived": chat.archived,
         "contextSourceChatId": chat.context_source_chat_id,
         "projectId": getattr(chat, "project_id", None),
+        "parentChatId": getattr(chat, "parent_chat_id", None),
+        "branchFromPosition": getattr(chat, "branch_from_position", None),
+        "collectionId": getattr(chat, "collection_id", None),
     }
 
 
@@ -170,6 +208,15 @@ def document_json(document: Document, job: BackgroundJob | None = None) -> dict[
         "jobMaxAttempts": job.max_attempts if job else 3,
         "jobError": job.last_error if job else None,
         "projectId": document.project_id,
+        "url": f"/api/documents/{document.id}/file",
+    }
+
+
+def collection_json(item: KnowledgeCollection, documents: list[Document] | None = None) -> dict[str, Any]:
+    return {
+        "id": item.id, "projectId": item.project_id, "name": item.name, "description": item.description,
+        "documentIds": [document.id for document in documents] if documents is not None else None,
+        "createdAt": item.created_at.isoformat(), "updatedAt": item.updated_at.isoformat(),
     }
 
 
@@ -179,9 +226,15 @@ def media_json(media: MediaAttachment) -> dict[str, Any]:
 
 def message_json(message: dict[str, Any]) -> dict[str, Any]:
     result = dict(message)
+    if "message_id" in result:
+        result["messageId"] = result.pop("message_id")
     if "content_blocks" in result:
         result["contentBlocks"] = result.pop("content_blocks") or []
     return result
+
+
+def template_json(item: PromptTemplate) -> dict[str, Any]:
+    return {"id": item.id, "name": item.name, "content": item.content, "projectId": item.project_id, "createdAt": item.created_at.isoformat(), "updatedAt": item.updated_at.isoformat()}
 
 
 def project_json(item: Project) -> dict[str, Any]:
@@ -197,7 +250,7 @@ def schedule_run_json(item: ScheduleRun) -> dict[str, Any]:
 
 
 def library_asset_json(item: LibraryAsset) -> dict[str, Any]:
-    return {"id": item.id, "name": item.name, "mimeType": item.mime_type, "sizeBytes": item.size_bytes, "source": item.source, "projectId": item.project_id, "createdAt": item.created_at.isoformat(), "url": f"/uploads/{item.stored_name}"}
+    return {"id": item.id, "artifactId": item.artifact_id, "name": item.name, "version": item.version, "mimeType": item.mime_type, "sizeBytes": item.size_bytes, "source": item.source, "projectId": item.project_id, "isProjectSource": item.is_project_source, "indexStatus": item.index_status, "indexError": item.index_error, "createdAt": item.created_at.isoformat(), "url": f"/api/library/assets/{item.id}/file"}
 
 
 def plugin_json(item: Plugin) -> dict[str, Any]:
@@ -252,16 +305,24 @@ def make_agent(
         if turns:
             transcript = "\n".join(f"{item['role']}: {item['content']}" for item in turns)
             source_context = f"\n\nNgữ cảnh kế thừa từ cuộc trò chuyện trước (ẩn với người dùng):\n{transcript}"
+    def create_project_export(name: str, format: str, content: str) -> str:
+        asset = app_services.library.create_export(name, format, content, project_id=chat.project_id)
+        enqueue_artifact_index(asset, app_services)
+        return json.dumps(library_asset_json(asset), ensure_ascii=False)
+
     export_tool = ToolSpec(
         name="create_file",
         description="Tạo file cho người dùng và lưu vào Thư viện. Dùng khi người dùng yêu cầu xuất DOCX, XLSX, PPTX, Markdown, CSV, PDF hoặc JSON.",
         parameters={"type": "object", "properties": {"name": {"type": "string"}, "format": {"type": "string", "enum": ["docx", "xlsx", "pptx", "md", "csv", "pdf", "json"]}, "content": {"type": "string"}}, "required": ["name", "format", "content"]},
-        func=lambda name, format, content: json.dumps(library_asset_json(app_services.library.create_export(name, format, content)), ensure_ascii=False),
+        func=create_project_export,
     )
     agent = Agent(
         build_client(settings),
-        build_default_registry(build_knowledge_tool(app_services.knowledge, chat.project_id), [export_tool, *(plugin_tools or [])]),
-        system_prompt=DEFAULT_SYSTEM_PROMPT + (f"\n\nHướng dẫn dự án:\n{project.instructions}" if project and project.instructions else "") + source_context + (f"\n\n{memory_context}" if memory_context else ""),
+        build_default_registry(
+            build_knowledge_tool(app_services.knowledge, chat.project_id, chat.collection_id),
+            ([build_artifact_tool(app_services.artifacts, chat.project_id)] if chat.project_id else []) + [export_tool, *(plugin_tools or [])],
+        ),
+        system_prompt=DEFAULT_SYSTEM_PROMPT + (f"\n\nHướng dẫn dự án:\n{project.instructions}" if project and project.instructions else "") + ("\n\nKhi dùng knowledge base, giữ nguyên Markdown link của nguồn và nêu số trang để người dùng có thể mở đúng PDF." if chat.collection_id else "") + source_context + (f"\n\n{memory_context}" if memory_context else ""),
         max_steps=settings.max_steps,
     )
     stored_history = history if history is not None else app_services.chats.history(chat.id)
@@ -280,9 +341,11 @@ async def lifespan(app: FastAPI):
         knowledge=KnowledgeService(database, Path(settings.knowledge_dir), settings.embedding_model),
         media=media,
         library=LibraryService(database, settings.media_dir),
+        artifacts=ArtifactService(database, settings.media_dir, settings.embedding_model),
         memory=MemoryService(database, settings.embedding_model),
         workspace=WorkspaceRepository(database),
     )
+    queue_pending_artifacts(app.state.services)
     yield
 
 
@@ -339,6 +402,50 @@ def enqueue_document_index(document: Document) -> BackgroundJob:
     return job
 
 
+def enqueue_artifact_index(asset: LibraryAsset, app_services: Services | None = None) -> BackgroundJob | None:
+    if not asset.is_project_source:
+        return None
+    selected = app_services or services()
+    jobs = BackgroundJobRepository(selected.chats.database)
+    job, created = jobs.enqueue_unique("artifact_index", {"asset_id": asset.id}, dedupe_key=f"artifact:{asset.id}")
+    if created:
+        asset.index_status, asset.index_error = "queued", None
+    return job
+
+
+def queue_pending_artifacts(app_services: Services) -> int:
+    """Backfill Project Sources created before the artifact index existed."""
+    with app_services.chats.database.session() as session:
+        assets = list(session.scalars(select(LibraryAsset).where(
+            LibraryAsset.is_project_source.is_(True),
+            LibraryAsset.index_status.in_(("pending", "queued")),
+        )))
+    for asset in assets:
+        enqueue_artifact_index(asset, app_services)
+    if assets:
+        with app_services.chats.database.session() as session:
+            for asset_id in [item.id for item in assets]:
+                item = session.get(LibraryAsset, asset_id)
+                if item and item.index_status == "pending":
+                    item.index_status = "queued"
+            session.commit()
+    return len(assets)
+
+
+def queue_file_cleanup(session, files: list[dict[str, str]], dedupe_key: str) -> None:
+    """Persist cleanup work with the destructive DB transaction, never before it."""
+    if not files:
+        return
+    session.add(
+        BackgroundJob(
+            type="file_cleanup",
+            payload={"files": files},
+            dedupe_key=dedupe_key,
+            max_attempts=10,
+        )
+    )
+
+
 @app.get("/api/health", tags=["System"])
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -381,7 +488,11 @@ def create_chat(payload: CreateChatRequest) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="Không tìm thấy chat nguồn để kế thừa context.")
     if payload.project_id and services().workspace.get(Project, payload.project_id) is None:
         raise HTTPException(status_code=422, detail="Dự án được chọn không tồn tại.")
-    return chat_json(services().chats.create(selected.provider, selected.active_model, source_id, payload.project_id))
+    if payload.collection_id:
+        collection = services().knowledge.get_collection(payload.collection_id)
+        if collection is None or collection.project_id != payload.project_id:
+            raise HTTPException(status_code=422, detail="Collection phải thuộc Project đã chọn.")
+    return chat_json(services().chats.create(selected.provider, selected.active_model, source_id, payload.project_id, payload.collection_id))
 
 
 @app.get("/api/memories", tags=["Memory library"])
@@ -401,28 +512,126 @@ def forget_all_memories() -> None:
 
 
 @app.get("/api/library/assets", tags=["Personal library"])
-def list_library_assets(query: str = "") -> list[dict[str, Any]]:
-    return [library_asset_json(item) for item in services().library.list(query)]
+def list_library_assets(
+    query: str = "",
+    scope: Literal["all", "global", "project"] = "all",
+    project_id: str | None = Query(default=None, alias="projectId"),
+) -> list[dict[str, Any]]:
+    if scope == "project" and not project_id:
+        raise HTTPException(status_code=422, detail="Cần chọn Project để lọc file.")
+    return [library_asset_json(item) for item in services().library.list(query, project_id, scope)]
 
 
 @app.post("/api/library/assets", status_code=201, tags=["Personal library"])
-async def upload_library_assets(files: list[UploadFile] = File(...)) -> dict[str, list[dict[str, Any]]]:
+async def upload_library_assets(
+    files: list[UploadFile] = File(...),
+    project_id: str | None = Form(default=None, alias="projectId"),
+) -> dict[str, list[dict[str, Any]]]:
     """Accept a batch without discarding valid files because one entry is invalid."""
     uploaded: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
+    if project_id and services().workspace.get(Project, project_id) is None:
+        raise HTTPException(status_code=422, detail="Dự án được chọn không tồn tại.")
     for file in files:
         name = file.filename or "file"
         try:
-            asset = services().library.upload(name, file.content_type or "", await file.read())
+            asset = services().library.upload(name, file.content_type or "", await file.read(), project_id=project_id)
+            enqueue_artifact_index(asset)
             uploaded.append(library_asset_json(asset))
         except ValueError as exc:
             errors.append({"name": name, "message": str(exc)})
     return {"items": uploaded, "errors": errors}
 
 
+@app.patch("/api/library/assets/{asset_id}", tags=["Personal library"])
+def update_library_asset(asset_id: str, payload: UpdateArtifactRequest) -> dict[str, Any]:
+    values = payload.model_dump(exclude_unset=True)
+    project_id = values.get("project_id")
+    if project_id and services().workspace.get(Project, project_id) is None:
+        raise HTTPException(status_code=422, detail="Dự án được chọn không tồn tại.")
+    try:
+        item = services().library.update(
+            asset_id,
+            name=values.get("name"),
+            project_id=project_id,
+            is_project_source=values.get("is_project_source"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if item is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy artifact.")
+    enqueue_artifact_index(item)
+    return library_asset_json(item)
+
+
+@app.post("/api/library/assets/{asset_id}/versions", status_code=201, tags=["Personal library"])
+async def create_library_asset_version(asset_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+    try:
+        item = services().library.create_version(asset_id, file.filename or "artifact", file.content_type or "", await file.read())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    enqueue_artifact_index(item)
+    return library_asset_json(item)
+
+
+@app.get("/api/library/assets/{asset_id}/versions", tags=["Personal library"])
+def list_library_asset_versions(asset_id: str) -> list[dict[str, Any]]:
+    items = services().library.versions(asset_id)
+    if not items:
+        raise HTTPException(status_code=404, detail="Không tìm thấy artifact.")
+    return [library_asset_json(item) for item in items]
+
+
+@app.get("/api/library/assets/{asset_id}/preview", tags=["Personal library"])
+def preview_library_asset(asset_id: str) -> dict[str, Any]:
+    try:
+        return services().artifacts.preview(asset_id)
+    except ValueError as exc:
+        message = str(exc)
+        raise HTTPException(status_code=404 if "Không tìm thấy" in message else 422, detail=message) from exc
+
+
+@app.get("/api/library/assets/{asset_id}/file", tags=["Personal library"])
+def library_asset_file(asset_id: str) -> FileResponse:
+    with services().chats.database.session() as session:
+        asset = session.get(LibraryAsset, asset_id)
+        if asset is None:
+            raise HTTPException(status_code=404, detail="Không tìm thấy artifact.")
+        path = Path(services().settings.media_dir) / asset.stored_name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Không tìm thấy file artifact.")
+    return FileResponse(path, media_type=asset.mime_type, filename=asset.name, content_disposition_type="inline")
+
+
+@app.post("/api/library/assets/{asset_id}/reindex", status_code=202, tags=["Personal library"])
+def reindex_library_asset(asset_id: str) -> dict[str, Any]:
+    with services().chats.database.session() as session:
+        asset = session.get(LibraryAsset, asset_id)
+        if asset is None:
+            raise HTTPException(status_code=404, detail="Không tìm thấy artifact.")
+        if not asset.is_project_source:
+            raise HTTPException(status_code=422, detail="Chỉ Project Source mới cần index.")
+        asset.index_status, asset.index_error = "queued", None
+        session.commit()
+    enqueue_artifact_index(asset)
+    return library_asset_json(asset)
+
+
 @app.delete("/api/library/assets/{asset_id}", status_code=204, tags=["Personal library"])
 def delete_library_asset(asset_id: str) -> None:
-    if not services().library.delete(asset_id): raise HTTPException(status_code=404, detail="Không tìm thấy file trong Thư viện.")
+    with services().chats.database.session() as session:
+        asset = session.get(LibraryAsset, asset_id)
+        if asset is None:
+            raise HTTPException(status_code=404, detail="Không tìm thấy file trong Thư viện.")
+        versions = session.scalars(select(LibraryAsset).where(LibraryAsset.artifact_id == asset.artifact_id)).all()
+        queue_file_cleanup(
+            session,
+            [{"storage": "media", "stored_name": item.stored_name} for item in versions],
+            f"artifact-cleanup:{asset.artifact_id}",
+        )
+        for item in versions:
+            session.delete(item)
+        session.commit()
 
 
 @app.get("/api/chats/{chat_id}", tags=["Chats"])
@@ -440,6 +649,66 @@ def messages(chat_id: str) -> list[dict[str, Any]]:
     return [message_json(item) for item in services().chats.history(chat_id) if item["role"] in {"user", "assistant"}]
 
 
+@app.post("/api/chats/{chat_id}/branch/{message_id}", status_code=201, tags=["Chats"])
+def branch_chat(chat_id: str, message_id: str) -> dict[str, Any]:
+    chat = services().chats.branch(chat_id, message_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy message trong cuộc trò chuyện.")
+    return chat_json(chat)
+
+
+@app.patch("/api/messages/{message_id}/bookmark", tags=["Chats"])
+def bookmark_message(message_id: str, payload: BookmarkRequest) -> dict[str, Any]:
+    message = services().chats.set_bookmark(message_id, payload.bookmarked)
+    if message is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy message.")
+    return {"messageId": message.id, "bookmarked": message.bookmarked}
+
+
+@app.get("/api/bookmarks", tags=["Chats"])
+def list_bookmarks(project_id: str | None = Query(default=None, alias="projectId")) -> list[dict[str, Any]]:
+    return [{"messageId": message.id, "position": message.position, "content": message.content, "role": message.role, "chat": chat_json(chat)} for message, chat in services().chats.bookmarks(project_id)]
+
+
+@app.get("/api/messages/search", tags=["Chats"])
+def search_chat_messages(q: str = Query(min_length=1, max_length=300), chat_id: str | None = Query(default=None, alias="chatId"), project_id: str | None = Query(default=None, alias="projectId")) -> list[dict[str, Any]]:
+    return [{"messageId": message.id, "position": message.position, "content": message.content[:500], "role": message.role, "chat": chat_json(chat)} for message, chat in services().chats.search_messages(q, chat_id, project_id)]
+
+
+@app.get("/api/templates", tags=["Workspace"])
+def list_templates(project_id: str | None = Query(default=None, alias="projectId")) -> list[dict[str, Any]]:
+    with services().chats.database.session() as session:
+        statement = select(PromptTemplate).order_by(PromptTemplate.updated_at.desc())
+        if project_id:
+            statement = statement.where(PromptTemplate.project_id.in_((None, project_id)))
+        else:
+            statement = statement.where(PromptTemplate.project_id.is_(None))
+        return [template_json(item) for item in session.scalars(statement)]
+
+
+@app.post("/api/templates", status_code=201, tags=["Workspace"])
+def create_template(payload: PromptTemplateRequest) -> dict[str, Any]:
+    if payload.project_id and services().workspace.get(Project, payload.project_id) is None:
+        raise HTTPException(status_code=422, detail="Dự án được chọn không tồn tại.")
+    return template_json(services().workspace.create(PromptTemplate, **payload.model_dump()))
+
+
+@app.patch("/api/templates/{template_id}", tags=["Workspace"])
+def update_template(template_id: str, payload: PromptTemplateRequest) -> dict[str, Any]:
+    if payload.project_id and services().workspace.get(Project, payload.project_id) is None:
+        raise HTTPException(status_code=422, detail="Dự án được chọn không tồn tại.")
+    item = services().workspace.update(PromptTemplate, template_id, **payload.model_dump())
+    if item is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy template.")
+    return template_json(item)
+
+
+@app.delete("/api/templates/{template_id}", status_code=204, tags=["Workspace"])
+def delete_template(template_id: str) -> None:
+    if not services().workspace.delete(PromptTemplate, template_id):
+        raise HTTPException(status_code=404, detail="Không tìm thấy template.")
+
+
 @app.patch("/api/chats/{chat_id}", tags=["Chats"])
 def update_chat(chat_id: str, payload: UpdateChatRequest) -> dict[str, Any]:
     try:
@@ -451,9 +720,16 @@ def update_chat(chat_id: str, payload: UpdateChatRequest) -> dict[str, Any]:
         if payload.project_id and services().workspace.get(Project, payload.project_id) is None:
             raise HTTPException(status_code=422, detail="Dự án được chọn không tồn tại.")
         values = {"provider": provider, "model": model}
-        for field in ("title", "pinned", "archived", "project_id"):
+        if "collection_id" in payload.model_fields_set and payload.collection_id:
+            collection = services().knowledge.get_collection(payload.collection_id)
+            target_project = payload.project_id if "project_id" in payload.model_fields_set else chat.project_id
+            if collection is None or collection.project_id != target_project:
+                raise HTTPException(status_code=422, detail="Collection phải thuộc Project của chat.")
+        for field in ("title", "pinned", "archived", "project_id", "collection_id"):
             if field in payload.model_fields_set:
                 values[field] = getattr(payload, field)
+        if "project_id" in payload.model_fields_set and "collection_id" not in payload.model_fields_set:
+            values["collection_id"] = None
         chat = services().chats.update(chat_id, **values)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -499,6 +775,63 @@ def documents() -> list[dict[str, Any]]:
     return [document_json(item, jobs.latest_for_document(item.id)) for item in services().knowledge.list_documents()]
 
 
+@app.get("/api/projects/{project_id}/collections", tags=["Knowledge base"])
+def list_collections(project_id: str) -> list[dict[str, Any]]:
+    if services().workspace.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy Project.")
+    return [collection_json(item, services().knowledge.collection_documents(item.id)) for item in services().knowledge.list_collections(project_id)]
+
+
+@app.post("/api/projects/{project_id}/collections", status_code=201, tags=["Knowledge base"])
+def create_collection(project_id: str, payload: KnowledgeCollectionRequest) -> dict[str, Any]:
+    if services().workspace.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy Project.")
+    try:
+        return collection_json(services().knowledge.create_collection(project_id, payload.name, payload.description), [])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.patch("/api/collections/{collection_id}", tags=["Knowledge base"])
+def update_collection(collection_id: str, payload: KnowledgeCollectionRequest) -> dict[str, Any]:
+    try:
+        item = services().knowledge.update_collection(collection_id, payload.name, payload.description)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if item is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy collection.")
+    return collection_json(item, services().knowledge.collection_documents(item.id))
+
+
+@app.put("/api/collections/{collection_id}/documents", tags=["Knowledge base"])
+def set_collection_documents(collection_id: str, payload: CollectionDocumentsRequest) -> dict[str, Any]:
+    try:
+        item = services().knowledge.get_collection(collection_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Không tìm thấy collection.")
+        return collection_json(item, services().knowledge.set_collection_documents(collection_id, payload.document_ids))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/collections/{collection_id}", status_code=204, tags=["Knowledge base"])
+def delete_collection(collection_id: str) -> None:
+    if not services().knowledge.delete_collection(collection_id):
+        raise HTTPException(status_code=404, detail="Không tìm thấy collection.")
+
+
+@app.get("/api/documents/{document_id}/file", tags=["Knowledge base"])
+def document_file(document_id: str) -> FileResponse:
+    with services().chats.database.session() as session:
+        document = session.get(Document, document_id)
+        if document is None:
+            raise HTTPException(status_code=404, detail="Không tìm thấy tài liệu.")
+        path = Path(services().settings.knowledge_dir) / document.stored_name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Không tìm thấy file tài liệu.")
+    return FileResponse(path, media_type="application/pdf", filename=document.original_name, content_disposition_type="inline")
+
+
 @app.get("/api/worker/status", tags=["System"])
 def worker_status() -> dict[str, Any]:
     return BackgroundJobRepository(services().chats.database).worker_status(datetime.now(UTC))
@@ -532,8 +865,22 @@ def reindex_document(document_id: str) -> dict[str, Any]:
 
 @app.delete("/api/documents/{document_id}", status_code=204, tags=["Knowledge base"])
 def delete_document(document_id: str) -> None:
-    if not services().knowledge.delete(document_id):
-        raise HTTPException(status_code=404, detail="Không tìm thấy tài liệu.")
+    with services().chats.database.session() as session:
+        document = session.get(Document, document_id)
+        if document is None:
+            raise HTTPException(status_code=404, detail="Không tìm thấy tài liệu.")
+        jobs = session.scalars(
+            select(BackgroundJob).where(
+                BackgroundJob.type == "document_index",
+                BackgroundJob.dedupe_key == f"document:{document.id}",
+                BackgroundJob.status.in_(("queued", "running")),
+            )
+        ).all()
+        for job in jobs:
+            job.status, job.locked_at, job.last_error = "cancelled", None, "Tài liệu đã bị xóa."
+        queue_file_cleanup(session, [{"storage": "knowledge", "stored_name": document.stored_name}], f"document-cleanup:{document.id}")
+        session.delete(document)
+        session.commit()
 
 
 @app.post("/api/media", status_code=201, tags=["Media"])
@@ -577,8 +924,8 @@ def update_project(project_id: str, payload: ProjectRequest) -> dict[str, Any]:
     return project_json(item)
 
 
-@app.delete("/api/projects/{project_id}", status_code=204, tags=["Projects"])
-def delete_project(project_id: str, payload: DeleteProjectRequest) -> None:
+@app.delete("/api/projects/{project_id}", tags=["Projects"])
+def delete_project(project_id: str, payload: DeleteProjectRequest) -> dict[str, Any]:
     with services().chats.database.session() as session:
         project = session.get(Project, project_id)
         if project is None:
@@ -587,13 +934,33 @@ def delete_project(project_id: str, payload: DeleteProjectRequest) -> None:
             raise HTTPException(status_code=422, detail="Tên xác nhận chưa khớp với tên dự án.")
         documents = list(session.scalars(select(Document).where(Document.project_id == project_id)))
         assets = list(session.scalars(select(LibraryAsset).where(LibraryAsset.project_id == project_id)))
-        for item in [*documents, *assets]:
-            directory = services().settings.knowledge_dir if isinstance(item, Document) else services().settings.media_dir
-            path = directory / item.stored_name
-            if path.exists():
-                path.unlink()
+        chats_count = session.scalar(select(func.count()).select_from(Chat).where(Chat.project_id == project_id)) or 0
+        schedules_count = session.scalar(select(func.count()).select_from(Schedule).where(Schedule.project_id == project_id)) or 0
+        document_ids = [item.id for item in documents]
+        if document_ids:
+            jobs = session.scalars(
+                select(BackgroundJob).where(
+                    BackgroundJob.type == "document_index",
+                    BackgroundJob.dedupe_key.in_([f"document:{item_id}" for item_id in document_ids]),
+                    BackgroundJob.status.in_(("queued", "running")),
+                )
+            ).all()
+            for job in jobs:
+                job.status, job.locked_at, job.last_error = "cancelled", None, "Dự án đã bị xóa."
+        queue_file_cleanup(
+            session,
+            [
+                *[{"storage": "knowledge", "stored_name": item.stored_name} for item in documents],
+                *[{"storage": "media", "stored_name": item.stored_name} for item in assets],
+            ],
+            f"project-cleanup:{project_id}",
+        )
         session.delete(project)
         session.commit()
+        return {
+            "deleted": {"chats": chats_count, "documents": len(documents), "assets": len(assets), "schedules": schedules_count},
+            "fileCleanupQueued": bool(documents or assets),
+        }
 
 
 @app.get("/api/schedules", tags=["Schedules"])

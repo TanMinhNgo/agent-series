@@ -18,6 +18,8 @@ def main() -> None:
         schedule_worker.services.knowledge,
         schedule_worker.services.memory,
         schedule_worker.services.chats,
+        schedule_worker.services.settings.media_dir,
+        schedule_worker.services.artifacts,
     )
     while True:
         now = datetime.now(UTC)

@@ -14,8 +14,11 @@ export type ResponseBlock =
   | { type: 'data-table'; config: { title?: string; columns?: string[]; rows?: (string | number)[][] } };
 
 export type Message = {
+  messageId?: string;
+  position?: number;
   role: 'user' | 'assistant';
   content: string;
   attachments?: MediaAttachment[];
   contentBlocks?: ResponseBlock[];
+  bookmarked?: boolean;
 };

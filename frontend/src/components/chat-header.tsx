@@ -12,6 +12,8 @@ type Props = {
   onOpenSidebar?: () => void;
   onProviderChange: (event: ChangeEvent<HTMLSelectElement>) => void;
   onModelChange: (event: ChangeEvent<HTMLSelectElement>) => void;
+  collections?: { id: string; name: string }[];
+  onCollectionChange?: (collectionId: string | null) => void;
 };
 
 export function ChatHeader({
@@ -21,6 +23,8 @@ export function ChatHeader({
   onOpenSidebar,
   onProviderChange,
   onModelChange,
+  collections = [],
+  onCollectionChange,
 }: Props) {
   const models = chat && config ? config.providers[chat.provider] || [] : [];
   const [hasScrolled, setHasScrolled] = useState(() => window.scrollY > 0);
@@ -71,6 +75,18 @@ export function ChatHeader({
               <option key={name}>{name}</option>
             ))}
           </select>
+          {chat.projectId ? (
+            <select
+              value={chat.collectionId || ''}
+              onChange={(event) => onCollectionChange?.(event.target.value || null)}
+              disabled={busy}
+              className="select-control max-w-44 disabled:cursor-not-allowed disabled:opacity-60"
+              aria-label="Collection tài liệu"
+            >
+              <option value="">Chưa chọn tài liệu</option>
+              {collections.map((collection) => <option key={collection.id} value={collection.id}>{collection.name}</option>)}
+            </select>
+          ) : null}
           <select
             value={chat.model}
             onChange={onModelChange}
