@@ -3,12 +3,9 @@ import type { ChangeEvent } from 'react';
 
 import { AppSidebar } from '@/src/components/app-sidebar';
 import type { SidebarNavigation } from '@/src/components/app-sidebar';
-import { ChatShareDialog } from '@/src/components/chat-share-dialog';
 import { ChatComposer } from '@/src/components/chat-composer';
 import { ChatHeader } from '@/src/components/chat-header';
 import { MessageList } from '@/src/components/message-list';
-import { LibraryPage } from '@/src/components/library-page';
-import { PublicSharePage } from '@/src/components/public-share-page';
 import { Button } from '@/components/ui/button';
 import type { WorkspaceView } from '@/src/components/workspace-panel';
 import { useChatActions } from '@/src/hooks/use-chat-actions';
@@ -32,6 +29,15 @@ const WorkspacePanel = lazy(() =>
     default: Component,
   })),
 );
+const LibraryPage = lazy(() =>
+  import('@/src/components/library-page').then(({ LibraryPage: Component }) => ({ default: Component })),
+);
+const PublicSharePage = lazy(() =>
+  import('@/src/components/public-share-page').then(({ PublicSharePage: Component }) => ({ default: Component })),
+);
+const ChatShareDialog = lazy(() =>
+  import('@/src/components/chat-share-dialog').then(({ ChatShareDialog: Component }) => ({ default: Component })),
+);
 
 export default function App() {
   const [pathname, setPathname] = useState(() => window.location.pathname);
@@ -52,7 +58,9 @@ export default function App() {
   const workspaceView = /^\/(projects|schedules|plugins)\/?$/.exec(pathname)?.[1] as
     WorkspaceView | undefined;
   return token ? (
-    <PublicSharePage token={token} />
+    <Suspense fallback={<WorkspacePanelFallback />}>
+      <PublicSharePage token={token} />
+    </Suspense>
   ) : (
     <ChatWorkspace
       chatId={chatId}
@@ -340,7 +348,9 @@ function ChatWorkspace({ chatId, libraryPage, workspaceView, navigate }: ChatWor
             />
           )}
           {libraryPage ? (
-            <LibraryPage />
+            <Suspense fallback={<WorkspacePanelFallback />}>
+              <LibraryPage />
+            </Suspense>
           ) : workspaceView ? (
             <Suspense fallback={<WorkspacePanelFallback />}>
               <WorkspacePanel view={workspaceView} />
@@ -373,7 +383,7 @@ function ChatWorkspace({ chatId, libraryPage, workspaceView, navigate }: ChatWor
           )}
         </section>
       </div>
-      {shareChat ? <ChatShareDialog chat={shareChat} onClose={() => setShareChat(null)} /> : null}
+      {shareChat ? <Suspense fallback={null}><ChatShareDialog chat={shareChat} onClose={() => setShareChat(null)} /></Suspense> : null}
     </main>
   );
 }
