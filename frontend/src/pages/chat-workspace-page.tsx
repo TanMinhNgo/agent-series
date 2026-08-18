@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 
 import { AppSidebar } from '@/src/components/app-sidebar';
@@ -70,6 +70,9 @@ export function ChatWorkspace({
   const [userScrollRequest, setUserScrollRequest] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [shareChat, setShareChat] = useState<Chat | null>(null);
+  // React state updates asynchronously, so `streamChat.isPending` alone cannot
+  // stop an Enter key and a click (or two rapid clicks) from starting two turns.
+  const sendLock = useRef(false);
   const logoutToLogin = () => auth.logout.mutate(undefined, { onSuccess: () => navigate('/login') });
   const activeNavigation: SidebarNavigation | undefined = libraryPage
     ? 'library'
@@ -154,7 +157,14 @@ export function ChatWorkspace({
     if (chat.id === activeChat?.id) navigate('/');
   };
   const send = async (contentValue: string, files: File[]) => {
-    if ((!contentValue.trim() && !files.length) || createChat.isPending || streamChat.isPending) return;
+    if (
+      (!contentValue.trim() && !files.length) ||
+      sendLock.current ||
+      createChat.isPending ||
+      streamChat.isPending
+    )
+      return;
+    sendLock.current = true;
     const content = contentValue.trim() || 'Hãy phân tích các tệp đính kèm này.';
     setPrompt('');
     setStatus(null);
@@ -185,6 +195,8 @@ export function ChatWorkspace({
       });
     } catch (reason) {
       setUiError(reason instanceof Error ? reason.message : 'Gửi tin nhắn thất bại.');
+    } finally {
+      sendLock.current = false;
     }
   };
 
