@@ -4,7 +4,9 @@ import { request } from '@/src/hooks/client';
 import { queryKeys } from '@/src/hooks/query-keys';
 import type { Chat } from '@/src/types';
 
-type UpdateValues = Partial<Pick<Chat, 'title' | 'pinned' | 'archived' | 'projectId' | 'collectionId'>>;
+type UpdateValues = Partial<
+  Pick<Chat, 'title' | 'pinned' | 'archived' | 'provider' | 'model' | 'projectId' | 'collectionId'>
+>;
 
 export const useChatActions = () => {
   const queryClient = useQueryClient();

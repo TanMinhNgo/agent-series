@@ -16,6 +16,7 @@ from api.main import (
     app,
     list_chats,
     make_agent,
+    message_json,
     model_error_message,
     persisted_history,
     recent_chat_history,
@@ -27,6 +28,16 @@ from agent_core.plugin_execution import connected_read_tools
 from agent_core.memory import MemoryService
 from agent_core.credentials import CredentialError, UserCredentialService
 from agent_core.storage import Chat, Plugin, Schedule, ScheduleRepository, current_user_id, document_scope_key
+
+
+def test_message_json_exposes_message_creation_time() -> None:
+    created_at = datetime(2026, 8, 19, 9, 30, tzinfo=UTC).isoformat()
+
+    assert message_json({"role": "user", "content": "Xin chào", "created_at": created_at}) == {
+        "role": "user",
+        "content": "Xin chào",
+        "createdAt": created_at,
+    }
 
 
 def test_health_and_public_config_do_not_expose_provider_keys(monkeypatch) -> None:
@@ -112,7 +123,8 @@ def test_stream_chat_restores_the_chat_owner_in_its_worker_thread(monkeypatch) -
     events = list(main_module.stream_chat("chat-1", "hello", []))
 
     assert observed == ["user-1"]
-    assert any('event: message' in event for event in events)
+    message_event = next(event for event in events if 'event: message' in event)
+    assert '"createdAt"' in message_event
 
 
 def test_chat_history_list_is_paginated(monkeypatch) -> None:

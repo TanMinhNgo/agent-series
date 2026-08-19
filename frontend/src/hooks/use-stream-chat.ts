@@ -41,7 +41,7 @@ export const useStreamChat = () => {
     onMutate: ({ chatId, content, attachments = [], onUserMessageQueued }) => {
       queryClient.setQueryData<Message[]>(queryKeys.messages(chatId), (items = []) => [
         ...items,
-        { role: 'user', content, attachments },
+        { role: 'user', content, attachments, createdAt: new Date().toISOString() },
       ]);
       onUserMessageQueued?.();
     },

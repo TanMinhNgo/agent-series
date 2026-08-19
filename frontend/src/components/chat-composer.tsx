@@ -29,7 +29,7 @@ export function ChatComposer({
   onDeleteTemplate,
 }: Props) {
   return (
-    <div className="sticky bottom-0 mt-6 bg-background/95 pb-4 pt-4 backdrop-blur">
+    <div className="shrink-0 border-t bg-background/95 py-4 backdrop-blur">
       {templates.length ? (
         <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
           {templates.map((template) => (

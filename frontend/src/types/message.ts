@@ -16,6 +16,7 @@ export type ResponseBlock =
 export type Message = {
   messageId?: string;
   position?: number;
+  createdAt?: string;
   role: 'user' | 'assistant';
   content: string;
   attachments?: MediaAttachment[];

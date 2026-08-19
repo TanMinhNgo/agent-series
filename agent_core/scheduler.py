@@ -62,6 +62,9 @@ class ScheduleWorker:
             if result.content_blocks:
                 agent.history[-1]["content_blocks"] = result.content_blocks
             saved_history = persisted_history(full_history, agent.history, initial_history_length)
+            turn_created_at = datetime.now(UTC).isoformat()
+            for item in saved_history[len(full_history):]:
+                item.setdefault("created_at", turn_created_at)
             self.services.chats.replace_history(chat.id, saved_history)
             BackgroundJobRepository(self.services.chats.database).enqueue("memory_index", {"chat_id": chat.id})
             self.runs.finish(run_id, summary=result.text[:500])

@@ -68,8 +68,10 @@ export function ChatWorkspace({
   const [status, setStatus] = useState<string | null>(null);
   const [uiError, setUiError] = useState<string | null>(null);
   const [userScrollRequest, setUserScrollRequest] = useState(0);
+  const [runwayChatId, setRunwayChatId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [shareChat, setShareChat] = useState<Chat | null>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
   // React state updates asynchronously, so `streamChat.isPending` alone cannot
   // stop an Enter key and a click (or two rapid clicks) from starting two turns.
   const sendLock = useRef(false);
@@ -81,6 +83,7 @@ export function ChatWorkspace({
       : settingsPage
         ? 'settings'
       : workspaceView || (chatId ? undefined : 'chat');
+  const isChatView = !libraryPage && !workspaceView && !adminPage && !settingsPage;
 
   const config = useGetConfig();
   const chats = useGetChats();
@@ -131,13 +134,22 @@ export function ChatWorkspace({
     const model = event.target.value;
     if (model === activeChat.model) return;
     setUiError(null);
-    await createAndSelect(activeChat.provider, model, activeChat.id);
+    await chatActions.update.mutateAsync({
+      chatId: activeChat.id,
+      values: { provider: activeChat.provider, model },
+    });
   };
   const changeProvider = async (event: ChangeEvent<HTMLSelectElement>) => {
+    if (!activeChat) return;
     const provider = event.target.value;
-    if (provider === activeChat?.provider) return;
+    if (provider === activeChat.provider) return;
     const model = config.data?.providers[provider]?.[0];
-    if (model) await createAndSelect(provider, model, activeChat?.id);
+    if (!model) return;
+    setUiError(null);
+    await chatActions.update.mutateAsync({
+      chatId: activeChat.id,
+      values: { provider, model },
+    });
   };
   const updateChat = async (
     chat: Chat,
@@ -161,6 +173,7 @@ export function ChatWorkspace({
       (!contentValue.trim() && !files.length) ||
       sendLock.current ||
       createChat.isPending ||
+      chatActions.update.isPending ||
       streamChat.isPending
     )
       return;
@@ -191,7 +204,10 @@ export function ChatWorkspace({
           if (name === 'message') setStatus(null);
           if (name === 'error') setUiError(String(data.message));
         },
-        onUserMessageQueued: () => setUserScrollRequest((request) => request + 1),
+        onUserMessageQueued: () => {
+          setRunwayChatId(chat.id);
+          setUserScrollRequest((request) => request + 1);
+        },
       });
     } catch (reason) {
       setUiError(reason instanceof Error ? reason.message : 'Gửi tin nhắn thất bại.');
@@ -295,7 +311,7 @@ export function ChatWorkspace({
             </div>
           </div>
         ) : null}
-        <section className="flex min-w-0 flex-col">
+        <section className={isChatView ? 'flex h-[100dvh] min-w-0 min-h-0 flex-col overflow-hidden' : 'flex min-w-0 flex-col'}>
           {libraryPage ? null : workspaceView || adminPage || settingsPage ? (
             <div className="sticky top-0 z-20 flex h-15 items-center border-b bg-background/95 px-4 backdrop-blur sm:px-8">
               <Button variant="ghost" size="sm" onClick={() => navigate('/')}>
@@ -306,7 +322,7 @@ export function ChatWorkspace({
             <ChatHeader
               chat={activeChat}
               config={config.data || null}
-              busy={createChat.isPending || streamChat.isPending}
+              busy={createChat.isPending || chatActions.update.isPending || streamChat.isPending}
               onOpenSidebar={() => setSidebarOpen(true)}
               onProviderChange={(event) => void changeProvider(event)}
               onModelChange={(event) => void changeModel(event)}
@@ -331,50 +347,60 @@ export function ChatWorkspace({
           ) : settingsPage ? (
             <SettingsApiKeysPage />
           ) : (
-            <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 py-5 sm:px-8 lg:px-12">
-              {pins.data?.length ? (
-                <div className="mb-4 flex gap-2 overflow-x-auto">
-                  <span className="shrink-0 text-xs text-muted-foreground">Đã ghim:</span>
-                  {pins.data.map((item) => (
-                    <button
-                      key={item.messageId}
-                      className="shrink-0 rounded-full border px-2 py-1 text-xs hover:bg-muted"
-                      onClick={() =>
-                        document
-                          .getElementById(`message-${item.messageId}`)
-                          ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                      }
-                    >
-                      {item.content.slice(0, 48)}
-                    </button>
-                  ))}
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div ref={transcriptRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+                <div className="mx-auto min-h-full w-full max-w-5xl px-4 sm:px-8 lg:px-12">
+                  {pins.data?.length ? (
+                    <div className="sticky top-0 z-10 flex gap-2 overflow-x-auto border-b bg-background/95 py-3 backdrop-blur">
+                      <span className="shrink-0 text-xs text-muted-foreground">Đã ghim:</span>
+                      {pins.data.map((item) => (
+                        <button
+                          key={item.messageId}
+                          className="shrink-0 rounded-full border px-2 py-1 text-xs hover:bg-muted"
+                          onClick={() =>
+                            document
+                              .getElementById(`message-${item.messageId}`)
+                              ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                          }
+                        >
+                          {item.content.slice(0, 48)}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  <MessageList
+                    key={activeChat?.id || 'new-chat'}
+                    messages={messages.data || []}
+                    status={status}
+                    error={error}
+                    userScrollRequest={userScrollRequest}
+                    isRunwayRequested={runwayChatId === activeChat?.id}
+                    scrollContainerRef={transcriptRef}
+                    onRunwayRelease={() => setRunwayChatId(null)}
+                    onPin={(message) =>
+                      message.messageId && pin.mutate({ messageId: message.messageId, pinned: !message.pinned })
+                    }
+                  />
                 </div>
-              ) : null}
-              <MessageList
-                messages={messages.data || []}
-                status={status}
-                error={error}
-                userScrollRequest={userScrollRequest}
-                onPin={(message) =>
-                  message.messageId && pin.mutate({ messageId: message.messageId, pinned: !message.pinned })
-                }
-              />
-              <ChatComposer
-                prompt={prompt}
-                busy={streamChat.isPending || uploadDocuments.isPending || uploadMedia.isPending}
-                onPromptChange={setPrompt}
-                onSubmit={(content, attachments) => void send(content, attachments)}
-                templates={templates.data || []}
-                onSelectTemplate={(content) => setPrompt(content)}
-                onSaveTemplate={(name, content) => saveTemplate.mutate({ name, content })}
-                onEditTemplate={(template) => {
-                  const name = window.prompt('Tên template', template.name);
-                  const content = name ? window.prompt('Nội dung template', template.content) : null;
-                  if (name?.trim() && content?.trim())
-                    updateTemplate.mutate({ id: template.id, name, content, projectId: template.projectId });
-                }}
-                onDeleteTemplate={(id) => deleteTemplate.mutate(id)}
-              />
+              </div>
+              <div className="mx-auto w-full max-w-5xl px-4 sm:px-8 lg:px-12">
+                <ChatComposer
+                  prompt={prompt}
+                  busy={chatActions.update.isPending || streamChat.isPending || uploadDocuments.isPending || uploadMedia.isPending}
+                  onPromptChange={setPrompt}
+                  onSubmit={(content, attachments) => void send(content, attachments)}
+                  templates={templates.data || []}
+                  onSelectTemplate={(content) => setPrompt(content)}
+                  onSaveTemplate={(name, content) => saveTemplate.mutate({ name, content })}
+                  onEditTemplate={(template) => {
+                    const name = window.prompt('Tên template', template.name);
+                    const content = name ? window.prompt('Nội dung template', template.content) : null;
+                    if (name?.trim() && content?.trim())
+                      updateTemplate.mutate({ id: template.id, name, content, projectId: template.projectId });
+                  }}
+                  onDeleteTemplate={(id) => deleteTemplate.mutate(id)}
+                />
+              </div>
             </div>
           )}
         </section>

@@ -192,6 +192,7 @@ class ChatMessage(UserOwned, Base):
     attachments: Mapped[list | None] = mapped_column(JSON, nullable=True)
     content_blocks: Mapped[list | None] = mapped_column(JSON, nullable=True)
     pinned: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
 
 class PromptTemplate(UserOwned, Base):
@@ -528,6 +529,14 @@ class ChatRepository:
                 raise ValueError("Không tìm thấy chat.")
             session.execute(delete(ChatMessage).where(ChatMessage.chat_id == chat_id))
             for position, item in enumerate(history):
+                raw_created_at = item.get("created_at")
+                created_at = (
+                    raw_created_at
+                    if isinstance(raw_created_at, datetime)
+                    else datetime.fromisoformat(raw_created_at)
+                    if isinstance(raw_created_at, str)
+                    else datetime.utcnow()
+                )
                 session.add(ChatMessage(
                     chat_id=chat_id, position=position, role=item["role"], content=item.get("content", ""),
                     tool_call_id=item.get("id"), tool_name=item.get("name"),
@@ -535,6 +544,7 @@ class ChatRepository:
                     attachments=[{key: value for key, value in attachment.items() if key != "data"}
                                  for attachment in item.get("attachments", [])] or None,
                     content_blocks=item.get("content_blocks") or None,
+                    created_at=created_at,
                 ))
             user_message = next((item["content"] for item in history if item["role"] == "user"), "")
             if chat.title == "Cuộc trò chuyện mới" and user_message:
@@ -636,6 +646,7 @@ class ChatRepository:
                     "attachments": message.attachments,
                     "content_blocks": message.content_blocks,
                     "pinned": message.pinned,
+                    "created_at": message.created_at.isoformat(),
                 }.items() if value is not None}
                 for message in messages
             ]

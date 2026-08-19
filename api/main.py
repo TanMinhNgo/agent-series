@@ -257,6 +257,8 @@ def message_json(message: dict[str, Any]) -> dict[str, Any]:
         result["messageId"] = result.pop("message_id")
     if "content_blocks" in result:
         result["contentBlocks"] = result.pop("content_blocks") or []
+    if "created_at" in result:
+        result["createdAt"] = result.pop("created_at")
     return result
 
 
@@ -1443,11 +1445,18 @@ def stream_chat(chat_id: str, content: str, attachments: list[dict]) -> Iterator
             if result.content_blocks:
                 agent.history[-1]["content_blocks"] = result.content_blocks
             saved_history = persisted_history(full_history, agent.history, initial_history_length)
+            turn_created_at = datetime.now(UTC).isoformat()
+            for item in saved_history[len(full_history):]:
+                item.setdefault("created_at", turn_created_at)
             app_services.chats.replace_history(chat_id, saved_history)
             BackgroundJobRepository(app_services.chats.database).enqueue("memory_index", {"chat_id": chat_id})
             # Agent providers currently expose a completed normalized response.
             # SSE still keeps the UI responsive by streaming tool progress, then the final content.
-            events.put(("message", {"role": "assistant", "content": result.text, "contentBlocks": result.content_blocks}))
+            completed_message = next(
+                (item for item in reversed(saved_history) if item["role"] == "assistant"),
+                {"role": "assistant", "content": result.text, "content_blocks": result.content_blocks},
+            )
+            events.put(("message", message_json(completed_message)))
             events.put(("done", {}))
         except Exception as exc:  # noqa: BLE001
             events.put(("error", {"message": model_error_message(chat, exc)}))
