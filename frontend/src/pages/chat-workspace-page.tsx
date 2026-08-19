@@ -220,8 +220,8 @@ export function ChatWorkspace({
   };
 
   return (
-    <main className="min-h-[100dvh] bg-background text-foreground">
-      <div className="grid min-h-[100dvh] w-full lg:grid-cols-[280px_minmax(0,1fr)]">
+    <main className="min-h-dvh bg-background text-foreground">
+      <div className="grid min-h-dvh w-full lg:grid-cols-[280px_minmax(0,1fr)]">
         <div className="hidden lg:block">
           <AppSidebar
             chats={chats.data || []}
@@ -322,7 +322,7 @@ export function ChatWorkspace({
         ) : null}
         <section
           className={
-            isChatView ? 'flex h-[100dvh] min-w-0 min-h-0 flex-col overflow-hidden' : 'flex min-w-0 flex-col'
+            isChatView ? 'flex h-dvh min-w-0 min-h-0 flex-col overflow-hidden' : 'flex min-w-0 flex-col'
           }
         >
           {libraryPage ? null : workspaceView || adminPage || settingsPage ? (

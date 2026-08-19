@@ -124,7 +124,7 @@ export function AppSidebar({
     [hasMoreChats, loadingMoreChats, onLoadMoreChats],
   );
   return (
-    <aside className="flex min-h-[100dvh] flex-col border-b border-border bg-sidebar p-4 lg:sticky lg:top-0 lg:h-screen lg:border-r lg:border-b-0">
+    <aside className="flex min-h-dvh flex-col border-b border-border bg-sidebar p-4 lg:sticky lg:top-0 lg:h-screen lg:border-r lg:border-b-0">
       <div className="mb-5 flex items-center">
         <div className="flex items-center gap-2 font-semibold">
           <span className="grid size-8 place-items-center rounded-xl bg-primary text-primary-foreground">
@@ -319,7 +319,7 @@ export function AppSidebar({
       {renameTarget
         ? createPortal(
             <div
-              className="fixed inset-0 z-[100] grid place-items-center bg-black/60 p-4"
+              className="fixed inset-0 z-100 grid place-items-center bg-black/60 p-4"
               role="dialog"
               aria-modal="true"
             >
@@ -353,7 +353,7 @@ export function AppSidebar({
       {deleteTarget
         ? createPortal(
             <div
-              className="fixed inset-0 z-[100] grid place-items-center bg-black/60 p-4"
+              className="fixed inset-0 z-100 grid place-items-center bg-black/60 p-4"
               role="dialog"
               aria-modal="true"
             >

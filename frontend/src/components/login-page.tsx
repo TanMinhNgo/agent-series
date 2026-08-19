@@ -25,8 +25,8 @@ export function LoginPage() {
   };
 
   return (
-    <main className="grid min-h-[100dvh] place-items-center bg-background p-4 text-foreground sm:p-6">
-      <section className="relative w-full max-w-[28rem] rounded-[1.25rem] border border-border bg-card px-10 py-9 shadow-2xl sm:px-[2.6rem]">
+    <main className="grid min-h-dvh place-items-center bg-background p-4 text-foreground sm:p-6">
+      <section className="relative w-full max-w-md rounded-[1.25rem] border border-border bg-card px-10 py-9 shadow-2xl sm:px-[2.6rem]">
         <Button
           type="button"
           variant="ghost"
@@ -35,7 +35,7 @@ export function LoginPage() {
           onClick={() => window.history.back()}
           aria-label="Đóng đăng nhập"
         >
-          <X className="size-[18px]" />
+          <X className="size-4.5" />
         </Button>
 
         <header className="pr-5 text-center">
@@ -60,7 +60,7 @@ export function LoginPage() {
             title="Đăng nhập số điện thoại đang được phát triển"
             className="h-12 w-full rounded-full bg-primary text-[0.95rem] font-semibold text-primary-foreground disabled:opacity-100"
           >
-            <Phone className="size-[18px]" />
+            <Phone className="size-4.5" />
             Tiếp tục với số điện thoại
           </Button>
         </div>
