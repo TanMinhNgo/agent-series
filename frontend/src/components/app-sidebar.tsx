@@ -245,9 +245,18 @@ export function AppSidebar({
       </div>
       <div className="mt-6 shrink-0 border-t pt-5">
         <DropdownMenu>
-          <DropdownMenuTrigger render={<Button variant="ghost" className="h-auto w-full justify-start px-2 py-2" />}>
-            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-pink-400 text-xs font-semibold text-white">{(user?.displayName || user?.email || 'U').slice(0, 2).toUpperCase()}</span>
-            <span className="min-w-0 flex-1 text-left"><span className="block truncate text-sm font-medium">{user?.displayName || user?.email || 'Tài khoản'}</span><span className="block text-xs text-muted-foreground">Tài khoản Google</span></span>
+          <DropdownMenuTrigger
+            render={<Button variant="ghost" className="h-auto w-full justify-start px-2 py-2" />}
+          >
+            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-pink-400 text-xs font-semibold text-white">
+              {(user?.displayName || user?.email || 'U').slice(0, 2).toUpperCase()}
+            </span>
+            <span className="min-w-0 flex-1 text-left">
+              <span className="block truncate text-sm font-medium">
+                {user?.displayName || user?.email || 'Tài khoản'}
+              </span>
+              <span className="block text-xs text-muted-foreground">Tài khoản Google</span>
+            </span>
             <Settings size={17} className="text-muted-foreground" />
           </DropdownMenuTrigger>
           <DropdownMenuContent
@@ -256,7 +265,18 @@ export function AppSidebar({
             align="start"
             className="w-64 rounded-2xl p-2 shadow-xl"
           >
-            <div className="flex items-center gap-3 px-2 py-2.5"><span className="grid size-9 shrink-0 place-items-center rounded-full bg-pink-400 text-xs font-semibold text-white">{(user?.displayName || user?.email || 'U').slice(0, 2).toUpperCase()}</span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{user?.displayName || user?.email || 'Tài khoản'}</span><span className="block truncate text-xs text-muted-foreground">Tài khoản Google</span></span><ChevronRight size={16} className="text-muted-foreground" /></div>
+            <div className="flex items-center gap-3 px-2 py-2.5">
+              <span className="grid size-9 shrink-0 place-items-center rounded-full bg-pink-400 text-xs font-semibold text-white">
+                {(user?.displayName || user?.email || 'U').slice(0, 2).toUpperCase()}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">
+                  {user?.displayName || user?.email || 'Tài khoản'}
+                </span>
+                <span className="block truncate text-xs text-muted-foreground">Tài khoản Google</span>
+              </span>
+              <ChevronRight size={16} className="text-muted-foreground" />
+            </div>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={onOpenApiKeys}>
               <KeyRound /> Thêm API key của bạn
@@ -280,11 +300,19 @@ export function AppSidebar({
                 </DropdownMenuRadioGroup>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
-            <DropdownMenuItem disabled><UserRound /> Hỗ trợ <span className="ml-auto text-xs">Sắp có</span></DropdownMenuItem>
-            <DropdownMenuItem disabled><Settings /> Cài đặt <span className="ml-auto text-xs">Sắp có</span></DropdownMenuItem>
+            <DropdownMenuItem disabled>
+              <UserRound /> Hỗ trợ <span className="ml-auto text-xs">Sắp có</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled>
+              <Settings /> Cài đặt <span className="ml-auto text-xs">Sắp có</span>
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem disabled><CircleHelp /> Trợ giúp <ChevronRight className="ml-auto" /></DropdownMenuItem>
-            <DropdownMenuItem onClick={onLogout} className="text-destructive focus:text-destructive"><LogOut /> Đăng xuất</DropdownMenuItem>
+            <DropdownMenuItem disabled>
+              <CircleHelp /> Trợ giúp <ChevronRight className="ml-auto" />
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onLogout} className="text-destructive focus:text-destructive">
+              <LogOut /> Đăng xuất
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

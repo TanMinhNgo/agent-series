@@ -38,7 +38,9 @@ const ChatShareDialog = lazy(() =>
   })),
 );
 const AdminPage = lazy(() =>
-  import('@/src/features/admin/pages/admin-dashboard-page').then(({ AdminDashboardPage: Component }) => ({ default: Component })),
+  import('@/src/features/admin/pages/admin-dashboard-page').then(({ AdminDashboardPage: Component }) => ({
+    default: Component,
+  })),
 );
 
 type ChatWorkspaceProps = {
@@ -82,7 +84,7 @@ export function ChatWorkspace({
       ? 'admin'
       : settingsPage
         ? 'settings'
-      : workspaceView || (chatId ? undefined : 'chat');
+        : workspaceView || (chatId ? undefined : 'chat');
   const isChatView = !libraryPage && !workspaceView && !adminPage && !settingsPage;
 
   const config = useGetConfig();
@@ -100,7 +102,8 @@ export function ChatWorkspace({
   const uploadMedia = useUploadMedia();
   const streamChat = useStreamChat();
   const { projects } = useWorkspace();
-  const { collections, templates, pins, pin, saveTemplate, updateTemplate, deleteTemplate } = useChatWorkspaceData(activeChat?.id, activeChat?.projectId);
+  const { collections, templates, pins, pin, saveTemplate, updateTemplate, deleteTemplate } =
+    useChatWorkspaceData(activeChat?.id, activeChat?.projectId);
 
   useEffect(() => {
     document.documentElement.classList.toggle(
@@ -303,15 +306,25 @@ export function ChatWorkspace({
                   navigate(`/${view}`);
                 }}
                 isSystemAdmin={isSystemAdmin}
-                onOpenAdmin={() => { setSidebarOpen(false); navigate('/admin'); }}
+                onOpenAdmin={() => {
+                  setSidebarOpen(false);
+                  navigate('/admin');
+                }}
                 user={auth.session.user}
-                onOpenApiKeys={() => { setSidebarOpen(false); navigate('/settings/api-keys'); }}
+                onOpenApiKeys={() => {
+                  setSidebarOpen(false);
+                  navigate('/settings/api-keys');
+                }}
                 onLogout={logoutToLogin}
               />
             </div>
           </div>
         ) : null}
-        <section className={isChatView ? 'flex h-[100dvh] min-w-0 min-h-0 flex-col overflow-hidden' : 'flex min-w-0 flex-col'}>
+        <section
+          className={
+            isChatView ? 'flex h-[100dvh] min-w-0 min-h-0 flex-col overflow-hidden' : 'flex min-w-0 flex-col'
+          }
+        >
           {libraryPage ? null : workspaceView || adminPage || settingsPage ? (
             <div className="sticky top-0 z-20 flex h-15 items-center border-b bg-background/95 px-4 backdrop-blur sm:px-8">
               <Button variant="ghost" size="sm" onClick={() => navigate('/')}>
@@ -378,7 +391,8 @@ export function ChatWorkspace({
                     scrollContainerRef={transcriptRef}
                     onRunwayRelease={() => setRunwayChatId(null)}
                     onPin={(message) =>
-                      message.messageId && pin.mutate({ messageId: message.messageId, pinned: !message.pinned })
+                      message.messageId &&
+                      pin.mutate({ messageId: message.messageId, pinned: !message.pinned })
                     }
                   />
                 </div>
@@ -386,7 +400,12 @@ export function ChatWorkspace({
               <div className="mx-auto w-full max-w-5xl px-4 sm:px-8 lg:px-12">
                 <ChatComposer
                   prompt={prompt}
-                  busy={chatActions.update.isPending || streamChat.isPending || uploadDocuments.isPending || uploadMedia.isPending}
+                  busy={
+                    chatActions.update.isPending ||
+                    streamChat.isPending ||
+                    uploadDocuments.isPending ||
+                    uploadMedia.isPending
+                  }
                   onPromptChange={setPrompt}
                   onSubmit={(content, attachments) => void send(content, attachments)}
                   templates={templates.data || []}
@@ -396,7 +415,12 @@ export function ChatWorkspace({
                     const name = window.prompt('Tên template', template.name);
                     const content = name ? window.prompt('Nội dung template', template.content) : null;
                     if (name?.trim() && content?.trim())
-                      updateTemplate.mutate({ id: template.id, name, content, projectId: template.projectId });
+                      updateTemplate.mutate({
+                        id: template.id,
+                        name,
+                        content,
+                        projectId: template.projectId,
+                      });
                   }}
                   onDeleteTemplate={(id) => deleteTemplate.mutate(id)}
                 />

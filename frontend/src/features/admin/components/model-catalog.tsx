@@ -4,7 +4,90 @@ import { Button } from '@/components/ui/button';
 
 type Provider = { models: { id: string; displayName: string; isActive: boolean }[]; configured: boolean };
 
-export function ModelCatalog({ providers, onToggle, updatingModel }: { providers?: Record<string, Provider>; onToggle?: (provider: string, modelId: string, isActive: boolean) => void; updatingModel?: string | null }) {
+export function ModelCatalog({
+  providers,
+  onToggle,
+  updatingModel,
+}: {
+  providers?: Record<string, Provider>;
+  onToggle?: (provider: string, modelId: string, isActive: boolean) => void;
+  updatingModel?: string | null;
+}) {
   const entries = Object.entries(providers || {});
-  return <section className="rounded-2xl border bg-card shadow-sm"><header className="flex flex-col gap-3 border-b p-5 sm:flex-row sm:items-start sm:justify-between"><div><h2 className="font-semibold">Model catalog</h2><p className="mt-1 text-sm text-muted-foreground">{onToggle ? 'Bật hoặc tắt model được phép dùng trong hệ thống.' : 'Trạng thái model được quản lý tại tab Hệ thống.'}</p></div><Badge variant="outline">{entries.reduce((total, [, provider]) => total + provider.models.length, 0)} model</Badge></header><div className="grid gap-4 p-5 lg:grid-cols-3">{entries.map(([name, provider]) => <article key={name} className="overflow-hidden rounded-xl border bg-background"><div className="flex items-start justify-between border-b px-4 py-3"><div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-primary/10 text-primary"><Bot size={16} /></span><div><h3 className="font-medium capitalize">{name}</h3><p className="text-xs text-muted-foreground">{provider.models.length} model</p></div></div><Badge variant={provider.configured ? 'secondary' : 'destructive'}>{provider.configured ? 'Configured' : 'Thiếu key'}</Badge></div><div className="divide-y">{provider.models.length ? provider.models.map((model) => { const key = `${name}/${model.id}`; return <div key={model.id} className="flex items-center gap-3 px-4 py-3"><Cpu size={15} className="shrink-0 text-muted-foreground"/><code className="min-w-0 flex-1 truncate text-xs">{model.displayName}</code><Badge variant={model.isActive ? 'secondary' : 'outline'}>{model.isActive ? 'Đang bật' : 'Đã tắt'}</Badge>{onToggle ? <Button size="sm" variant={model.isActive ? 'outline' : 'default'} disabled={updatingModel === key} onClick={() => onToggle(name, model.id, !model.isActive)}>{updatingModel === key ? 'Đang lưu...' : model.isActive ? 'Tắt' : 'Bật'}</Button> : model.isActive ? <CheckCircle2 size={16} className="shrink-0 text-primary" aria-label="Đang bật"/> : <CircleAlert size={16} className="shrink-0 text-muted-foreground" aria-label="Đã tắt"/>}</div>; }) : <p className="px-4 py-6 text-center text-sm text-muted-foreground">Chưa có model.</p>}</div></article>)}</div>{!entries.length ? <p className="py-10 text-center text-sm text-muted-foreground">Chưa tải được catalog model.</p> : null}</section>;
+  return (
+    <section className="rounded-2xl border bg-card shadow-sm">
+      <header className="flex flex-col gap-3 border-b p-5 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="font-semibold">Model catalog</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {onToggle
+              ? 'Bật hoặc tắt model được phép dùng trong hệ thống.'
+              : 'Trạng thái model được quản lý tại tab Hệ thống.'}
+          </p>
+        </div>
+        <Badge variant="outline">
+          {entries.reduce((total, [, provider]) => total + provider.models.length, 0)} model
+        </Badge>
+      </header>
+      <div className="grid gap-4 p-5 lg:grid-cols-3">
+        {entries.map(([name, provider]) => (
+          <article key={name} className="overflow-hidden rounded-xl border bg-background">
+            <div className="flex items-start justify-between border-b px-4 py-3">
+              <div className="flex items-center gap-2">
+                <span className="grid size-8 place-items-center rounded-lg bg-primary/10 text-primary">
+                  <Bot size={16} />
+                </span>
+                <div>
+                  <h3 className="font-medium capitalize">{name}</h3>
+                  <p className="text-xs text-muted-foreground">{provider.models.length} model</p>
+                </div>
+              </div>
+              <Badge variant={provider.configured ? 'secondary' : 'destructive'}>
+                {provider.configured ? 'Configured' : 'Thiếu key'}
+              </Badge>
+            </div>
+            <div className="divide-y">
+              {provider.models.length ? (
+                provider.models.map((model) => {
+                  const key = `${name}/${model.id}`;
+                  return (
+                    <div key={model.id} className="flex items-center gap-3 px-4 py-3">
+                      <Cpu size={15} className="shrink-0 text-muted-foreground" />
+                      <code className="min-w-0 flex-1 truncate text-xs">{model.displayName}</code>
+                      <Badge variant={model.isActive ? 'secondary' : 'outline'}>
+                        {model.isActive ? 'Đang bật' : 'Đã tắt'}
+                      </Badge>
+                      {onToggle ? (
+                        <Button
+                          size="sm"
+                          variant={model.isActive ? 'outline' : 'default'}
+                          disabled={updatingModel === key}
+                          onClick={() => onToggle(name, model.id, !model.isActive)}
+                        >
+                          {updatingModel === key ? 'Đang lưu...' : model.isActive ? 'Tắt' : 'Bật'}
+                        </Button>
+                      ) : model.isActive ? (
+                        <CheckCircle2 size={16} className="shrink-0 text-primary" aria-label="Đang bật" />
+                      ) : (
+                        <CircleAlert
+                          size={16}
+                          className="shrink-0 text-muted-foreground"
+                          aria-label="Đã tắt"
+                        />
+                      )}
+                    </div>
+                  );
+                })
+              ) : (
+                <p className="px-4 py-6 text-center text-sm text-muted-foreground">Chưa có model.</p>
+              )}
+            </div>
+          </article>
+        ))}
+      </div>
+      {!entries.length ? (
+        <p className="py-10 text-center text-sm text-muted-foreground">Chưa tải được catalog model.</p>
+      ) : null}
+    </section>
+  );
 }

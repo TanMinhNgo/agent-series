@@ -19,7 +19,8 @@ export function LoginPage() {
   const authError = new URLSearchParams(window.location.search).get('authError');
   const startSignIn = () => {
     const returnTo = `${window.location.pathname}${window.location.search}`;
-    if (returnTo !== '/' && !returnTo.startsWith('/login')) sessionStorage.setItem('agent-series.auth-return-to', returnTo);
+    if (returnTo !== '/' && !returnTo.startsWith('/login'))
+      sessionStorage.setItem('agent-series.auth-return-to', returnTo);
     startGoogleSignIn(email);
   };
 

@@ -5,14 +5,28 @@ import type { ComponentType } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { AdminEmpty as Empty, AdminPager as Pager, AdminPanel as Panel } from '@/src/features/admin/components/admin-ui';
+import {
+  AdminEmpty as Empty,
+  AdminPager as Pager,
+  AdminPanel as Panel,
+} from '@/src/features/admin/components/admin-ui';
 import { ModelCatalog } from '@/src/features/admin/components/model-catalog';
 import { useAdminDashboard } from '@/src/features/admin/hooks/use-admin-dashboard';
-import type { AdminAudit as Audit, AdminCredential as Credential, AdminList as List, AdminOverview as Overview, AdminTab as Tab, AdminUser as User } from '@/src/features/admin/types/admin';
+import type {
+  AdminAudit as Audit,
+  AdminCredential as Credential,
+  AdminList as List,
+  AdminOverview as Overview,
+  AdminTab as Tab,
+  AdminUser as User,
+} from '@/src/features/admin/types/admin';
 import { formatAdminDate as date } from '@/src/features/admin/utils/format';
 
 const tabs: { id: Tab; label: string; icon: typeof Activity }[] = [
-  { id: 'overview', label: 'Tổng quan', icon: Activity }, { id: 'users', label: 'Người dùng', icon: Users }, { id: 'system', label: 'Hệ thống', icon: Database }, { id: 'security', label: 'Bảo mật & Audit', icon: ShieldCheck },
+  { id: 'overview', label: 'Tổng quan', icon: Activity },
+  { id: 'users', label: 'Người dùng', icon: Users },
+  { id: 'system', label: 'Hệ thống', icon: Database },
+  { id: 'security', label: 'Bảo mật & Audit', icon: ShieldCheck },
 ];
 
 export function AdminDashboardPage() {
@@ -20,36 +34,444 @@ export function AdminDashboardPage() {
   const [query, setQuery] = useState('');
   const [userPage, setUserPage] = useState(1);
   const [securityPage, setSecurityPage] = useState(1);
-  const { overview, users, credentials, audit, updateUser, updateModel, refresh } = useAdminDashboard({ tab, query, userPage, securityPage });
-  const error = overview.error?.message || users.error?.message || credentials.error?.message || audit.error?.message || updateUser.error?.message || updateModel.error?.message;
+  const { overview, users, credentials, audit, updateUser, updateModel, refresh } = useAdminDashboard({
+    tab,
+    query,
+    userPage,
+    securityPage,
+  });
+  const error =
+    overview.error?.message ||
+    users.error?.message ||
+    credentials.error?.message ||
+    audit.error?.message ||
+    updateUser.error?.message ||
+    updateModel.error?.message;
   const counts = overview.data?.counts;
   const recentAudit = useMemo(() => audit.data?.items.slice(0, 5) || [], [audit.data]);
 
-  return <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 sm:px-8 lg:px-12">
-    <header className="flex flex-col gap-4 border-b pb-6 md:flex-row md:items-end md:justify-between">
-      <div><p className="text-sm font-medium text-primary">System administration</p><h1 className="mt-1 text-3xl font-semibold tracking-tight">Bảng điều khiển hệ thống</h1><p className="mt-2 max-w-2xl text-sm text-muted-foreground">Theo dõi sức khỏe hệ thống, người dùng và các sự kiện vận hành. Dữ liệu được đọc trực tiếp từ API quản trị.</p></div>
-      <Button variant="outline" onClick={refresh} disabled={overview.isFetching}><RefreshCw className={cn(overview.isFetching && 'animate-spin')} /> Làm mới</Button>
-    </header>
-    <nav className="flex gap-1 overflow-x-auto border-b" aria-label="Khu vực quản trị">{tabs.map(({ id, label, icon: Icon }) => <button key={id} type="button" onClick={() => setTab(id)} className={cn('flex shrink-0 items-center gap-2 border-b-2 px-3 py-3 text-sm font-medium transition-colors', tab === id ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground')}><Icon size={16} />{label}</button>)}</nav>
-    {error ? <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</div> : null}
-    {tab === 'overview' ? <OverviewTab counts={counts} worker={overview.data?.worker} providers={overview.data?.providers} audits={recentAudit} loading={overview.isLoading} /> : null}
-    {tab === 'users' ? <UsersTab query={query} onQueryChange={(value) => { setQuery(value); setUserPage(1); }} page={userPage} onPageChange={setUserPage} users={users.data} loading={users.isLoading} updating={updateUser.isPending} onToggle={(user) => { if (window.confirm(`${user.isActive ? 'Vô hiệu hóa' : 'Kích hoạt'} ${user.email}?`)) void updateUser.mutate({ userId: user.id, isActive: !user.isActive }); }} /> : null}
-    {tab === 'system' ? <SystemTab worker={overview.data?.worker} providers={overview.data?.providers} loading={overview.isLoading} updatingModel={updateModel.isPending ? `${updateModel.variables?.provider}/${updateModel.variables?.modelId}` : null} onToggleModel={(provider, modelId, isActive) => { if (window.confirm(`${isActive ? 'Bật' : 'Tắt'} model ${modelId}?`)) void updateModel.mutate({ provider, modelId, isActive }); }} /> : null}
-    {tab === 'security' ? <SecurityTab credentials={credentials.data} audit={audit.data} page={securityPage} onPageChange={setSecurityPage} loading={credentials.isLoading || audit.isLoading} /> : null}
-  </div>;
+  return (
+    <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 sm:px-8 lg:px-12">
+      <header className="flex flex-col gap-4 border-b pb-6 md:flex-row md:items-end md:justify-between">
+        <div>
+          <p className="text-sm font-medium text-primary">System administration</p>
+          <h1 className="mt-1 text-3xl font-semibold tracking-tight">Bảng điều khiển hệ thống</h1>
+          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+            Theo dõi sức khỏe hệ thống, người dùng và các sự kiện vận hành. Dữ liệu được đọc trực tiếp từ API
+            quản trị.
+          </p>
+        </div>
+        <Button variant="outline" onClick={refresh} disabled={overview.isFetching}>
+          <RefreshCw className={cn(overview.isFetching && 'animate-spin')} /> Làm mới
+        </Button>
+      </header>
+      <nav className="flex gap-1 overflow-x-auto border-b" aria-label="Khu vực quản trị">
+        {tabs.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setTab(id)}
+            className={cn(
+              'flex shrink-0 items-center gap-2 border-b-2 px-3 py-3 text-sm font-medium transition-colors',
+              tab === id
+                ? 'border-primary text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <Icon size={16} />
+            {label}
+          </button>
+        ))}
+      </nav>
+      {error ? (
+        <div
+          role="alert"
+          className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive"
+        >
+          {error}
+        </div>
+      ) : null}
+      {tab === 'overview' ? (
+        <OverviewTab
+          counts={counts}
+          worker={overview.data?.worker}
+          providers={overview.data?.providers}
+          audits={recentAudit}
+          loading={overview.isLoading}
+        />
+      ) : null}
+      {tab === 'users' ? (
+        <UsersTab
+          query={query}
+          onQueryChange={(value) => {
+            setQuery(value);
+            setUserPage(1);
+          }}
+          page={userPage}
+          onPageChange={setUserPage}
+          users={users.data}
+          loading={users.isLoading}
+          updating={updateUser.isPending}
+          onToggle={(user) => {
+            if (window.confirm(`${user.isActive ? 'Vô hiệu hóa' : 'Kích hoạt'} ${user.email}?`))
+              void updateUser.mutate({ userId: user.id, isActive: !user.isActive });
+          }}
+        />
+      ) : null}
+      {tab === 'system' ? (
+        <SystemTab
+          worker={overview.data?.worker}
+          providers={overview.data?.providers}
+          loading={overview.isLoading}
+          updatingModel={
+            updateModel.isPending
+              ? `${updateModel.variables?.provider}/${updateModel.variables?.modelId}`
+              : null
+          }
+          onToggleModel={(provider, modelId, isActive) => {
+            if (window.confirm(`${isActive ? 'Bật' : 'Tắt'} model ${modelId}?`))
+              void updateModel.mutate({ provider, modelId, isActive });
+          }}
+        />
+      ) : null}
+      {tab === 'security' ? (
+        <SecurityTab
+          credentials={credentials.data}
+          audit={audit.data}
+          page={securityPage}
+          onPageChange={setSecurityPage}
+          loading={credentials.isLoading || audit.isLoading}
+        />
+      ) : null}
+    </div>
+  );
 }
 
-function OverviewTab({ counts, worker, providers, audits, loading }: { counts?: Overview['counts']; worker?: Overview['worker']; providers?: Overview['providers']; audits: Audit[]; loading: boolean }) {
-  const metrics: { label: string; value: number | undefined; Icon: ComponentType<{ className?: string; size?: number }> }[] = [
-    { label: 'Tổng người dùng', value: counts?.users, Icon: Users }, { label: 'Đang hoạt động', value: counts?.activeUsers, Icon: Activity }, { label: 'Hội thoại', value: counts?.chats, Icon: Activity }, { label: 'Dự án', value: counts?.projects, Icon: Database }, { label: 'Tài liệu RAG', value: counts?.documents, Icon: FileKey },
+function OverviewTab({
+  counts,
+  worker,
+  providers,
+  audits,
+  loading,
+}: {
+  counts?: Overview['counts'];
+  worker?: Overview['worker'];
+  providers?: Overview['providers'];
+  audits: Audit[];
+  loading: boolean;
+}) {
+  const metrics: {
+    label: string;
+    value: number | undefined;
+    Icon: ComponentType<{ className?: string; size?: number }>;
+  }[] = [
+    { label: 'Tổng người dùng', value: counts?.users, Icon: Users },
+    { label: 'Đang hoạt động', value: counts?.activeUsers, Icon: Activity },
+    { label: 'Hội thoại', value: counts?.chats, Icon: Activity },
+    { label: 'Dự án', value: counts?.projects, Icon: Database },
+    { label: 'Tài liệu RAG', value: counts?.documents, Icon: FileKey },
   ];
-  return <div className="space-y-6"><section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">{metrics.map(({ label, value, Icon }) => <Panel key={label} className="p-5"><div className="flex items-start justify-between"><p className="text-sm text-muted-foreground">{label}</p><Icon className="text-primary" size={18} /></div><p className="mt-4 text-3xl font-semibold">{loading ? '—' : value ?? '—'}</p></Panel>)}</section><section className="grid gap-6 lg:grid-cols-[1.05fr_.95fr]"><SystemSummary worker={worker} providers={undefined} /><Panel><div className="border-b p-5"><h2 className="font-semibold">Hoạt động gần đây</h2><p className="mt-1 text-sm text-muted-foreground">Các event mới nhất được audit.</p></div><div className="divide-y">{audits.length ? audits.map((item) => <div key={item.id} className="p-4 text-sm"><div className="flex justify-between gap-3"><strong>{item.eventType}</strong><time className="shrink-0 text-xs text-muted-foreground">{date(item.createdAt)}</time></div><p className="mt-1 text-muted-foreground">{item.actorEmail || 'Hệ thống'} → {item.subjectEmail || 'Hệ thống'}</p><p className="mt-1">{item.summary || '—'}</p></div>) : <Empty>Chưa có sự kiện nào được ghi nhận.</Empty>}</div></Panel></section><ModelCatalog providers={providers} /></div>;
+  return (
+    <div className="space-y-6">
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        {metrics.map(({ label, value, Icon }) => (
+          <Panel key={label} className="p-5">
+            <div className="flex items-start justify-between">
+              <p className="text-sm text-muted-foreground">{label}</p>
+              <Icon className="text-primary" size={18} />
+            </div>
+            <p className="mt-4 text-3xl font-semibold">{loading ? '—' : (value ?? '—')}</p>
+          </Panel>
+        ))}
+      </section>
+      <section className="grid gap-6 lg:grid-cols-[1.05fr_.95fr]">
+        <SystemSummary worker={worker} providers={undefined} />
+        <Panel>
+          <div className="border-b p-5">
+            <h2 className="font-semibold">Hoạt động gần đây</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Các event mới nhất được audit.</p>
+          </div>
+          <div className="divide-y">
+            {audits.length ? (
+              audits.map((item) => (
+                <div key={item.id} className="p-4 text-sm">
+                  <div className="flex justify-between gap-3">
+                    <strong>{item.eventType}</strong>
+                    <time className="shrink-0 text-xs text-muted-foreground">{date(item.createdAt)}</time>
+                  </div>
+                  <p className="mt-1 text-muted-foreground">
+                    {item.actorEmail || 'Hệ thống'} → {item.subjectEmail || 'Hệ thống'}
+                  </p>
+                  <p className="mt-1">{item.summary || '—'}</p>
+                </div>
+              ))
+            ) : (
+              <Empty>Chưa có sự kiện nào được ghi nhận.</Empty>
+            )}
+          </div>
+        </Panel>
+      </section>
+      <ModelCatalog providers={providers} />
+    </div>
+  );
 }
 
-function SystemSummary({ worker, providers }: { worker?: Overview['worker']; providers?: Overview['providers'] }) { return <Panel><div className="border-b p-5"><div className="flex items-center justify-between"><div><h2 className="font-semibold">Tình trạng vận hành</h2><p className="mt-1 text-sm text-muted-foreground">Worker, queue và AI provider.</p></div><Badge variant={worker?.online ? 'default' : 'destructive'}>{worker?.online ? 'Worker online' : 'Worker offline'}</Badge></div></div><div className="grid gap-4 p-5 sm:grid-cols-3">{[['Queued', worker?.queued], ['Running', worker?.running], ['Failed', worker?.failed]].map(([label, value]) => <div key={String(label)} className="rounded-xl bg-muted p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 text-xl font-semibold">{value ?? '—'}</p></div>)}</div><div className="border-t px-5 py-4 text-sm"><p className="text-muted-foreground">Heartbeat: <span className="text-foreground">{date(worker?.lastHeartbeatAt || null)}</span></p>{worker?.lastError ? <p className="mt-3 rounded-lg bg-destructive/10 p-3 text-destructive">{worker.lastError}</p> : null}<div className="mt-4 flex flex-wrap gap-2">{Object.entries(providers || {}).map(([name, provider]) => <Badge key={name} variant={provider.configured ? 'secondary' : 'outline'}>{name}: {provider.configured ? provider.models.join(', ') : 'chưa cấu hình'}</Badge>)}</div></div></Panel>; }
+function SystemSummary({
+  worker,
+  providers,
+}: {
+  worker?: Overview['worker'];
+  providers?: Overview['providers'];
+}) {
+  return (
+    <Panel>
+      <div className="border-b p-5">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="font-semibold">Tình trạng vận hành</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Worker, queue và AI provider.</p>
+          </div>
+          <Badge variant={worker?.online ? 'default' : 'destructive'}>
+            {worker?.online ? 'Worker online' : 'Worker offline'}
+          </Badge>
+        </div>
+      </div>
+      <div className="grid gap-4 p-5 sm:grid-cols-3">
+        {[
+          ['Queued', worker?.queued],
+          ['Running', worker?.running],
+          ['Failed', worker?.failed],
+        ].map(([label, value]) => (
+          <div key={String(label)} className="rounded-xl bg-muted p-3">
+            <p className="text-xs text-muted-foreground">{label}</p>
+            <p className="mt-1 text-xl font-semibold">{value ?? '—'}</p>
+          </div>
+        ))}
+      </div>
+      <div className="border-t px-5 py-4 text-sm">
+        <p className="text-muted-foreground">
+          Heartbeat: <span className="text-foreground">{date(worker?.lastHeartbeatAt || null)}</span>
+        </p>
+        {worker?.lastError ? (
+          <p className="mt-3 rounded-lg bg-destructive/10 p-3 text-destructive">{worker.lastError}</p>
+        ) : null}
+        <div className="mt-4 flex flex-wrap gap-2">
+          {Object.entries(providers || {}).map(([name, provider]) => (
+            <Badge key={name} variant={provider.configured ? 'secondary' : 'outline'}>
+              {name}: {provider.configured ? provider.models.join(', ') : 'chưa cấu hình'}
+            </Badge>
+          ))}
+        </div>
+      </div>
+    </Panel>
+  );
+}
 
-function UsersTab({ query, onQueryChange, page, onPageChange, users, loading, updating, onToggle }: { query: string; onQueryChange: (value: string) => void; page: number; onPageChange: (page: number) => void; users?: List<User>; loading: boolean; updating: boolean; onToggle: (user: User) => void }) { return <Panel><div className="flex flex-col gap-3 border-b p-5 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="font-semibold">Người dùng</h2><p className="mt-1 text-sm text-muted-foreground">Quản lý quyền truy cập, không thể tự vô hiệu hóa system admin.</p></div><input className="workspace-input max-w-xs" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="Tìm theo email..." /></div><div className="overflow-x-auto"><table className="w-full min-w-[680px] text-left text-sm"><thead className="border-b bg-muted/40 text-xs text-muted-foreground"><tr><th className="px-5 py-3">Người dùng</th><th className="px-4 py-3">Vai trò</th><th className="px-4 py-3">Đăng nhập gần nhất</th><th className="px-4 py-3">Trạng thái</th><th className="px-5 py-3 text-right">Thao tác</th></tr></thead><tbody>{loading ? <tr><td colSpan={5}><Empty>Đang tải người dùng...</Empty></td></tr> : users?.items.length ? users.items.map((user) => <tr key={user.id} className="border-b last:border-0"><td className="px-5 py-4"><p className="font-medium">{user.displayName || user.email}</p><p className="text-xs text-muted-foreground">{user.email}</p></td><td className="px-4 py-4"><Badge variant="outline">{user.role}</Badge></td><td className="px-4 py-4 text-muted-foreground">{date(user.lastSignInAt)}</td><td className="px-4 py-4"><Badge variant={user.isActive ? 'secondary' : 'destructive'}>{user.isActive ? 'Active' : 'Inactive'}</Badge></td><td className="px-5 py-4 text-right"><Button size="sm" variant={user.isActive ? 'outline' : 'default'} disabled={updating || user.role === 'system_admin'} onClick={() => onToggle(user)}>{user.isActive ? 'Vô hiệu hóa' : 'Kích hoạt'}</Button></td></tr>) : <tr><td colSpan={5}><Empty>Không tìm thấy người dùng phù hợp.</Empty></td></tr>}</tbody></table></div><Pager page={page} total={users?.total || 0} onChange={onPageChange} /></Panel>; }
+function UsersTab({
+  query,
+  onQueryChange,
+  page,
+  onPageChange,
+  users,
+  loading,
+  updating,
+  onToggle,
+}: {
+  query: string;
+  onQueryChange: (value: string) => void;
+  page: number;
+  onPageChange: (page: number) => void;
+  users?: List<User>;
+  loading: boolean;
+  updating: boolean;
+  onToggle: (user: User) => void;
+}) {
+  return (
+    <Panel>
+      <div className="flex flex-col gap-3 border-b p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="font-semibold">Người dùng</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Quản lý quyền truy cập, không thể tự vô hiệu hóa system admin.
+          </p>
+        </div>
+        <input
+          className="workspace-input max-w-xs"
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          placeholder="Tìm theo email..."
+        />
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[680px] text-left text-sm">
+          <thead className="border-b bg-muted/40 text-xs text-muted-foreground">
+            <tr>
+              <th className="px-5 py-3">Người dùng</th>
+              <th className="px-4 py-3">Vai trò</th>
+              <th className="px-4 py-3">Đăng nhập gần nhất</th>
+              <th className="px-4 py-3">Trạng thái</th>
+              <th className="px-5 py-3 text-right">Thao tác</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td colSpan={5}>
+                  <Empty>Đang tải người dùng...</Empty>
+                </td>
+              </tr>
+            ) : users?.items.length ? (
+              users.items.map((user) => (
+                <tr key={user.id} className="border-b last:border-0">
+                  <td className="px-5 py-4">
+                    <p className="font-medium">{user.displayName || user.email}</p>
+                    <p className="text-xs text-muted-foreground">{user.email}</p>
+                  </td>
+                  <td className="px-4 py-4">
+                    <Badge variant="outline">{user.role}</Badge>
+                  </td>
+                  <td className="px-4 py-4 text-muted-foreground">{date(user.lastSignInAt)}</td>
+                  <td className="px-4 py-4">
+                    <Badge variant={user.isActive ? 'secondary' : 'destructive'}>
+                      {user.isActive ? 'Active' : 'Inactive'}
+                    </Badge>
+                  </td>
+                  <td className="px-5 py-4 text-right">
+                    <Button
+                      size="sm"
+                      variant={user.isActive ? 'outline' : 'default'}
+                      disabled={updating || user.role === 'system_admin'}
+                      onClick={() => onToggle(user)}
+                    >
+                      {user.isActive ? 'Vô hiệu hóa' : 'Kích hoạt'}
+                    </Button>
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={5}>
+                  <Empty>Không tìm thấy người dùng phù hợp.</Empty>
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <Pager page={page} total={users?.total || 0} onChange={onPageChange} />
+    </Panel>
+  );
+}
 
-function SystemTab({ worker, providers, loading, onToggleModel, updatingModel }: { worker?: Overview['worker']; providers?: Overview['providers']; loading: boolean; onToggleModel: (provider: string, modelId: string, isActive: boolean) => void; updatingModel: string | null }) { return <div className="space-y-6"><div className="grid gap-6 lg:grid-cols-2"><SystemSummary worker={worker} providers={undefined} /><Panel className="p-5"><h2 className="font-semibold">Hướng xử lý</h2>{loading ? <Empty>Đang tải trạng thái...</Empty> : <div className="mt-4 space-y-3 text-sm text-muted-foreground"><p>Worker chỉ được xem là online khi heartbeat còn mới. Queue failed cần được xem cùng lỗi gần nhất trước khi retry tài liệu.</p><p>Provider chưa cấu hình sẽ không được sử dụng cho chat; API key người dùng không bao giờ xuất hiện tại đây.</p></div>}</Panel></div><ModelCatalog providers={providers} onToggle={onToggleModel} updatingModel={updatingModel} /></div>; }
+function SystemTab({
+  worker,
+  providers,
+  loading,
+  onToggleModel,
+  updatingModel,
+}: {
+  worker?: Overview['worker'];
+  providers?: Overview['providers'];
+  loading: boolean;
+  onToggleModel: (provider: string, modelId: string, isActive: boolean) => void;
+  updatingModel: string | null;
+}) {
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-6 lg:grid-cols-2">
+        <SystemSummary worker={worker} providers={undefined} />
+        <Panel className="p-5">
+          <h2 className="font-semibold">Hướng xử lý</h2>
+          {loading ? (
+            <Empty>Đang tải trạng thái...</Empty>
+          ) : (
+            <div className="mt-4 space-y-3 text-sm text-muted-foreground">
+              <p>
+                Worker chỉ được xem là online khi heartbeat còn mới. Queue failed cần được xem cùng lỗi gần
+                nhất trước khi retry tài liệu.
+              </p>
+              <p>
+                Provider chưa cấu hình sẽ không được sử dụng cho chat; API key người dùng không bao giờ xuất
+                hiện tại đây.
+              </p>
+            </div>
+          )}
+        </Panel>
+      </div>
+      <ModelCatalog providers={providers} onToggle={onToggleModel} updatingModel={updatingModel} />
+    </div>
+  );
+}
 
-function SecurityTab({ credentials, audit, page, onPageChange, loading }: { credentials?: List<Credential>; audit?: List<Audit>; page: number; onPageChange: (page: number) => void; loading: boolean }) { return <div className="grid gap-6 xl:grid-cols-2"><Panel><div className="border-b p-5"><h2 className="font-semibold">Credential người dùng</h2><p className="mt-1 text-sm text-muted-foreground">Chỉ metadata và key hint được hiển thị.</p></div><div className="divide-y">{loading ? <Empty>Đang tải credential...</Empty> : credentials?.items.length ? credentials.items.map((item) => <div key={item.id} className="p-4 text-sm"><div className="flex items-center justify-between gap-3"><strong>{item.userEmail}</strong><Badge variant="outline">{item.provider}</Badge></div><p className="mt-2 font-mono text-xs text-muted-foreground">{item.keyHint}</p><p className="mt-2 text-xs text-muted-foreground">Xác minh: {date(item.validatedAt)} · Cập nhật: {date(item.updatedAt)}</p></div>) : <Empty>Chưa có credential người dùng.</Empty>}</div><Pager page={page} total={credentials?.total || 0} onChange={onPageChange} /></Panel><Panel><div className="border-b p-5"><h2 className="font-semibold">Audit log</h2><p className="mt-1 text-sm text-muted-foreground">Hành động quan trọng trong hệ thống.</p></div><div className="divide-y">{loading ? <Empty>Đang tải audit log...</Empty> : audit?.items.length ? audit.items.map((item) => <div key={item.id} className="p-4 text-sm"><div className="flex justify-between gap-3"><strong>{item.eventType}</strong><time className="text-xs text-muted-foreground">{date(item.createdAt)}</time></div><p className="mt-1 text-muted-foreground">{item.actorEmail || 'Hệ thống'} → {item.subjectEmail || 'Hệ thống'}</p><p className="mt-1">{item.summary || '—'}</p></div>) : <Empty>Chưa có audit log.</Empty>}</div><Pager page={page} total={audit?.total || 0} onChange={onPageChange} /></Panel></div>; }
+function SecurityTab({
+  credentials,
+  audit,
+  page,
+  onPageChange,
+  loading,
+}: {
+  credentials?: List<Credential>;
+  audit?: List<Audit>;
+  page: number;
+  onPageChange: (page: number) => void;
+  loading: boolean;
+}) {
+  return (
+    <div className="grid gap-6 xl:grid-cols-2">
+      <Panel>
+        <div className="border-b p-5">
+          <h2 className="font-semibold">Credential người dùng</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Chỉ metadata và key hint được hiển thị.</p>
+        </div>
+        <div className="divide-y">
+          {loading ? (
+            <Empty>Đang tải credential...</Empty>
+          ) : credentials?.items.length ? (
+            credentials.items.map((item) => (
+              <div key={item.id} className="p-4 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <strong>{item.userEmail}</strong>
+                  <Badge variant="outline">{item.provider}</Badge>
+                </div>
+                <p className="mt-2 font-mono text-xs text-muted-foreground">{item.keyHint}</p>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Xác minh: {date(item.validatedAt)} · Cập nhật: {date(item.updatedAt)}
+                </p>
+              </div>
+            ))
+          ) : (
+            <Empty>Chưa có credential người dùng.</Empty>
+          )}
+        </div>
+        <Pager page={page} total={credentials?.total || 0} onChange={onPageChange} />
+      </Panel>
+      <Panel>
+        <div className="border-b p-5">
+          <h2 className="font-semibold">Audit log</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Hành động quan trọng trong hệ thống.</p>
+        </div>
+        <div className="divide-y">
+          {loading ? (
+            <Empty>Đang tải audit log...</Empty>
+          ) : audit?.items.length ? (
+            audit.items.map((item) => (
+              <div key={item.id} className="p-4 text-sm">
+                <div className="flex justify-between gap-3">
+                  <strong>{item.eventType}</strong>
+                  <time className="text-xs text-muted-foreground">{date(item.createdAt)}</time>
+                </div>
+                <p className="mt-1 text-muted-foreground">
+                  {item.actorEmail || 'Hệ thống'} → {item.subjectEmail || 'Hệ thống'}
+                </p>
+                <p className="mt-1">{item.summary || '—'}</p>
+              </div>
+            ))
+          ) : (
+            <Empty>Chưa có audit log.</Empty>
+          )}
+        </div>
+        <Pager page={page} total={audit?.total || 0} onChange={onPageChange} />
+      </Panel>
+    </div>
+  );
+}
