@@ -19,6 +19,7 @@ export const useGetChats = () => {
     queryFn: ({ pageParam }) =>
       request<ChatPage>({ url: '/chats', params: { offset: pageParam, limit: CHAT_PAGE_SIZE } }),
     getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
+    refetchInterval: 15_000,
   });
 
   return {

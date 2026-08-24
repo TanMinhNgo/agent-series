@@ -5,6 +5,7 @@ import {
   Check,
   Copy,
   GitBranch,
+  Globe,
   MoreHorizontal,
   RefreshCw,
   Share2,
@@ -30,14 +31,14 @@ import type { Message } from '@/src/types';
 import { markdownToPlainText } from '@/lib/markdown-to-plain-text';
 import { cn } from '@/lib/utils';
 
-type Source = { name: string; url: string };
+type Source = { name: string; url: string; kind?: 'library' | 'external' };
 type FeedbackKind = 'helpful' | 'incorrect' | 'too_long' | 'too_short' | 'unclear' | 'wrong_style';
 
 function sourcesIn(content: string): Source[] {
   const seen = new Set<string>();
   const matches = [...content.matchAll(/\[([^\]]+)\]\((\/api\/documents\/[^)#]+(?:#[^)]+)?)\)/g)];
   return matches
-    .map((match) => ({ name: match[1], url: match[2] }))
+    .map((match) => ({ name: match[1], url: match[2], kind: 'library' as const }))
     .filter((source) => (seen.has(source.url) ? false : (seen.add(source.url), true)));
 }
 
@@ -68,6 +69,12 @@ export function AssistantMessageActions({
     [message.content, message.sources],
   );
   const savedFeedbackKind = message.feedbackKind || null;
+  const librarySources = sources.filter(
+    (source) => source.kind === 'library' || (!source.kind && source.url.startsWith('/api/documents/')),
+  );
+  const externalSources = sources.filter(
+    (source) => source.kind === 'external' || (!source.kind && source.url.startsWith('https://')),
+  );
 
   const copy = async () => {
     await navigator.clipboard?.writeText(markdownToPlainText(message.content));
@@ -269,28 +276,45 @@ export function AssistantMessageActions({
       {sourcesOpen ? (
         <Modal title="Nguồn của phản hồi" onClose={() => setSourcesOpen(false)}>
           {sources.length ? (
-            <ul className="space-y-2">
-              {sources.map((source) => (
-                <li key={source.url}>
-                  <a
-                    className="text-sm text-primary underline underline-offset-4"
-                    href={source.url}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {source.name}
-                  </a>
-                </li>
-              ))}
-            </ul>
+            <div className="space-y-5">
+              {librarySources.length ? (
+                <SourceGroup icon={<BookOpen />} title="Từ Thư viện" sources={librarySources} />
+              ) : null}
+              {externalSources.length ? (
+                <SourceGroup icon={<Globe />} title="Từ web" sources={externalSources} />
+              ) : null}
+            </div>
           ) : (
-            <p className="text-sm text-muted-foreground">
-              Phản hồi này không có nguồn tài liệu RAG được trích dẫn.
-            </p>
+            <p className="text-sm text-muted-foreground">Phản hồi này không có nguồn được trích dẫn.</p>
           )}
         </Modal>
       ) : null}
     </>
+  );
+}
+
+function SourceGroup({ icon, title, sources }: { icon: ReactNode; title: string; sources: Source[] }) {
+  return (
+    <section>
+      <h3 className="mb-2 flex items-center gap-2 text-sm font-medium">
+        {icon}
+        {title}
+      </h3>
+      <ul className="space-y-2">
+        {sources.map((source) => (
+          <li key={source.url}>
+            <a
+              className="text-sm text-primary underline underline-offset-4"
+              href={source.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {source.name}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

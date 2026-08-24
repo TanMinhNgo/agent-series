@@ -6,6 +6,7 @@ export type Chat = {
   updatedAt: string;
   pinned: boolean;
   archived: boolean;
+  isUnread: boolean;
   contextSourceChatId: string | null;
   projectId: string | null;
   parentChatId: string | null;

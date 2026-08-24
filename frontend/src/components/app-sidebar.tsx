@@ -405,6 +405,12 @@ function ChatRow({ chat, projects, active, onSelect, onRename, onUpdate, onDelet
         className="sidebar-chat-item min-w-0 flex-1 justify-start truncate"
         onClick={() => onSelect(chat)}
       >
+        {chat.isUnread ? (
+          <span
+            className="mr-2 size-2 shrink-0 rounded-full bg-primary shadow-[0_0_10px_hsl(var(--primary))]"
+            aria-label="Chat AI mới, chưa đọc"
+          />
+        ) : null}
         {chat.pinned ? <Pin className="mr-1.5 shrink-0" size={13} /> : null}
         {chat.title || 'Cuộc trò chuyện mới'}
       </Button>

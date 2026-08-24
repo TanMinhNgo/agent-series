@@ -13,11 +13,12 @@ from agent_core.library import LibraryService
 from agent_core.media import MediaService
 from agent_core.memory import MemoryService
 from agent_core.personalization import PersonalizationService
+from agent_core.web_search import WebSearchService
 from agent_core.google_workspace import GoogleWorkspaceService
 from agent_core.auth import AuthService
 from agent_core.credentials import UserCredentialService
 from agent_core.plugin_execution import connected_read_tools
-from agent_core.storage import AuthRepository, BackgroundJobRepository, ChatRepository, ConnectorRepository, Database, MediaRepository, ModelRegistryRepository, Schedule, ScheduleRepository, WorkspaceRepository
+from agent_core.storage import AuthRepository, BackgroundJobRepository, Chat, ChatRepository, ConnectorRepository, Database, MediaRepository, ModelRegistryRepository, Schedule, ScheduleRepository, WorkspaceRepository, current_user_id
 
 
 class ScheduleWorker:
@@ -41,17 +42,22 @@ class ScheduleWorker:
         self.execute(schedule, run.id)
         return True
 
+    def ensure_chat(self, schedule: Schedule) -> Chat:
+        chat = self.services.chats.get(schedule.chat_id) if schedule.chat_id else None
+        if chat is not None:
+            return chat
+        chat = self.services.chats.create(self.services.settings.provider, self.services.settings.active_model)
+        chat = self.services.chats.update(chat.id, title=f"Lịch: {schedule.title}") or chat
+        self.runs.attach_chat(schedule.id, chat.id)
+        return chat
+
     def execute(self, schedule: Schedule, run_id: str) -> None:
+        user_token = current_user_id.set(schedule.user_id)
         try:
-            chat_id = schedule.chat_id
-            if not chat_id:
-                chat = self.services.chats.create(self.services.settings.provider, self.services.settings.active_model)
-                chat = self.services.chats.update(chat.id, title=f"Lịch: {schedule.title}") or chat
-                self.runs.attach_chat(schedule.id, chat.id)
-                chat_id = chat.id
-            chat = self.services.chats.get(chat_id)
-            if chat is None:
-                raise RuntimeError("Không thể mở chat của lịch trình.")
+            # ContextVar values do not cross into worker threads. Restore the
+            # owner so user-scoped repositories can access this schedule's chat.
+            # An old ownerless linked chat is safely replaced on its next run.
+            chat = self.ensure_chat(schedule)
             try:
                 memory_context = self.services.memory.recall(
                     schedule.prompt or schedule.title, chat.id, chat.context_source_chat_id
@@ -76,10 +82,13 @@ class ScheduleWorker:
             for item in saved_history[len(full_history):]:
                 item.setdefault("created_at", turn_created_at)
             self.services.chats.replace_history(chat.id, saved_history)
+            self.services.chats.set_unread(chat.id, True)
             BackgroundJobRepository(self.services.chats.database).enqueue("memory_index", {"chat_id": chat.id})
             self.runs.finish(run_id, summary=result.text[:500])
         except Exception as exc:  # noqa: BLE001
             self.runs.finish(run_id, error=str(exc))
+        finally:
+            current_user_id.reset(user_token)
 
 
 def build_worker() -> ScheduleWorker:
@@ -103,6 +112,7 @@ def build_worker() -> ScheduleWorker:
         model_registry=model_registry,
         credentials=UserCredentialService(auth_repository, settings),
         personalization=PersonalizationService(database),
+        web_search=WebSearchService(settings.tavily_api_key),
     )
     queue_pending_artifacts(services)
     return ScheduleWorker(services)

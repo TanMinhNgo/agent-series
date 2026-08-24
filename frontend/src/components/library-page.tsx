@@ -25,6 +25,8 @@ export function LibraryPage() {
   const [assetProjectId, setAssetProjectId] = useState('');
   const [pinningAssetId, setPinningAssetId] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState<LibraryAsset | null>(null);
+  const [renamingAsset, setRenamingAsset] = useState<LibraryAsset | null>(null);
+  const [assetName, setAssetName] = useState('');
   const [versioningId, setVersioningId] = useState<string | null>(null);
   const [uploadErrors, setUploadErrors] = useState<{ name: string; message: string }[]>([]);
   const [collectionProjectId, setCollectionProjectId] = useState('');
@@ -79,6 +81,18 @@ export function LibraryPage() {
     deleteMemory.error ||
     reindex.error ||
     deleteDocument.error;
+  const openRenameAsset = (asset: LibraryAsset) => {
+    updateAsset.reset();
+    setAssetName(asset.name);
+    setRenamingAsset(asset);
+  };
+  const saveAssetName = () => {
+    if (!renamingAsset || !assetName.trim() || assetName.trim() === renamingAsset.name) return;
+    updateAsset.mutate(
+      { id: renamingAsset.id, data: { name: assetName.trim() } },
+      { onSuccess: () => setRenamingAsset(null) },
+    );
+  };
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-7 sm:px-8 lg:px-12">
       <header className="flex flex-col gap-4 border-b pb-6 sm:flex-row sm:items-end sm:justify-between">
@@ -269,11 +283,7 @@ export function LibraryPage() {
                   <Button
                     size="icon-sm"
                     variant="ghost"
-                    onClick={() => {
-                      const name = window.prompt('Tên artifact', item.name);
-                      if (name?.trim() && name !== item.name)
-                        updateAsset.mutate({ id: item.id, data: { name } });
-                    }}
+                    onClick={() => openRenameAsset(item)}
                     aria-label={`Đổi tên ${item.name}`}
                   >
                     <Pencil />
@@ -571,7 +581,7 @@ export function LibraryPage() {
           role="dialog"
           aria-modal="true"
         >
-          <section className="max-h-[90dvh] w-full max-w-3xl overflow-auto rounded-2xl border bg-card p-5 shadow-2xl">
+          <section className="max-h-[94dvh] w-[96vw] max-w-[1280px] overflow-auto rounded-2xl border bg-card p-5 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h2 className="font-semibold">
@@ -594,7 +604,7 @@ export function LibraryPage() {
                 />
               ) : preview.data?.kind === 'pdf' ? (
                 <iframe
-                  className="h-[70dvh] w-full rounded border bg-white"
+                  className="h-[76dvh] w-full rounded border bg-white"
                   src={previewing.url}
                   title={`Preview ${previewing.name}`}
                 />
@@ -643,6 +653,60 @@ export function LibraryPage() {
               </div>
             </div>
           </section>
+        </div>
+      ) : null}
+      {renamingAsset ? (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="rename-asset-title"
+        >
+          <form
+            className="w-full max-w-md rounded-2xl border bg-card p-5 shadow-2xl"
+            onSubmit={(event) => {
+              event.preventDefault();
+              saveAssetName();
+            }}
+          >
+            <h2 id="rename-asset-title" className="font-semibold">
+              Đổi tên tài liệu
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">Tên mới sẽ áp dụng cho file trong Thư viện.</p>
+            <label className="mt-4 block text-sm font-medium" htmlFor="asset-name">
+              Tên tài liệu
+            </label>
+            <input
+              id="asset-name"
+              autoFocus
+              className="mt-2 w-full rounded-lg border bg-background px-3 py-2 text-sm"
+              value={assetName}
+              onChange={(event) => setAssetName(event.target.value)}
+              maxLength={255}
+              required
+            />
+            {updateAsset.error ? (
+              <p className="mt-2 text-sm text-destructive">{updateAsset.error.message}</p>
+            ) : null}
+            <div className="mt-5 flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setRenamingAsset(null)}
+                disabled={updateAsset.isPending}
+              >
+                Hủy
+              </Button>
+              <Button
+                type="submit"
+                disabled={
+                  updateAsset.isPending || !assetName.trim() || assetName.trim() === renamingAsset.name
+                }
+              >
+                {updateAsset.isPending ? 'Đang lưu...' : 'Lưu tên'}
+              </Button>
+            </div>
+          </form>
         </div>
       ) : null}
     </div>

@@ -26,5 +26,12 @@ export const useChatActions = () => {
       queryClient.removeQueries({ queryKey: queryKeys.messages(chatId) });
     },
   });
-  return { update, remove };
+  const markRead = useMutation({
+    mutationFn: (chatId: string) => request<Chat>({ url: `/chats/${chatId}/read`, method: 'POST' }),
+    onSuccess: (chat) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.chats });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.chat(chat.id) });
+    },
+  });
+  return { update, remove, markRead };
 };

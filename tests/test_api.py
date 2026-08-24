@@ -36,6 +36,7 @@ from agent_core.memory import MemoryService
 from agent_core.knowledge import ALLOWED_DOCUMENT_SUFFIXES, build_knowledge_tool, extract_document_parts
 from agent_core.credentials import CredentialError, UserCredentialService
 from agent_core.storage import Chat, Plugin, Schedule, ScheduleRepository, current_user_id, document_scope_key, utc_now
+from agent_core.scheduler import ScheduleWorker
 
 
 def test_message_json_exposes_message_creation_time() -> None:
@@ -50,6 +51,106 @@ def test_message_json_exposes_message_creation_time() -> None:
 
 def test_utc_now_is_timezone_aware() -> None:
     assert utc_now().tzinfo is UTC
+
+
+def test_chat_json_exposes_unread_state() -> None:
+    chat = SimpleNamespace(
+        id="chat-1",
+        title="Lịch: học frontend",
+        provider="openai",
+        model="gpt-test",
+        created_at=datetime(2026, 8, 24, tzinfo=UTC),
+        updated_at=datetime(2026, 8, 24, tzinfo=UTC),
+        pinned=False,
+        archived=False,
+        is_unread=True,
+        context_source_chat_id=None,
+        project_id=None,
+        parent_chat_id=None,
+        branch_from_position=None,
+        collection_id=None,
+    )
+
+    assert main_module.chat_json(chat)["isUnread"] is True
+
+
+def test_schedule_worker_restores_owner_and_replaces_legacy_chat(monkeypatch) -> None:
+    observed: list[str | None] = []
+    created: list[Chat] = []
+
+    class Chats:
+        database = object()
+
+        def get(self, chat_id):
+            observed.append(current_user_id.get())
+            # The prior bug left this ownerless chat linked to the schedule.
+            return None if chat_id == "legacy-chat" else created[0] if created else None
+
+        def create(self, provider, model):
+            observed.append(current_user_id.get())
+            chat = Chat(id="replacement-chat", user_id="user-1", provider=provider, model=model)
+            created.append(chat)
+            return chat
+
+        def update(self, _chat_id, **_values):
+            observed.append(current_user_id.get())
+            return created[0]
+
+        def history(self, _chat_id):
+            observed.append(current_user_id.get())
+            return []
+
+        def replace_history(self, _chat_id, history):
+            observed.append(current_user_id.get())
+            assert [item["role"] for item in history] == ["user", "assistant"]
+
+        def set_unread(self, chat_id, unread):
+            observed.append(current_user_id.get())
+            assert (chat_id, unread) == ("replacement-chat", True)
+            return created[0]
+
+    class Runs:
+        def attach_chat(self, schedule_id, chat_id):
+            observed.append(current_user_id.get())
+            assert (schedule_id, chat_id) == ("schedule-1", "replacement-chat")
+
+        def finish(self, _run_id, **_values):
+            observed.append(current_user_id.get())
+
+    class AgentStub:
+        history: list[dict] = []
+
+        def run(self, prompt):
+            assert prompt == "Dạy frontend"
+            self.history = [
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": "Bài học đã sẵn sàng."},
+            ]
+            return SimpleNamespace(text="Bài học đã sẵn sàng.", content_blocks=[])
+
+    services = SimpleNamespace(
+        chats=Chats(),
+        settings=SimpleNamespace(provider="openai", active_model="gpt-test"),
+        memory=SimpleNamespace(recall=lambda *_args: ""),
+        workspace=SimpleNamespace(list_plugins=lambda: []),
+    )
+    worker = ScheduleWorker(services)
+    worker.runs = Runs()
+    monkeypatch.setattr("agent_core.scheduler.make_agent", lambda *_args, **_kwargs: AgentStub())
+    monkeypatch.setattr("agent_core.scheduler.connected_read_tools", lambda _plugins: [])
+    monkeypatch.setattr("agent_core.scheduler.BackgroundJobRepository", lambda _database: SimpleNamespace(enqueue=lambda *_args, **_kwargs: None))
+    schedule = Schedule(
+        id="schedule-1",
+        user_id="user-1",
+        title="Củng cố frontend",
+        prompt="Dạy frontend",
+        chat_id="legacy-chat",
+    )
+
+    worker.execute(schedule, "run-1")
+
+    assert created and all(user_id == "user-1" for user_id in observed)
+    assert current_user_id.get() is None
 
 
 def test_health_and_public_config_do_not_expose_provider_keys(monkeypatch) -> None:
@@ -76,7 +177,20 @@ def test_detach_response_sources_keeps_inline_answer_text_and_deduplicates_sourc
     visible, sources = detach_response_sources(content)
 
     assert visible == "RAG truy hồi tài liệu trước khi sinh câu trả lời."
-    assert sources == [{"name": "rag.md", "url": "/api/documents/rag/file#đoạn-1"}]
+    assert sources == [{"name": "rag.md", "url": "/api/documents/rag/file#đoạn-1", "kind": "library"}]
+
+
+def test_detach_response_sources_combines_safe_web_sources() -> None:
+    visible, sources = detach_response_sources(
+        "Nội dung từ web.",
+        [
+            {"name": "Tài liệu chính thức", "url": "https://example.com/docs", "kind": "external"},
+            {"name": "Không an toàn", "url": "http://example.com", "kind": "external"},
+        ],
+    )
+
+    assert visible == "Nội dung từ web."
+    assert sources == [{"name": "Tài liệu chính thức", "url": "https://example.com/docs", "kind": "external"}]
 
 
 def test_detach_response_sources_keeps_response_without_document_citations() -> None:

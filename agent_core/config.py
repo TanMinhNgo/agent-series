@@ -53,6 +53,7 @@ class Settings:
     database_url: str
     embedding_model: str
     hf_token: str
+    tavily_api_key: str
     knowledge_dir: Path
     media_dir: Path
     provider_models: dict[str, tuple[str, ...]]
@@ -161,6 +162,7 @@ def load_settings() -> Settings:
         # the environment; retain it here too so all runtime configuration has
         # one explicit, discoverable contract.
         hf_token=os.getenv("HF_TOKEN", "").strip(),
+        tavily_api_key=os.getenv("TAVILY_API_KEY", "").strip(),
         knowledge_dir=(PROJECT_ROOT / os.getenv("KNOWLEDGE_DIR", "knowledge").strip()).resolve(),
         media_dir=(PROJECT_ROOT / os.getenv("MEDIA_DIR", "uploads").strip()).resolve(),
         provider_models={

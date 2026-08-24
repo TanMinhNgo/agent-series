@@ -59,6 +59,12 @@ type ChatWorkspaceProps = {
 const NEW_CHAT_SELECTION_KEY = 'agent-series.new-chat-selection';
 
 type DraftSelection = { provider: string; model: string };
+type TemplateDraft = {
+  id?: string;
+  name: string;
+  content: string;
+  projectId: string | null;
+};
 
 function savedNewChatSelection(): DraftSelection {
   try {
@@ -101,6 +107,7 @@ export function ChatWorkspace({
   const [runwayChatId, setRunwayChatId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [shareChat, setShareChat] = useState<Chat | null>(null);
+  const [templateDraft, setTemplateDraft] = useState<TemplateDraft | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   // React state updates asynchronously, so `streamChat.isPending` alone cannot
   // stop an Enter key and a click (or two rapid clicks) from starting two turns.
@@ -142,6 +149,12 @@ export function ChatWorkspace({
     : draftModels[0] || config.data?.defaultModel || draftSelection.model;
 
   useEffect(() => {
+    if (activeChat?.isUnread && !chatActions.markRead.isPending) {
+      chatActions.markRead.mutate(activeChat.id);
+    }
+  }, [activeChat?.id, activeChat?.isUnread, chatActions.markRead]);
+
+  useEffect(() => {
     document.documentElement.classList.toggle(
       'dark',
       theme === 'dark' || (theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches),
@@ -163,6 +176,32 @@ export function ChatWorkspace({
     uploadMedia.error?.message ||
     streamChat.error?.message ||
     null;
+  const openTemplateEditor = (draft: TemplateDraft) => {
+    saveTemplate.reset();
+    updateTemplate.reset();
+    setTemplateDraft(draft);
+  };
+  const saveTemplateDraft = async () => {
+    if (!templateDraft) return;
+    const name = templateDraft.name.trim();
+    const content = templateDraft.content.trim();
+    if (!name || !content) return;
+    try {
+      if (templateDraft.id) {
+        await updateTemplate.mutateAsync({
+          id: templateDraft.id,
+          name,
+          content,
+          projectId: templateDraft.projectId,
+        });
+      } else {
+        await saveTemplate.mutateAsync({ name, content });
+      }
+      setTemplateDraft(null);
+    } catch {
+      // The modal renders the mutation error and keeps the entered values.
+    }
+  };
   const startNewChat = () => {
     setUiError(null);
     setPrompt('');
@@ -520,18 +559,10 @@ export function ChatWorkspace({
                   onSubmit={(content, attachments) => void send(content, attachments)}
                   templates={templates.data || []}
                   onSelectTemplate={(content) => setPrompt(content)}
-                  onSaveTemplate={(name, content) => saveTemplate.mutate({ name, content })}
-                  onEditTemplate={(template) => {
-                    const name = window.prompt('Tên template', template.name);
-                    const content = name ? window.prompt('Nội dung template', template.content) : null;
-                    if (name?.trim() && content?.trim())
-                      updateTemplate.mutate({
-                        id: template.id,
-                        name,
-                        content,
-                        projectId: template.projectId,
-                      });
-                  }}
+                  onSaveTemplate={(content) =>
+                    openTemplateEditor({ name: '', content, projectId: activeChat?.projectId || null })
+                  }
+                  onEditTemplate={(template) => openTemplateEditor(template)}
                   onDeleteTemplate={(id) => deleteTemplate.mutate(id)}
                 />
               </div>
@@ -543,6 +574,72 @@ export function ChatWorkspace({
         <Suspense fallback={null}>
           <ChatShareDialog chat={shareChat} onClose={() => setShareChat(null)} />
         </Suspense>
+      ) : null}
+      {templateDraft ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <form
+            className="w-full max-w-xl rounded-xl border bg-background p-5 shadow-xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="template-editor-title"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveTemplateDraft();
+            }}
+          >
+            <h2 id="template-editor-title" className="text-lg font-semibold">
+              {templateDraft.id ? 'Sửa template' : 'Lưu prompt thành template'}
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Lưu lại để dùng nhanh trong những cuộc trò chuyện sau.
+            </p>
+            <label className="mt-5 block text-sm font-medium" htmlFor="template-name">
+              Tên template
+            </label>
+            <input
+              id="template-name"
+              autoFocus
+              required
+              value={templateDraft.name}
+              onChange={(event) =>
+                setTemplateDraft((draft) => (draft ? { ...draft, name: event.target.value } : draft))
+              }
+              className="mt-2 w-full rounded-md border bg-transparent px-3 py-2 outline-none ring-ring focus:ring-2"
+              placeholder="Ví dụ: Tóm tắt tài liệu"
+            />
+            <label className="mt-4 block text-sm font-medium" htmlFor="template-content">
+              Nội dung
+            </label>
+            <textarea
+              id="template-content"
+              required
+              value={templateDraft.content}
+              onChange={(event) =>
+                setTemplateDraft((draft) => (draft ? { ...draft, content: event.target.value } : draft))
+              }
+              className="mt-2 min-h-40 w-full resize-y rounded-md border bg-transparent px-3 py-2 outline-none ring-ring focus:ring-2"
+              placeholder="Nhập nội dung prompt..."
+            />
+            {saveTemplate.error?.message || updateTemplate.error?.message ? (
+              <p className="mt-3 text-sm text-destructive">
+                {saveTemplate.error?.message || updateTemplate.error?.message}
+              </p>
+            ) : null}
+            <div className="mt-5 flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setTemplateDraft(null)}
+                disabled={saveTemplate.isPending || updateTemplate.isPending}
+              >
+                Hủy
+              </Button>
+              <Button type="submit" disabled={saveTemplate.isPending || updateTemplate.isPending}>
+                {saveTemplate.isPending || updateTemplate.isPending ? 'Đang lưu...' : 'Lưu template'}
+              </Button>
+            </div>
+          </form>
+        </div>
       ) : null}
     </main>
   );

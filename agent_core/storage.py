@@ -144,6 +144,7 @@ class Chat(UserOwned, Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     pinned: Mapped[bool] = mapped_column(Boolean, default=False)
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_unread: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     context_source_chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id", ondelete="SET NULL"), nullable=True)
     project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
     parent_chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id", ondelete="SET NULL"), nullable=True, index=True)
@@ -659,6 +660,15 @@ class ChatRepository:
             chat.updated_at = utc_now()
             session.commit()
 
+    def set_unread(self, chat_id: str, unread: bool) -> Chat | None:
+        with self.database.session() as session:
+            chat = session.get(Chat, chat_id)
+            if chat is None:
+                return None
+            chat.is_unread = unread
+            session.commit()
+            return chat
+
     def update_model(self, chat_id: str, provider: str, model: str) -> None:
         with self.database.session() as session:
             chat = session.get(Chat, chat_id)
@@ -1113,7 +1123,13 @@ class ScheduleRepository:
                 scheduled_for = schedule.next_run_at
                 if scheduled_for is None:
                     continue
-                run = ScheduleRun(schedule_id=schedule.id, scheduled_for=scheduled_for, status="running", started_at=now)
+                run = ScheduleRun(
+                    schedule_id=schedule.id,
+                    scheduled_for=scheduled_for,
+                    status="running",
+                    started_at=now,
+                    user_id=schedule.user_id,
+                )
                 session.add(run)
                 schedule.last_run_at = now
                 schedule.next_run_at = self.next_run_after(schedule, now)
@@ -1129,7 +1145,13 @@ class ScheduleRepository:
             schedule = session.get(Schedule, schedule_id, with_for_update=True)
             if schedule is None:
                 return None
-            run = ScheduleRun(schedule_id=schedule.id, scheduled_for=now, status="running", started_at=now)
+            run = ScheduleRun(
+                schedule_id=schedule.id,
+                scheduled_for=now,
+                status="running",
+                started_at=now,
+                user_id=schedule.user_id,
+            )
             session.add(run)
             schedule.last_run_at, schedule.updated_at = now, now
             session.commit()

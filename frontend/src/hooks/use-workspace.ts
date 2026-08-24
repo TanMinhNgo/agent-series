@@ -55,6 +55,7 @@ export const useWorkspace = () => {
   const schedules = useQuery({
     queryKey: queryKeys.schedules,
     queryFn: () => request<Schedule[]>({ url: endpoints.schedule.url }),
+    refetchInterval: 15_000,
   });
   const plugins = useQuery({
     queryKey: queryKeys.plugins,
@@ -94,7 +95,7 @@ export const useWorkspace = () => {
   const scheduleActions = useResourceActions<ScheduleInput>('schedule');
   const runScheduleNow = useMutation({
     mutationFn: (id: string) =>
-      request<{ status: string }>({ url: `/schedules/${id}/run-now`, method: 'POST' }),
+      request<{ status: string; chatId: string }>({ url: `/schedules/${id}/run-now`, method: 'POST' }),
     onSuccess: (_, id) => {
       void client.invalidateQueries({ queryKey: queryKeys.schedules });
       void client.invalidateQueries({ queryKey: ['schedule-runs', id] });

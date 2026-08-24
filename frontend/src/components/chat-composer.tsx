@@ -7,7 +7,7 @@ type Props = {
   onSubmit: (content: string, files: File[]) => void;
   templates?: { id: string; name: string; content: string; projectId: string | null }[];
   onSelectTemplate?: (content: string) => void;
-  onSaveTemplate?: (name: string, content: string) => void;
+  onSaveTemplate?: (content: string) => void;
   onEditTemplate?: (template: {
     id: string;
     name: string;
@@ -63,10 +63,7 @@ export function ChatComposer({
         <button
           type="button"
           className="mb-2 text-xs text-muted-foreground hover:underline"
-          onClick={() => {
-            const name = window.prompt('Tên template');
-            if (name?.trim()) onSaveTemplate?.(name.trim(), prompt);
-          }}
+          onClick={() => onSaveTemplate?.(prompt)}
         >
           Lưu prompt thành template
         </button>

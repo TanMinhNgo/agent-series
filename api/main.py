@@ -40,6 +40,7 @@ from agent_core.providers import build_client
 from agent_core.storage import ArtifactChunk, AuthRepository, BackgroundJob, BackgroundJobRepository, Chat, ChatMessage, ChatRepository, ChatShare, ConnectorRepository, Database, Document, KnowledgeCollection, LibraryAsset, MediaAttachment, MediaRepository, ModelRegistryRepository, Plugin, Project, PromptTemplate, Schedule, ScheduleRepository, ScheduleRun, WorkspaceRepository, current_user_id
 from agent_core.auth import AuthError, AuthService, SESSION_COOKIE
 from agent_core.tools import ToolSpec, build_default_registry
+from agent_core.web_search import WebSearchService, build_web_search_tool, sources_from_web_steps
 
 
 @dataclass
@@ -57,6 +58,7 @@ class Services:
     model_registry: ModelRegistryRepository
     credentials: UserCredentialService
     personalization: PersonalizationService
+    web_search: WebSearchService
 
 
 class CreateChatRequest(BaseModel):
@@ -226,6 +228,7 @@ def chat_json(chat: Chat) -> dict[str, Any]:
         "updatedAt": chat.updated_at.isoformat(),
         "pinned": chat.pinned,
         "archived": chat.archived,
+        "isUnread": bool(getattr(chat, "is_unread", False)),
         "contextSourceChatId": chat.context_source_chat_id,
         "projectId": getattr(chat, "project_id", None),
         "parentChatId": getattr(chat, "parent_chat_id", None),
@@ -285,13 +288,18 @@ SOURCE_LABEL_ONLY_PATTERN = re.compile(
 )
 
 
-def detach_response_sources(content: str) -> tuple[str, list[dict[str, str]]]:
+def detach_response_sources(content: str, external_sources: list[dict[str, str]] | None = None) -> tuple[str, list[dict[str, str]]]:
     """Move document links out of the visible answer into the message source menu."""
     sources: list[dict[str, str]] = []
     seen: set[str] = set()
     for name, url in SOURCE_LINK_PATTERN.findall(content):
         if url not in seen:
-            sources.append({"name": name, "url": url})
+            sources.append({"name": name, "url": url, "kind": "library"})
+            seen.add(url)
+    for source in external_sources or []:
+        url = source.get("url", "")
+        if url.startswith("https://") and url not in seen:
+            sources.append({"name": source.get("name", url), "url": url, "kind": "external"})
             seen.add(url)
     if not sources:
         return content, []
@@ -305,7 +313,7 @@ def detach_response_sources(content: str) -> tuple[str, list[dict[str, str]]]:
             continue
         lines.append(cleaned_line)
     cleaned = "\n".join(lines).strip()
-    return cleaned or "Đã sử dụng tài liệu trong Thư viện để trả lời.", sources
+    return cleaned or "Đã sử dụng nguồn để trả lời.", sources
 
 
 def template_json(item: PromptTemplate) -> dict[str, Any]:
@@ -396,13 +404,18 @@ def make_agent(
         parameters={"type": "object", "properties": {"name": {"type": "string"}, "format": {"type": "string", "enum": ["docx", "xlsx", "pptx", "md", "csv", "pdf", "json"]}, "content": {"type": "string"}}, "required": ["name", "format", "content"]},
         func=create_project_export,
     )
+    web_search = getattr(app_services, "web_search", None)
+    web_tool = build_web_search_tool(web_search) if web_search is not None else None
+    extra_tools = ([build_artifact_tool(app_services.artifacts, chat.project_id)] if chat.project_id else []) + [export_tool, *(plugin_tools or [])]
+    if web_tool is not None:
+        extra_tools.append(web_tool)
     agent = Agent(
         build_client(settings),
         build_default_registry(
             build_knowledge_tool(app_services.knowledge, chat.project_id, chat.collection_id),
-            ([build_artifact_tool(app_services.artifacts, chat.project_id)] if chat.project_id else []) + [export_tool, *(plugin_tools or [])],
+            extra_tools,
         ),
-        system_prompt=DEFAULT_SYSTEM_PROMPT + (f"\n\nHướng dẫn dự án:\n{project.instructions}" if project and project.instructions else "") + ("\n\nKhi dùng knowledge base, giữ nguyên Markdown link của nguồn và nêu vị trí nguồn để người dùng mở đúng tài liệu." if chat.collection_id or chat.project_id is None else "") + source_context + (f"\n\nNgữ cảnh Thư viện RAG đã được truy xuất tự động trước câu hỏi này:\n{knowledge_context}\n\nƯu tiên trả lời dựa trên ngữ cảnh này khi nó liên quan trực tiếp; giữ nguyên link nguồn. Nếu không liên quan, không được suy diễn hoặc viện dẫn nó." if knowledge_context else "") + (f"\n\n{personalization_context}" if personalization_context else "") + (f"\n\n{memory_context}" if memory_context else ""),
+        system_prompt=DEFAULT_SYSTEM_PROMPT + (f"\n\nHướng dẫn dự án:\n{project.instructions}" if project and project.instructions else "") + ("\n\nKhi dùng knowledge base, giữ nguyên Markdown link của nguồn và nêu vị trí nguồn để người dùng mở đúng tài liệu." if chat.collection_id or chat.project_id is None else "") + ("\n\nKhi Thư viện không có hoặc chưa đủ dữ liệu, dùng `search_web`. Chỉ dùng URL do tool trả về; không tự tạo link hoặc nguồn. Không cần tạo mục Nguồn ở cuối câu trả lời vì hệ thống tự hiển thị trong menu trích nguồn." if web_tool is not None else "") + source_context + (f"\n\nNgữ cảnh Thư viện RAG đã được truy xuất tự động trước câu hỏi này:\n{knowledge_context}\n\nƯu tiên trả lời dựa trên ngữ cảnh này khi nó liên quan trực tiếp; giữ nguyên link nguồn. Nếu không liên quan, không được suy diễn hoặc viện dẫn nó." if knowledge_context else "") + (f"\n\n{personalization_context}" if personalization_context else "") + (f"\n\n{memory_context}" if memory_context else ""),
         max_steps=settings.max_steps,
     )
     stored_history = history if history is not None else app_services.chats.history(chat.id)
@@ -439,6 +452,7 @@ async def lifespan(app: FastAPI):
         model_registry=model_registry,
         credentials=UserCredentialService(auth_repository, settings),
         personalization=PersonalizationService(database),
+        web_search=WebSearchService(settings.tavily_api_key),
     )
     queue_pending_artifacts(app.state.services)
     yield
@@ -1003,6 +1017,14 @@ def messages(chat_id: str) -> list[dict[str, Any]]:
     ]
 
 
+@app.post("/api/chats/{chat_id}/read", tags=["Chats"])
+def mark_chat_read(chat_id: str) -> dict[str, Any]:
+    chat = services().chats.set_unread(chat_id, False)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy chat.")
+    return chat_json(chat)
+
+
 @app.patch("/api/messages/{message_id}/pin", tags=["Chats"])
 def pin_message(message_id: str, payload: PinMessageRequest) -> dict[str, Any]:
     message = services().chats.set_message_pin(message_id, payload.pinned)
@@ -1383,12 +1405,14 @@ def list_schedule_runs(schedule_id: str, limit: int = Query(default=30, ge=1, le
 
 @app.post("/api/schedules/{schedule_id}/run-now", status_code=202, tags=["Schedules"])
 def run_schedule_now(schedule_id: str) -> dict[str, str]:
-    if services().workspace.get(Schedule, schedule_id) is None:
+    schedule = services().workspace.get(Schedule, schedule_id)
+    if schedule is None:
         raise HTTPException(status_code=404, detail="Không tìm thấy lịch trình.")
     from agent_core.scheduler import ScheduleWorker
 
+    chat = ScheduleWorker(services()).ensure_chat(schedule)
     Thread(target=ScheduleWorker(services()).run_now, args=(schedule_id,), daemon=True).start()
-    return {"status": "queued"}
+    return {"status": "queued", "chatId": chat.id}
 
 
 @app.get("/api/plugins", tags=["Plugins"])
@@ -1594,7 +1618,10 @@ def stream_chat(chat_id: str, content: str, attachments: list[dict]) -> Iterator
             if result.content_blocks:
                 agent.history[-1]["content_blocks"] = result.content_blocks
             if agent.history and agent.history[-1].get("role") == "assistant":
-                visible_content, sources = detach_response_sources(agent.history[-1].get("content", ""))
+                visible_content, sources = detach_response_sources(
+                    agent.history[-1].get("content", ""),
+                    sources_from_web_steps(getattr(result, "steps", [])),
+                )
                 agent.history[-1]["content"] = visible_content
                 if sources:
                     agent.history[-1]["sources"] = sources

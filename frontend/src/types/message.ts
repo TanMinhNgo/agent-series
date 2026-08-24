@@ -21,7 +21,7 @@ export type Message = {
   content: string;
   attachments?: MediaAttachment[];
   contentBlocks?: ResponseBlock[];
-  sources?: { name: string; url: string }[];
+  sources?: { name: string; url: string; kind?: 'library' | 'external' }[];
   feedbackKind?: 'helpful' | 'incorrect' | 'too_long' | 'too_short' | 'unclear' | 'wrong_style';
   pinned?: boolean;
   /** Present only while a locally queued turn has not been confirmed by the API. */
