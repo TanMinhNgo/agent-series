@@ -10,15 +10,21 @@ from pydantic import ValidationError
 from types import SimpleNamespace
 
 from api.main import (
+    BranchChatRequest,
+    FeedbackRequest,
     ProjectRequest,
     ScheduleRequest,
     ScheduleUpdateRequest,
     ShareRequest,
     app,
+    create_chat_branch,
+    create_response_feedback,
+    detach_response_sources,
     list_chats,
     make_agent,
     message_json,
     model_error_message,
+    prepare_chat_regeneration,
     persisted_history,
     recent_chat_history,
 )
@@ -47,11 +53,10 @@ def test_utc_now_is_timezone_aware() -> None:
 
 
 def test_health_and_public_config_do_not_expose_provider_keys(monkeypatch) -> None:
-    monkeypatch.setenv("LLM_PROVIDER", "gemini")
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setenv("GEMINI_MODELS", "gemini-test")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
-    monkeypatch.setenv("OPENAI_API_KEY", "")
+    # The registry deliberately preserves models disabled by an administrator.
+    # Stub the available set here so this public-response contract never depends
+    # on the shared local PostgreSQL state used by other tests.
+    monkeypatch.setattr(main_module, "available_provider_models", lambda _user_id: {"gemini": ["gemini-test"]})
 
     with TestClient(app) as client:
         assert client.get("/api/health").json() == {"status": "ok"}
@@ -59,6 +64,85 @@ def test_health_and_public_config_do_not_expose_provider_keys(monkeypatch) -> No
 
     assert payload["providers"] == {"gemini": ["gemini-test"]}
     assert "key" not in str(payload).lower()
+
+
+def test_detach_response_sources_keeps_inline_answer_text_and_deduplicates_sources() -> None:
+    content = (
+        "RAG truy hồi tài liệu trước khi sinh câu trả lời "
+        "[rag.md](/api/documents/rag/file#đoạn-1).\n\n"
+        "Nguồn: [rag.md](/api/documents/rag/file#đoạn-1)"
+    )
+
+    visible, sources = detach_response_sources(content)
+
+    assert visible == "RAG truy hồi tài liệu trước khi sinh câu trả lời."
+    assert sources == [{"name": "rag.md", "url": "/api/documents/rag/file#đoạn-1"}]
+
+
+def test_detach_response_sources_keeps_response_without_document_citations() -> None:
+    assert detach_response_sources("Câu trả lời không dùng thư viện.") == (
+        "Câu trả lời không dùng thư viện.",
+        [],
+    )
+
+
+def test_message_json_preserves_separate_sources() -> None:
+    payload = message_json({
+        "role": "assistant",
+        "content": "Nội dung",
+        "sources": [{"name": "rag.md", "url": "/api/documents/rag/file"}],
+    })
+
+    assert payload["sources"] == [{"name": "rag.md", "url": "/api/documents/rag/file"}]
+
+
+def test_feedback_branch_and_regenerate_endpoints_delegate_the_selected_message(monkeypatch) -> None:
+    calls: list[tuple[str, str, str | None]] = []
+    timestamp = datetime(2026, 8, 24, tzinfo=UTC)
+    branch = SimpleNamespace(
+        id="branch-1",
+        title="Nhánh hội thoại",
+        provider="openai",
+        model="gpt-5.6-terra",
+        created_at=timestamp,
+        updated_at=timestamp,
+        pinned=False,
+        archived=False,
+        context_source_chat_id=None,
+        project_id=None,
+        parent_chat_id="chat-1",
+        branch_from_position=1,
+        collection_id=None,
+    )
+
+    class Personalization:
+        def record_feedback(self, message_id, kind, note):
+            calls.append(("feedback", message_id, kind))
+            return SimpleNamespace(id="feedback-1", message_id=message_id, kind=kind, note=note)
+
+    class Chats:
+        def create_branch(self, chat_id, message_id):
+            calls.append(("branch", chat_id, message_id))
+            return branch
+
+        def prepare_regeneration(self, chat_id, message_id):
+            calls.append(("regenerate", chat_id, message_id))
+            return "Câu hỏi gốc"
+
+    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(personalization=Personalization(), chats=Chats()))
+
+    feedback = create_response_feedback("assistant-1", FeedbackRequest(kind="helpful"))
+    created_branch = create_chat_branch("chat-1", BranchChatRequest(assistantMessageId="assistant-1"))
+    regeneration = prepare_chat_regeneration("chat-1", BranchChatRequest(assistantMessageId="assistant-1"))
+
+    assert feedback == {"id": "feedback-1", "messageId": "assistant-1", "kind": "helpful", "note": None}
+    assert created_branch["id"] == "branch-1"
+    assert regeneration == {"content": "Câu hỏi gốc"}
+    assert calls == [
+        ("feedback", "assistant-1", "helpful"),
+        ("branch", "chat-1", "assistant-1"),
+        ("regenerate", "chat-1", "assistant-1"),
+    ]
 
 
 def test_user_credential_service_encrypts_and_hides_plaintext(monkeypatch) -> None:

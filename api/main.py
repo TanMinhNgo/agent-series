@@ -277,6 +277,10 @@ def message_json(message: dict[str, Any]) -> dict[str, Any]:
 
 
 SOURCE_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\((/api/documents/[^)#]+(?:#[^)]+)?)\)")
+SOURCE_LABEL_ONLY_PATTERN = re.compile(
+    r"^\s*(?:nguồn(?:\s+\d+)?|sources?|tham\s+khảo)\s*[:\-–—]?\s*$",
+    re.IGNORECASE,
+)
 
 
 def detach_response_sources(content: str) -> tuple[str, list[dict[str, str]]]:
@@ -289,7 +293,15 @@ def detach_response_sources(content: str) -> tuple[str, list[dict[str, str]]]:
             seen.add(url)
     if not sources:
         return content, []
-    lines = [line for line in content.splitlines() if "/api/documents/" not in line]
+    # A citation may appear at the end of a useful sentence. Remove only the
+    # link itself; dropping the complete line would silently discard answer text.
+    lines = []
+    for line in content.splitlines():
+        cleaned_line = SOURCE_LINK_PATTERN.sub("", line).rstrip()
+        cleaned_line = re.sub(r"\s+([,.;:!?])", r"\1", cleaned_line)
+        if SOURCE_LABEL_ONLY_PATTERN.fullmatch(cleaned_line):
+            continue
+        lines.append(cleaned_line)
     cleaned = "\n".join(lines).strip()
     return cleaned or "Đã sử dụng tài liệu trong Thư viện để trả lời.", sources
 
