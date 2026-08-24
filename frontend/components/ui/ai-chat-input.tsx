@@ -4,6 +4,7 @@ import { ImagePlus, Mic, Paperclip, Send, Square, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 type Attachment = { id: string; file: File; url: string };
+const isKnowledgeFile = (file: File) => /\.(pdf|docx|md)$/i.test(file.name);
 type SpeechRecognitionLike = {
   continuous: boolean;
   interimResults: boolean;
@@ -50,7 +51,7 @@ export function PromptInput({
 
   const chooseFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
     const incoming = Array.from(event.target.files || []).filter(
-      (file) => file.type === 'application/pdf' || file.type.startsWith('image/'),
+      (file) => isKnowledgeFile(file) || file.type.startsWith('image/'),
     );
     event.target.value = '';
     setAttachments((current) => [
@@ -109,7 +110,7 @@ export function PromptInput({
         ref={fileRef}
         className="hidden"
         type="file"
-        accept="image/*,application/pdf"
+        accept="image/*,.pdf,.docx,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown"
         multiple
         onChange={chooseFiles}
       />
@@ -121,7 +122,7 @@ export function PromptInput({
                 <img src={item.url} alt={item.file.name} className="size-14 object-cover" />
               ) : (
                 <div className="flex size-14 items-center justify-center text-[10px] font-bold text-muted-foreground">
-                  PDF
+                  {item.file.name.split('.').pop()?.toUpperCase() || 'FILE'}
                 </div>
               )}
               <button
@@ -151,7 +152,7 @@ export function PromptInput({
       <div className="flex items-center gap-1 pt-2">
         <button
           type="button"
-          title="Đính kèm PDF hoặc ảnh"
+          title="Đính kèm PDF, DOCX, Markdown hoặc ảnh"
           onClick={() => fileRef.current?.click()}
           className="rounded-full p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
         >

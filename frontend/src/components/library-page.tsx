@@ -13,22 +13,8 @@ import {
 import { Button } from '@/components/ui/button';
 import { useWorkspace } from '@/src/hooks/use-workspace';
 import { useLibraryData } from '@/src/hooks/use-library-data';
-
-type Asset = {
-  id: string;
-  name: string;
-  mimeType: string;
-  sizeBytes: number;
-  source: string;
-  projectId: string | null;
-  artifactId: string;
-  version: number;
-  isProjectSource: boolean;
-  indexStatus: string;
-  indexError: string | null;
-  createdAt: string;
-  url: string;
-};
+import { useUploadDocuments } from '@/src/hooks/use-upload-documents';
+import type { LibraryAsset } from '@/src/types';
 const size = (value: number) =>
   value < 1024 * 1024 ? `${Math.ceil(value / 1024)} KB` : `${(value / 1024 / 1024).toFixed(1)} MB`;
 
@@ -38,7 +24,7 @@ export function LibraryPage() {
   const [assetScope, setAssetScope] = useState<'all' | 'global' | 'project'>('all');
   const [assetProjectId, setAssetProjectId] = useState('');
   const [pinningAssetId, setPinningAssetId] = useState<string | null>(null);
-  const [previewing, setPreviewing] = useState<Asset | null>(null);
+  const [previewing, setPreviewing] = useState<LibraryAsset | null>(null);
   const [versioningId, setVersioningId] = useState<string | null>(null);
   const [uploadErrors, setUploadErrors] = useState<{ name: string; message: string }[]>([]);
   const [collectionProjectId, setCollectionProjectId] = useState('');
@@ -46,8 +32,10 @@ export function LibraryPage() {
   const [editingCollectionId, setEditingCollectionId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const versionInputRef = useRef<HTMLInputElement>(null);
+  const documentInputRef = useRef<HTMLInputElement>(null);
   const deferredQuery = useDeferredValue(query);
   const { projects } = useWorkspace();
+  const uploadDocuments = useUploadDocuments();
   const {
     assets,
     memories,
@@ -83,6 +71,7 @@ export function LibraryPage() {
     memories.error ||
     documents.error ||
     upload.error ||
+    uploadDocuments.error ||
     deleteAsset.error ||
     updateAsset.error ||
     createVersion.error ||
@@ -125,9 +114,37 @@ export function LibraryPage() {
               setVersioningId(null);
             }}
           />
-          <Button type="button" disabled={upload.isPending} onClick={() => fileInputRef.current?.click()}>
-            {upload.isPending ? <LoaderCircle className="animate-spin" /> : <FileUp />}
-            {upload.isPending ? 'Đang tải...' : 'Tải file lên'}
+          <input
+            ref={documentInputRef}
+            className="sr-only"
+            type="file"
+            multiple
+            accept=".pdf,.docx,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown"
+            onChange={(event) => {
+              const files = Array.from(event.target.files || []);
+              if (files.length) uploadDocuments.mutate({ files });
+              event.target.value = '';
+            }}
+          />
+          <Button
+            type="button"
+            disabled={tab === 'documents' ? uploadDocuments.isPending : upload.isPending}
+            onClick={() =>
+              tab === 'documents' ? documentInputRef.current?.click() : fileInputRef.current?.click()
+            }
+          >
+            {(tab === 'documents' ? uploadDocuments.isPending : upload.isPending) ? (
+              <LoaderCircle className="animate-spin" />
+            ) : (
+              <FileUp />
+            )}
+            {tab === 'documents'
+              ? uploadDocuments.isPending
+                ? 'Đang tải...'
+                : 'Thêm tài liệu RAG'
+              : upload.isPending
+                ? 'Đang tải...'
+                : 'Tải file lên'}
           </Button>
         </>
       </header>
@@ -392,7 +409,7 @@ export function LibraryPage() {
               <div>
                 <h2 className="font-semibold">Knowledge collections</h2>
                 <p className="text-sm text-muted-foreground">
-                  Chọn PDF theo từng Project để chat chỉ tìm đúng bộ nguồn.
+                  Tải PDF, DOCX hoặc Markdown; chọn theo từng Project để chat chỉ tìm đúng bộ nguồn.
                 </p>
               </div>
               <select
@@ -444,7 +461,7 @@ export function LibraryPage() {
                         >
                           {collection.name}{' '}
                           <span className="text-xs font-normal text-muted-foreground">
-                            · {collection.documentIds.length} PDF
+                            · {collection.documentIds.length} tài liệu
                           </span>
                         </button>
                         <Button
@@ -478,7 +495,7 @@ export function LibraryPage() {
                           {!(documents.data || []).some(
                             (document) => document.projectId === collectionProjectId,
                           ) ? (
-                            <p className="text-sm text-muted-foreground">Project này chưa có PDF RAG.</p>
+                            <p className="text-sm text-muted-foreground">Project này chưa có tài liệu RAG.</p>
                           ) : null}
                         </div>
                       ) : null}
@@ -498,7 +515,9 @@ export function LibraryPage() {
                   <p className="font-medium">{item.name}</p>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {item.status === 'ready'
-                      ? `${item.pageCount || 0} trang đã index`
+                      ? item.name.toLowerCase().endsWith('.pdf')
+                        ? `${item.pageCount || 0} trang đã index`
+                        : `${item.pageCount || 0} đoạn đã index`
                       : item.status === 'queued' || item.status === 'indexing'
                         ? 'Đang xử lý nền...'
                         : item.status === 'needs_ocr'

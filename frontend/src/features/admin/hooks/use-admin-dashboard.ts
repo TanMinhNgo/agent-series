@@ -5,18 +5,19 @@ import type {
   AdminCredential,
   AdminList,
   AdminOverview,
+  AdminPluginConnection,
   AdminTab,
   AdminUser,
 } from '@/src/features/admin/types/admin';
 import { ADMIN_PAGE_SIZE } from '@/src/features/admin/types/admin';
 
 export function useAdminDashboard({
-  tab,
+  view,
   query,
   userPage,
   securityPage,
 }: {
-  tab: AdminTab;
+  view: AdminTab;
   query: string;
   userPage: number;
   securityPage: number;
@@ -34,7 +35,7 @@ export function useAdminDashboard({
         url: '/admin/users',
         params: { q: query || undefined, offset: (userPage - 1) * ADMIN_PAGE_SIZE, limit: ADMIN_PAGE_SIZE },
       }),
-    enabled: tab === 'users' || tab === 'overview',
+    enabled: view === 'users' || view === 'overview',
   });
   const credentials = useQuery({
     queryKey: ['admin', 'credentials', securityPage],
@@ -43,7 +44,7 @@ export function useAdminDashboard({
         url: '/admin/credentials',
         params: { offset: (securityPage - 1) * ADMIN_PAGE_SIZE, limit: ADMIN_PAGE_SIZE },
       }),
-    enabled: tab === 'security',
+    enabled: view === 'security',
   });
   const audit = useQuery({
     queryKey: ['admin', 'audit', securityPage],
@@ -52,8 +53,17 @@ export function useAdminDashboard({
         url: '/admin/audit',
         params: { offset: (securityPage - 1) * ADMIN_PAGE_SIZE, limit: ADMIN_PAGE_SIZE },
       }),
-    enabled: tab === 'security' || tab === 'overview',
+    enabled: view === 'security' || view === 'overview',
     refetchInterval: 30_000,
+  });
+  const pluginConnections = useQuery({
+    queryKey: ['admin', 'plugin-connections', securityPage],
+    queryFn: () =>
+      request<AdminList<AdminPluginConnection>>({
+        url: '/admin/plugin-connections',
+        params: { offset: (securityPage - 1) * ADMIN_PAGE_SIZE, limit: ADMIN_PAGE_SIZE },
+      }),
+    enabled: view === 'security',
   });
   const updateUser = useMutation({
     mutationFn: ({ userId, isActive }: { userId: string; isActive: boolean }) =>
@@ -81,6 +91,7 @@ export function useAdminDashboard({
     users,
     credentials,
     audit,
+    pluginConnections,
     updateUser,
     updateModel,
     refresh: () => client.invalidateQueries({ queryKey: ['admin'] }),

@@ -1,0 +1,273 @@
+import { useMemo, useState, type ReactNode } from 'react';
+import {
+  BookOpen,
+  Check,
+  Copy,
+  GitBranch,
+  MoreHorizontal,
+  RefreshCw,
+  Share2,
+  ThumbsDown,
+  ThumbsUp,
+  Volume2,
+  X,
+} from 'lucide-react';
+
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { request } from '@/src/hooks/client';
+import type { Message } from '@/src/types';
+
+type Source = { name: string; url: string };
+type FeedbackKind = 'helpful' | 'incorrect' | 'too_long' | 'too_short' | 'unclear' | 'wrong_style';
+
+function sourcesIn(content: string): Source[] {
+  const seen = new Set<string>();
+  const matches = [...content.matchAll(/\[([^\]]+)\]\((\/api\/documents\/[^)#]+(?:#[^)]+)?)\)/g)];
+  return matches
+    .map((match) => ({ name: match[1], url: match[2] }))
+    .filter((source) => (seen.has(source.url) ? false : (seen.add(source.url), true)));
+}
+
+export function AssistantMessageActions({
+  message,
+  isLatest,
+  onBranch,
+  onRegenerate,
+}: {
+  message: Message;
+  isLatest: boolean;
+  onBranch: (message: Message) => Promise<void>;
+  onRegenerate: (message: Message) => Promise<void>;
+}) {
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [feedbackKind, setFeedbackKind] = useState<FeedbackKind>('unclear');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
+  const sources = useMemo(
+    () => message.sources || sourcesIn(message.content),
+    [message.content, message.sources],
+  );
+
+  const copy = async () => {
+    await navigator.clipboard?.writeText(message.content);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  };
+  const share = async () => {
+    if (navigator.share) {
+      await navigator.share({ title: 'Phản hồi AI', text: message.content });
+      return;
+    }
+    await copy();
+  };
+  const speak = () => {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    if (speaking) {
+      setSpeaking(false);
+      return;
+    }
+    const utterance = new SpeechSynthesisUtterance(message.content);
+    utterance.lang = 'vi-VN';
+    utterance.onend = () => setSpeaking(false);
+    utterance.onerror = () => setSpeaking(false);
+    window.speechSynthesis.speak(utterance);
+    setSpeaking(true);
+  };
+  const submitFeedback = async (kind: FeedbackKind = feedbackKind, feedbackNote = note) => {
+    if (!message.messageId) return;
+    setBusy(true);
+    try {
+      await request({
+        url: `/messages/${message.messageId}/feedback`,
+        method: 'POST',
+        data: { kind, note: feedbackNote },
+      });
+      setFeedbackOpen(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="mt-2 flex items-center gap-0.5">
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          className="size-7 rounded-md"
+          onClick={() => void copy()}
+          aria-label="Sao chép phản hồi"
+        >
+          {copied ? <Check /> : <Copy />}
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                className="size-7 rounded-md"
+                aria-label="Đánh giá phản hồi"
+              />
+            }
+          >
+            <ThumbsUp />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" side="top" sideOffset={8} className="w-40">
+            <DropdownMenuItem onClick={() => void submitFeedback('helpful', '')}>
+              <ThumbsUp /> Trả lời tốt
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setFeedbackOpen(true)}>
+              <ThumbsDown /> Trả lời tệ
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          className="size-7 rounded-md"
+          onClick={() => void share()}
+          aria-label="Chia sẻ phản hồi"
+        >
+          <Share2 />
+        </Button>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          className="size-7 rounded-md"
+          disabled={!isLatest}
+          onClick={() => void onRegenerate(message)}
+          aria-label="Tạo lại phản hồi"
+        >
+          <RefreshCw />
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                className="size-7 rounded-md"
+                aria-label="Thêm thao tác"
+              />
+            }
+          >
+            <MoreHorizontal />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" side="bottom" className="w-52">
+            <DropdownMenuItem onClick={() => setSourcesOpen(true)}>
+              <BookOpen /> Xem nguồn
+            </DropdownMenuItem>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <GitBranch /> Mở nhánh mới
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuItem disabled={!message.messageId} onClick={() => void onBranch(message)}>
+                  Từ lượt hỏi và phản hồi này
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuItem onClick={speak}>
+              <Volume2 /> {speaking ? 'Dừng đọc' : 'Đọc to'}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+      {feedbackOpen ? (
+        <Modal title="Phản hồi này cần cải thiện ở đâu?" onClose={() => setFeedbackOpen(false)}>
+          <div className="grid gap-2">
+            {[
+              ['incorrect', 'Sai hoặc chưa chính xác'],
+              ['too_long', 'Quá dài'],
+              ['too_short', 'Quá ngắn'],
+              ['unclear', 'Khó hiểu'],
+              ['wrong_style', 'Sai định dạng hoặc phong cách'],
+            ].map(([value, label]) => (
+              <label key={value} className="flex items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  name={message.messageId}
+                  checked={feedbackKind === value}
+                  onChange={() => setFeedbackKind(value as typeof feedbackKind)}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          <textarea
+            className="mt-4 min-h-24 w-full rounded-xl border bg-background p-3 text-sm"
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            placeholder="Ghi chú thêm để AI cải thiện cho các lần sau (tùy chọn)"
+          />
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setFeedbackOpen(false)}>
+              Hủy
+            </Button>
+            <Button disabled={busy} onClick={() => void submitFeedback()}>
+              {busy ? 'Đang lưu...' : 'Gửi đánh giá'}
+            </Button>
+          </div>
+        </Modal>
+      ) : null}
+      {sourcesOpen ? (
+        <Modal title="Nguồn của phản hồi" onClose={() => setSourcesOpen(false)}>
+          {sources.length ? (
+            <ul className="space-y-2">
+              {sources.map((source) => (
+                <li key={source.url}>
+                  <a
+                    className="text-sm text-primary underline underline-offset-4"
+                    href={source.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {source.name}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Phản hồi này không có nguồn tài liệu RAG được trích dẫn.
+            </p>
+          )}
+        </Modal>
+      ) : null}
+    </>
+  );
+}
+
+function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4"
+      role="dialog"
+      aria-modal="true"
+    >
+      <section className="w-full max-w-lg rounded-2xl border bg-card p-5 shadow-2xl">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="font-semibold">{title}</h2>
+          <Button size="icon-sm" variant="ghost" onClick={onClose} aria-label="Đóng">
+            <X />
+          </Button>
+        </div>
+        {children}
+      </section>
+    </div>
+  );
+}

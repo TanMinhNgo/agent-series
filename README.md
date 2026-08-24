@@ -1,6 +1,6 @@
 # Agent Series
 
-Ứng dụng AI agent đa nhà cung cấp với giao diện chat hiện đại, lưu hội thoại, RAG PDF cục bộ và bộ nhớ dài hạn có thể kiểm soát. Dự án dùng **React + Vite + TypeScript** ở frontend, **FastAPI** ở backend và **PostgreSQL + pgvector** cho dữ liệu/embedding.
+Ứng dụng AI agent đa nhà cung cấp với giao diện chat hiện đại, lưu hội thoại, RAG cục bộ cho PDF/DOCX/Markdown và bộ nhớ dài hạn có thể kiểm soát. Dự án dùng **React + Vite + TypeScript** ở frontend, **FastAPI** ở backend và **PostgreSQL + pgvector** cho dữ liệu/embedding.
 
 > Trạng thái hiện tại: ứng dụng local đăng nhập Google Sign-In và ownership theo user. BYOK và model catalog sync là các mốc tiếp theo.
 
@@ -9,7 +9,7 @@
 - Chat với Gemini, Claude hoặc OpenAI; model được cấu hình qua allowlist trong `.env`.
 - Lưu toàn bộ lịch sử chat vào PostgreSQL; AI nhận 10 lượt gần nhất và truy hồi semantic các đoạn cũ liên quan bằng pgvector trong đúng chat đang mở.
 - Hiển thị Markdown/GFM, bảng, công thức KaTeX, code block có nút sao chép, chữ **đậm**, *nghiêng* và liên kết an toàn.
-- Upload PDF, xử lý/index nền qua PostgreSQL job queue, chia đoạn, tạo embedding local và tìm kiếm ngữ nghĩa bằng pgvector.
+- Upload PDF, DOCX hoặc Markdown; xử lý/index nền qua PostgreSQL job queue, chia đoạn, tạo embedding local và tìm kiếm ngữ nghĩa bằng pgvector.
 - Thư viện memory dài hạn: tự index hội thoại, tự tìm phần liên quan cho câu hỏi mới, tìm kiếm/forget từng mục hoặc xoá toàn bộ trong UI.
 - Stream trạng thái agent/tool qua SSE, hỗ trợ file/ảnh đính kèm, giao diện sáng/tối/system.
 - Lên lịch tác vụ AI một lần, hằng ngày hoặc hằng tuần; mỗi lịch có chat kết quả, run log và timeout recovery riêng.
@@ -55,6 +55,16 @@ Worker ── PostgreSQL (job queue, lịch đến hạn, run log) ── Agent 
 Lần đầu script sẽ tạo `.venv`, cài Python/Node dependencies, chạy PostgreSQL + pgvector tại cổng `5433`, áp Alembic migration, khởi động scheduler worker nền, rồi mở:
 
 - App: `http://localhost:5173`
+
+### Worker bền vững trên Windows
+
+Worker dùng queue PostgreSQL và có heartbeat trong Admin. Để nó tự chạy lại khi đăng nhập Windows, cài Scheduled Task theo user hiện tại:
+
+```powershell
+.\scripts\install-worker-task.ps1
+```
+
+`run.ps1` sẽ tự dùng task này ở các lần chạy sau; dùng `-StartNow` nếu không có worker local nào đang chạy. Kiểm tra bằng `.\scripts\worker-task-status.ps1`, hoặc gỡ bằng `.\scripts\uninstall-worker-task.ps1`. Log được xoay tại `logs\worker-YYYY-MM-DD.log` và giữ 14 ngày.
 - API: `http://localhost:8000`
 - API docs: `http://localhost:8000/docs`
 
@@ -96,6 +106,8 @@ Không dùng phiên ChatGPT, Gemini web hay Claude.ai làm API credential: Gemin
 
 Connector chỉ xin quyền đọc metadata Drive và Calendar. Nó không upload, import vào RAG, gửi email, tạo hoặc sửa sự kiện. **Ngắt kết nối** sẽ xóa token đã lưu cục bộ; audit log chỉ ghi hành động/tóm tắt, không ghi token hay nội dung file/sự kiện.
 
+Plugin catalog được quản lý theo từng user. Hiện Google Workspace là connector OAuth thực; các plugin còn lại hiển thị rõ là đang chờ adapter riêng, không giả lập trạng thái đã kết nối. System admin chỉ xem metadata kết nối (user, plugin, trạng thái, số quyền và thời điểm), không xem token hoặc thao tác trên kết nối của user.
+
 ## Thư viện memory cá nhân
 
 Mỗi lượt user/assistant được chia đoạn và index vào pgvector. Khi gửi câu hỏi mới, hệ thống chỉ đưa các đoạn cũ có ý nghĩa gần nhất vào prompt, không chép toàn bộ lịch sử database vào model.
@@ -115,7 +127,7 @@ agent_core/             Agent loop, provider adapters, persistence, RAG, memory
 api/                    FastAPI routes và SSE streaming
 frontend/               React/Vite UI
 migrations/             Alembic schema migrations
-knowledge/              PDF đã upload (gitignored)
+knowledge/              Tài liệu RAG đã upload (gitignored)
 uploads/                Media người dùng upload (gitignored)
 docker-compose.yml      PostgreSQL + pgvector local
 run.ps1                 Khởi động backend, database và frontend trên Windows

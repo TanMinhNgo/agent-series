@@ -20,6 +20,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { PluginBrandIcon } from '@/src/components/plugin-brand-icon';
 import { useScheduleRuns, useWorkspace } from '@/src/hooks/use-workspace';
 import { useProjectDeletePreview } from '@/src/hooks/use-project-delete-preview';
@@ -417,11 +418,11 @@ function DeleteProjectDialog({
       {step === 1 ? (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Toàn bộ chat, PDF RAG, file, lịch trình và memory thuộc dự án sẽ bị xóa vĩnh viễn.
+            Toàn bộ chat, tài liệu RAG, file, lịch trình và memory thuộc dự án sẽ bị xóa vĩnh viễn.
           </p>
           <p className="rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
             {counts
-              ? `${counts.chats} chat · ${counts.documents} PDF RAG · ${counts.assets} file · ${counts.schedules} lịch trình`
+              ? `${counts.chats} chat · ${counts.documents} tài liệu RAG · ${counts.assets} file · ${counts.schedules} lịch trình`
               : 'Đang kiểm tra dữ liệu sẽ bị xóa...'}
           </p>
           <div className="flex justify-end gap-2">
@@ -469,6 +470,7 @@ function SchedulesView() {
   const { schedules, projects, scheduleActions, runScheduleNow } = useWorkspace();
   const [filter, setFilter] = useState<'active' | 'paused' | 'all'>('active');
   const [editing, setEditing] = useState<Schedule | null | undefined>();
+  const [deleting, setDeleting] = useState<Schedule | null>(null);
   const save = async (
     data: Pick<Schedule, 'title' | 'startsAt' | 'endsAt' | 'notes' | 'projectId' | 'prompt' | 'recurrence'>,
   ) => {
@@ -595,18 +597,24 @@ function SchedulesView() {
           onSave={save}
           onRunNow={editing ? () => runScheduleNow.mutateAsync(editing.id) : undefined}
           runningNow={runScheduleNow.isPending}
-          onDelete={
-            editing
-              ? async () => {
-                  if (window.confirm(`Xóa lịch "${editing.title}"?`)) {
-                    await scheduleActions.remove.mutateAsync(editing.id);
-                    setEditing(undefined);
-                  }
-                }
-              : undefined
-          }
+          onDelete={editing ? async () => setDeleting(editing) : undefined}
         />
       ) : null}
+      <ConfirmDialog
+        open={Boolean(deleting)}
+        title="Xóa lịch trình?"
+        description={`Xóa lịch "${deleting?.title || ''}"? Thao tác này không thể hoàn tác.`}
+        confirmLabel="Xóa lịch"
+        destructive
+        onOpenChange={(open) => {
+          if (!open) setDeleting(null);
+        }}
+        onConfirm={async () => {
+          if (!deleting) return;
+          await scheduleActions.remove.mutateAsync(deleting.id);
+          setEditing(undefined);
+        }}
+      />
     </>
   );
 }
@@ -906,6 +914,8 @@ function PluginsView() {
     disconnectGoogle,
   } = useWorkspace();
   const [editing, setEditing] = useState<Plugin | null | undefined>();
+  const [disconnectingGoogle, setDisconnectingGoogle] = useState(false);
+  const [deletingPlugin, setDeletingPlugin] = useState<Plugin | null>(null);
   const [query, setQuery] = useState('');
   const save = async (data: Pick<Plugin, 'slug' | 'name' | 'description' | 'enabled' | 'config'>) => {
     if (editing) await pluginActions.update.mutateAsync({ id: editing.id, data });
@@ -994,15 +1004,7 @@ function PluginsView() {
           const result = await authorizeGoogle.mutateAsync();
           window.location.assign(result.authorizationUrl);
         }}
-        onDisconnect={async () => {
-          if (
-            window.confirm(
-              'Ngắt Google Workspace? Token đã lưu cục bộ sẽ bị xóa và chat sẽ không còn đọc Drive hoặc Calendar.',
-            )
-          ) {
-            await disconnectGoogle.mutateAsync();
-          }
-        }}
+        onDisconnect={() => setDisconnectingGoogle(true)}
         onToggle={async () => {
           const googlePlugin = installed.find((item) => item.catalogSlug === 'google-workspace');
           if (googlePlugin)
@@ -1105,18 +1107,33 @@ function PluginsView() {
           error={pluginActions.create.error?.message || pluginActions.update.error?.message}
           onClose={() => setEditing(undefined)}
           onSave={save}
-          onDelete={
-            editing
-              ? async () => {
-                  if (window.confirm(`Xóa plugin "${editing.name}"?`)) {
-                    await pluginActions.remove.mutateAsync(editing.id);
-                    setEditing(undefined);
-                  }
-                }
-              : undefined
-          }
+          onDelete={editing ? async () => setDeletingPlugin(editing) : undefined}
         />
       ) : null}
+      <ConfirmDialog
+        open={disconnectingGoogle}
+        title="Ngắt Google Workspace?"
+        description="Token đã lưu cục bộ sẽ bị xóa và chat sẽ không còn đọc Drive hoặc Calendar."
+        confirmLabel="Ngắt kết nối"
+        destructive
+        onOpenChange={setDisconnectingGoogle}
+        onConfirm={() => disconnectGoogle.mutateAsync()}
+      />
+      <ConfirmDialog
+        open={Boolean(deletingPlugin)}
+        title="Xóa plugin?"
+        description={`Xóa plugin "${deletingPlugin?.name || ''}"? Thao tác này không thể hoàn tác.`}
+        confirmLabel="Xóa plugin"
+        destructive
+        onOpenChange={(open) => {
+          if (!open) setDeletingPlugin(null);
+        }}
+        onConfirm={async () => {
+          if (!deletingPlugin) return;
+          await pluginActions.remove.mutateAsync(deletingPlugin.id);
+          setEditing(undefined);
+        }}
+      />
     </div>
   );
 }
@@ -1139,7 +1156,7 @@ function GoogleWorkspaceCard({
   error?: string;
   onInstall: () => void;
   onConnect: () => Promise<void>;
-  onDisconnect: () => Promise<void>;
+  onDisconnect: () => void;
   onToggle: () => Promise<void>;
 }) {
   const connected = status?.status === 'connected';
@@ -1188,12 +1205,7 @@ function GoogleWorkspaceCard({
               >
                 {plugin.enabled ? 'Tắt trong chat' : 'Bật cho chat'}
               </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void onDisconnect().catch(() => undefined)}
-                disabled={busy}
-              >
+              <Button size="sm" variant="outline" onClick={onDisconnect} disabled={busy}>
                 Ngắt kết nối
               </Button>
             </>
@@ -1240,7 +1252,14 @@ function PluginDirectoryRow({
     <div className="group flex min-h-20 items-center gap-3 border-border/70 py-3 md:border-b">
       <PluginBrandIcon name={item.name} slug={item.slug} />
       <div className="min-w-0 flex-1">
-        <h3 className="truncate text-sm font-medium">{item.name}</h3>
+        <div className="flex items-center gap-2">
+          <h3 className="truncate text-sm font-medium">{item.name}</h3>
+          {item.connection_mode === 'planned' ? (
+            <Badge variant="outline" className="shrink-0 text-[10px]">
+              Sắp hỗ trợ kết nối
+            </Badge>
+          ) : null}
+        </div>
         <p className="mt-0.5 line-clamp-1 text-sm text-muted-foreground">{item.description}</p>
       </div>
       <div className="flex items-center">

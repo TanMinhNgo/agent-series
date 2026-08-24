@@ -9,6 +9,8 @@ type Variables = {
   chatId: string;
   content: string;
   attachments?: MediaAttachment[];
+  skipOptimisticUser?: boolean;
+  replaceAssistantMessageId?: string;
   onEvent: StreamEvent;
   onUserMessageQueued?: () => void;
 };
@@ -38,12 +40,30 @@ export const useStreamChat = () => {
         onEvent(name, data);
       });
     },
-    onMutate: ({ chatId, content, attachments = [], onUserMessageQueued }) => {
+    onMutate: ({
+      chatId,
+      content,
+      attachments = [],
+      onUserMessageQueued,
+      skipOptimisticUser,
+      replaceAssistantMessageId,
+    }) => {
       queryClient.setQueryData<Message[]>(queryKeys.messages(chatId), (items = []) => [
-        ...items,
-        { role: 'user', content, attachments, createdAt: new Date().toISOString() },
+        ...items.filter((item) => item.messageId !== replaceAssistantMessageId),
+        ...(skipOptimisticUser
+          ? []
+          : [
+              {
+                messageId: `optimistic-${crypto.randomUUID()}`,
+                role: 'user' as const,
+                content,
+                attachments,
+                createdAt: new Date().toISOString(),
+                optimistic: true,
+              },
+            ]),
       ]);
-      onUserMessageQueued?.();
+      if (!skipOptimisticUser) onUserMessageQueued?.();
     },
     onSuccess: (_, { chatId }) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.chats });

@@ -56,6 +56,7 @@ export type PluginCatalogItem = {
   category: string;
   capabilities: string[];
   setup_url: string;
+  connection_mode: 'oauth' | 'planned';
   featured: boolean;
   installedPluginId: string | null;
 };

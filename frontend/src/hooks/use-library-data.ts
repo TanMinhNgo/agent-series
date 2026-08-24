@@ -1,6 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { request } from '@/src/hooks/client';
 import { queryKeys } from '@/src/hooks/query-keys';
+import type {
+  Document,
+  KnowledgeCollection,
+  LibraryAsset,
+  LibraryAssetPreview,
+  LibraryAssetUpdate,
+  LibraryMemory,
+  WorkerStatus,
+} from '@/src/types';
 
 export function useLibraryData(args: {
   query: string;
@@ -16,41 +25,39 @@ export function useLibraryData(args: {
   const assets = useQuery({
     queryKey: ['library-assets', query, scope, projectId],
     queryFn: () =>
-      request<any[]>({
+      request<LibraryAsset[]>({
         url: '/library/assets',
         params: { query, scope, ...(scope === 'project' ? { projectId } : {}) },
       }),
   });
   const memories = useQuery({
     queryKey: ['memories', query],
-    queryFn: () => request<any[]>({ url: '/memories', params: { query } }),
+    queryFn: () => request<LibraryMemory[]>({ url: '/memories', params: { query } }),
   });
   const documents = useQuery({
     queryKey: ['documents'],
-    queryFn: () => request<any[]>({ url: '/documents' }),
+    queryFn: () => request<Document[]>({ url: '/documents' }),
     refetchInterval: (state) =>
-      state.state.data?.some((item: any) => item.status === 'queued' || item.status === 'indexing')
-        ? 1500
-        : false,
+      state.state.data?.some((item) => item.status === 'queued' || item.status === 'indexing') ? 1500 : false,
   });
   const worker = useQuery({
     queryKey: ['worker-status'],
-    queryFn: () => request<any>({ url: '/worker/status' }),
+    queryFn: () => request<WorkerStatus>({ url: '/worker/status' }),
     refetchInterval: 3000,
   });
   const collections = useQuery({
     queryKey: queryKeys.collections(collectionProjectId),
-    queryFn: () => request<any[]>({ url: `/projects/${collectionProjectId}/collections` }),
+    queryFn: () => request<KnowledgeCollection[]>({ url: `/projects/${collectionProjectId}/collections` }),
     enabled: Boolean(collectionProjectId),
   });
   const preview = useQuery({
     queryKey: ['artifact-preview', previewId],
-    queryFn: () => request<any>({ url: `/library/assets/${previewId}/preview` }),
+    queryFn: () => request<LibraryAssetPreview>({ url: `/library/assets/${previewId}/preview` }),
     enabled: Boolean(previewId),
   });
   const versions = useQuery({
     queryKey: ['artifact-versions', previewId],
-    queryFn: () => request<any[]>({ url: `/library/assets/${previewId}/versions` }),
+    queryFn: () => request<LibraryAsset[]>({ url: `/library/assets/${previewId}/versions` }),
     enabled: Boolean(previewId),
   });
   const invalidateLibrary = () => void client.invalidateQueries({ queryKey: ['library-assets'] });
@@ -75,15 +82,15 @@ export function useLibraryData(args: {
     onSuccess: invalidateLibrary,
   });
   const updateAsset = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) =>
-      request<any>({ url: `/library/assets/${id}`, method: 'PATCH', data }),
+    mutationFn: ({ id, data }: { id: string; data: LibraryAssetUpdate }) =>
+      request<LibraryAsset>({ url: `/library/assets/${id}`, method: 'PATCH', data }),
     onSuccess: invalidateLibrary,
   });
   const createVersion = useMutation({
     mutationFn: async ({ id, file }: { id: string; file: File }) => {
       const data = new FormData();
       data.append('file', file);
-      return request<any>({ url: `/library/assets/${id}/versions`, method: 'POST', data });
+      return request<LibraryAsset>({ url: `/library/assets/${id}/versions`, method: 'POST', data });
     },
     onSuccess: () => {
       invalidateLibrary();
@@ -91,7 +98,8 @@ export function useLibraryData(args: {
     },
   });
   const reindexArtifact = useMutation({
-    mutationFn: (id: string) => request<any>({ url: `/library/assets/${id}/reindex`, method: 'POST' }),
+    mutationFn: (id: string) =>
+      request<LibraryAsset>({ url: `/library/assets/${id}/reindex`, method: 'POST' }),
     onSuccess: invalidateLibrary,
   });
   const deleteMemory = useMutation({
@@ -99,7 +107,7 @@ export function useLibraryData(args: {
     onSuccess: () => void client.invalidateQueries({ queryKey: ['memories'] }),
   });
   const reindex = useMutation({
-    mutationFn: (id: string) => request<any>({ url: `/documents/${id}/reindex`, method: 'POST' }),
+    mutationFn: (id: string) => request<Document>({ url: `/documents/${id}/reindex`, method: 'POST' }),
     onSuccess: () => void client.invalidateQueries({ queryKey: ['documents'] }),
   });
   const deleteDocument = useMutation({
@@ -111,7 +119,11 @@ export function useLibraryData(args: {
   });
   const createCollection = useMutation({
     mutationFn: (name: string) =>
-      request<any>({ url: `/projects/${collectionProjectId}/collections`, method: 'POST', data: { name } }),
+      request<KnowledgeCollection>({
+        url: `/projects/${collectionProjectId}/collections`,
+        method: 'POST',
+        data: { name },
+      }),
     onSuccess: () => {
       onCollectionCreated();
       void client.invalidateQueries({ queryKey: queryKeys.collectionsRoot });
@@ -119,7 +131,11 @@ export function useLibraryData(args: {
   });
   const saveCollectionDocuments = useMutation({
     mutationFn: ({ id, documentIds }: { id: string; documentIds: string[] }) =>
-      request<any>({ url: `/collections/${id}/documents`, method: 'PUT', data: { documentIds } }),
+      request<KnowledgeCollection>({
+        url: `/collections/${id}/documents`,
+        method: 'PUT',
+        data: { documentIds },
+      }),
     onSuccess: () => void client.invalidateQueries({ queryKey: queryKeys.collectionsRoot }),
   });
   const deleteCollection = useMutation({

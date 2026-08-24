@@ -1,9 +1,10 @@
-"""PDF ingestion and pgvector retrieval for the local knowledge base."""
+"""Document ingestion and pgvector retrieval for the local knowledge base."""
 
 from __future__ import annotations
 
 import hashlib
 import re
+from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
@@ -15,6 +16,8 @@ from .tools.base import ToolSpec
 
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 120
+ALLOWED_DOCUMENT_SUFFIXES = {".pdf", ".docx", ".md"}
+NO_DOCUMENTS_RESULT = "Không có tài liệu nào đã index để trả lời câu hỏi này."
 
 
 def _chunks(text: str) -> list[str]:
@@ -29,8 +32,35 @@ def _chunks(text: str) -> list[str]:
             if boundary > start + CHUNK_SIZE // 2:
                 end = boundary
         result.append(text[start:end].strip())
+        if end == len(text):
+            break
         start = max(end - CHUNK_OVERLAP, start + 1)
     return result
+
+
+def extract_document_parts(path: Path, suffix: str) -> tuple[list[tuple[int, str]], int]:
+    """Return indexable text with a real page number or a virtual section number."""
+    suffix = suffix.lower()
+    if suffix == ".pdf":
+        reader = PdfReader(str(path))
+        return (
+            [
+                (page_number, chunk)
+                for page_number, page in enumerate(reader.pages, start=1)
+                for chunk in _chunks(page.extract_text() or "")
+            ],
+            len(reader.pages),
+        )
+    if suffix == ".docx":
+        from docx import Document as DocxDocument
+
+        text = "\n".join(item.text for item in DocxDocument(BytesIO(path.read_bytes())).paragraphs)
+    elif suffix == ".md":
+        text = path.read_text(encoding="utf-8", errors="replace")
+    else:
+        raise ValueError("Chỉ hỗ trợ file PDF, DOCX hoặc Markdown.")
+    chunks = _chunks(text)
+    return list(enumerate(chunks, start=1)), len(chunks)
 
 
 class KnowledgeService:
@@ -107,12 +137,13 @@ class KnowledgeService:
             session.commit(); return documents
 
     def upload(self, original_name: str, data: bytes, project_id: str | None = None) -> tuple[Document, bool]:
-        if not original_name.lower().endswith(".pdf"):
-            raise ValueError("Chỉ nhận file PDF.")
+        suffix = Path(original_name).suffix.lower()
+        if suffix not in ALLOWED_DOCUMENT_SUFFIXES:
+            raise ValueError("Chỉ nhận file PDF, DOCX hoặc Markdown (.md).")
         if not data:
-            raise ValueError("File PDF đang trống.")
+            raise ValueError("File đang trống.")
         if len(data) > 25 * 1024 * 1024:
-            raise ValueError("PDF vượt giới hạn 25 MB.")
+            raise ValueError("File vượt giới hạn 25 MB.")
         digest = hashlib.sha256(data).hexdigest()
         scope_key = document_scope_key(project_id)
         self.knowledge_dir.mkdir(parents=True, exist_ok=True)
@@ -143,18 +174,21 @@ class KnowledgeService:
             session.commit()
             file_path = self.knowledge_dir / document.stored_name
             try:
-                reader = PdfReader(str(file_path))
-                parts: list[tuple[int, str]] = []
-                for page_number, page in enumerate(reader.pages, start=1):
-                    parts.extend((page_number, item) for item in _chunks(page.extract_text() or ""))
+                suffix = Path(document.original_name).suffix.lower()
+                parts, unit_count = extract_document_parts(file_path, suffix)
                 if not parts:
-                    document.status, document.error = "needs_ocr", "PDF không có text layer. Hãy OCR trước rồi thử index lại."
+                    if suffix == ".pdf":
+                        document.status, document.error = "needs_ocr", "PDF không có text layer. Hãy OCR trước rồi thử index lại."
+                    else:
+                        document.status, document.error = "failed", "Tài liệu không có nội dung văn bản để index."
                     session.commit()
+                    if document.status == "failed":
+                        raise RuntimeError(document.error)
                     return document
                 embeddings = self._embed([content for _, content in parts], "passage")
                 for index, ((page_number, content), embedding) in enumerate(zip(parts, embeddings)):
                     session.add(DocumentChunk(document_id=document.id, chunk_index=index, page_number=page_number, content=content, embedding=embedding))
-                document.status, document.page_count = "ready", len(reader.pages)
+                document.status, document.page_count = "ready", unit_count
             except Exception as exc:  # noqa: BLE001
                 document.status, document.error = "failed", str(exc)
             session.commit()
@@ -190,19 +224,25 @@ class KnowledgeService:
                 statement = statement.join(KnowledgeCollectionDocument).where(KnowledgeCollectionDocument.collection_id == collection_id)
             rows = session.execute(statement.order_by(distance).limit(top_k)).all()
         if not rows:
-            return "Không có tài liệu nào đã index để trả lời câu hỏi này."
+            return NO_DOCUMENTS_RESULT
         return "\n\n".join(
-            f"[Nguồn {number}: [{name}](/api/documents/{chunk.document_id}/file#page={chunk.page_number}), trang {chunk.page_number}]\n{chunk.content}"
+            (
+                f"[Nguồn {number}: [{name}](/api/documents/{chunk.document_id}/file#page={chunk.page_number}), trang {chunk.page_number}]\n{chunk.content}"
+                if Path(name).suffix.lower() == ".pdf"
+                else f"[Nguồn {number}: [{name}](/api/documents/{chunk.document_id}/file), đoạn {chunk.page_number}]\n{chunk.content}"
+            )
             for number, (chunk, name, _) in enumerate(rows, start=1)
         )
 
 
 def build_knowledge_tool(service: KnowledgeService, project_id: str | None = None, collection_id: str | None = None) -> ToolSpec | None:
-    if not collection_id:
+    # Chats outside a project use the global document library. Project chats
+    # remain opt-in and only search the explicitly selected collection.
+    if project_id is not None and not collection_id:
         return None
     return ToolSpec(
         name="search_knowledge_base",
-        description="Tìm thông tin trong các PDF người dùng đã upload và index. Dùng khi câu hỏi liên quan đến tài liệu; câu trả lời phải nêu nguồn và số trang.",
+        description="Tìm thông tin trong tài liệu PDF, DOCX hoặc Markdown người dùng đã upload và index. Dùng khi câu hỏi liên quan đến tài liệu; câu trả lời phải nêu nguồn.",
         parameters={"type": "object", "properties": {"query": {"type": "string", "description": "Câu truy vấn rõ ràng bằng ngôn ngữ tự nhiên."}, "top_k": {"type": "integer", "description": "Số đoạn cần lấy, từ 1 đến 8; mặc định 4."}}, "required": ["query"]},
         func=lambda query, top_k=4: service.search(query, top_k, project_id, collection_id),
     )

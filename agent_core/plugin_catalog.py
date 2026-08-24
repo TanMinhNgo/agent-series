@@ -13,18 +13,25 @@ class CatalogPlugin:
     category: str
     capabilities: tuple[str, ...]
     setup_url: str
+    connection_mode: str = "planned"
     featured: bool = False
 
 
 def _plugin(
-    slug: str, name: str, description: str, category: str, capabilities: tuple[str, ...] = ("search", "sync"), featured: bool = False
+    slug: str,
+    name: str,
+    description: str,
+    category: str,
+    capabilities: tuple[str, ...] = ("search", "sync"),
+    featured: bool = False,
+    connection_mode: str = "planned",
 ) -> CatalogPlugin:
-    return CatalogPlugin(slug, name, description, category, capabilities, f"https://www.{slug.split('-')[0]}.com", featured)
+    return CatalogPlugin(slug, name, description, category, capabilities, f"https://www.{slug.split('-')[0]}.com", connection_mode, featured)
 
 
 CATALOG: tuple[CatalogPlugin, ...] = (
     # Năng suất
-    _plugin("google-workspace", "Google Workspace", "Tìm dữ liệu trong Drive, Gmail và Calendar.", "productivity", ("search", "sync", "actions"), True),
+    _plugin("google-workspace", "Google Workspace", "Tìm dữ liệu trong Drive, Gmail và Calendar.", "productivity", ("search", "sync", "actions"), True, "oauth"),
     _plugin("notion", "Notion", "Tìm kiếm wiki, tài liệu và ghi chú workspace.", "productivity", featured=True),
     _plugin("asana", "Asana", "Theo dõi task, project và tiến độ công việc.", "productivity"),
     _plugin("clickup", "ClickUp", "Tra cứu task, docs và kế hoạch trong ClickUp.", "productivity"),

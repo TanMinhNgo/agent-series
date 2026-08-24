@@ -4,6 +4,7 @@ import type { ComponentType } from 'react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { cn } from '@/lib/utils';
 import {
   AdminEmpty as Empty,
@@ -17,6 +18,7 @@ import type {
   AdminCredential as Credential,
   AdminList as List,
   AdminOverview as Overview,
+  AdminPluginConnection as PluginConnection,
   AdminTab as Tab,
   AdminUser as User,
 } from '@/src/features/admin/types/admin';
@@ -29,121 +31,158 @@ const tabs: { id: Tab; label: string; icon: typeof Activity }[] = [
   { id: 'security', label: 'Bảo mật & Audit', icon: ShieldCheck },
 ];
 
-export function AdminDashboardPage() {
-  const [tab, setTab] = useState<Tab>('overview');
+type Confirmation = {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  destructive?: boolean;
+  onConfirm: () => Promise<unknown>;
+};
+
+export function AdminDashboardPage({ view, navigate }: { view: Tab; navigate: (to: string) => void }) {
   const [query, setQuery] = useState('');
   const [userPage, setUserPage] = useState(1);
   const [securityPage, setSecurityPage] = useState(1);
-  const { overview, users, credentials, audit, updateUser, updateModel, refresh } = useAdminDashboard({
-    tab,
-    query,
-    userPage,
-    securityPage,
-  });
+  const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  const { overview, users, credentials, audit, pluginConnections, updateUser, updateModel, refresh } =
+    useAdminDashboard({
+      view,
+      query,
+      userPage,
+      securityPage,
+    });
   const error =
     overview.error?.message ||
     users.error?.message ||
     credentials.error?.message ||
     audit.error?.message ||
+    pluginConnections.error?.message ||
     updateUser.error?.message ||
     updateModel.error?.message;
   const counts = overview.data?.counts;
   const recentAudit = useMemo(() => audit.data?.items.slice(0, 5) || [], [audit.data]);
 
   return (
-    <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 sm:px-8 lg:px-12">
-      <header className="flex flex-col gap-4 border-b pb-6 md:flex-row md:items-end md:justify-between">
-        <div>
-          <p className="text-sm font-medium text-primary">System administration</p>
-          <h1 className="mt-1 text-3xl font-semibold tracking-tight">Bảng điều khiển hệ thống</h1>
-          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            Theo dõi sức khỏe hệ thống, người dùng và các sự kiện vận hành. Dữ liệu được đọc trực tiếp từ API
-            quản trị.
-          </p>
-        </div>
-        <Button variant="outline" onClick={refresh} disabled={overview.isFetching}>
-          <RefreshCw className={cn(overview.isFetching && 'animate-spin')} /> Làm mới
-        </Button>
-      </header>
-      <nav className="flex gap-1 overflow-x-auto border-b" aria-label="Khu vực quản trị">
-        {tabs.map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setTab(id)}
-            className={cn(
-              'flex shrink-0 items-center gap-2 border-b-2 px-3 py-3 text-sm font-medium transition-colors',
-              tab === id
-                ? 'border-primary text-foreground'
-                : 'border-transparent text-muted-foreground hover:text-foreground',
-            )}
+    <>
+      <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 sm:px-8 lg:px-12">
+        <header className="flex flex-col gap-4 border-b pb-6 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="text-sm font-medium text-primary">System administration</p>
+            <h1 className="mt-1 text-3xl font-semibold tracking-tight">Bảng điều khiển hệ thống</h1>
+            <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+              Theo dõi sức khỏe hệ thống, người dùng và các sự kiện vận hành. Dữ liệu được đọc trực tiếp từ
+              API quản trị.
+            </p>
+          </div>
+          <Button variant="outline" onClick={refresh} disabled={overview.isFetching}>
+            <RefreshCw className={cn(overview.isFetching && 'animate-spin')} /> Làm mới
+          </Button>
+        </header>
+        <nav className="flex gap-1 overflow-x-auto border-b" aria-label="Khu vực quản trị">
+          {tabs.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => navigate(`/admin/${id}`)}
+              className={cn(
+                'flex shrink-0 items-center gap-2 border-b-2 px-3 py-3 text-sm font-medium transition-colors',
+                view === id
+                  ? 'border-primary text-foreground'
+                  : 'border-transparent text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <Icon size={16} />
+              {label}
+            </button>
+          ))}
+        </nav>
+        {error ? (
+          <div
+            role="alert"
+            className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive"
           >
-            <Icon size={16} />
-            {label}
-          </button>
-        ))}
-      </nav>
-      {error ? (
-        <div
-          role="alert"
-          className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive"
-        >
-          {error}
-        </div>
-      ) : null}
-      {tab === 'overview' ? (
-        <OverviewTab
-          counts={counts}
-          worker={overview.data?.worker}
-          providers={overview.data?.providers}
-          audits={recentAudit}
-          loading={overview.isLoading}
-        />
-      ) : null}
-      {tab === 'users' ? (
-        <UsersTab
-          query={query}
-          onQueryChange={(value) => {
-            setQuery(value);
-            setUserPage(1);
+            {error}
+          </div>
+        ) : null}
+        {view === 'overview' ? (
+          <OverviewTab
+            counts={counts}
+            worker={overview.data?.worker}
+            providers={overview.data?.providers}
+            audits={recentAudit}
+            loading={overview.isLoading}
+          />
+        ) : null}
+        {view === 'users' ? (
+          <UsersTab
+            query={query}
+            onQueryChange={(value) => {
+              setQuery(value);
+              setUserPage(1);
+            }}
+            page={userPage}
+            onPageChange={setUserPage}
+            users={users.data}
+            loading={users.isLoading}
+            updating={updateUser.isPending}
+            onToggle={(user) => {
+              const active = !user.isActive;
+              setConfirmation({
+                title: `${active ? 'Kích hoạt' : 'Vô hiệu hóa'} người dùng?`,
+                description: `${active ? 'Cho phép' : 'Chặn'} ${user.email} truy cập hệ thống.`,
+                confirmLabel: active ? 'Kích hoạt' : 'Vô hiệu hóa',
+                destructive: !active,
+                onConfirm: () => updateUser.mutateAsync({ userId: user.id, isActive: active }),
+              });
+            }}
+          />
+        ) : null}
+        {view === 'system' ? (
+          <SystemTab
+            worker={overview.data?.worker}
+            providers={overview.data?.providers}
+            loading={overview.isLoading}
+            updatingModel={
+              updateModel.isPending
+                ? `${updateModel.variables?.provider}/${updateModel.variables?.modelId}`
+                : null
+            }
+            onToggleModel={(provider, modelId, isActive) => {
+              setConfirmation({
+                title: `${isActive ? 'Bật' : 'Tắt'} model?`,
+                description: `${isActive ? 'Cho phép dùng' : 'Ngừng cho phép dùng'} model ${modelId}.`,
+                confirmLabel: isActive ? 'Bật model' : 'Tắt model',
+                destructive: !isActive,
+                onConfirm: () => updateModel.mutateAsync({ provider, modelId, isActive }),
+              });
+            }}
+          />
+        ) : null}
+        {view === 'security' ? (
+          <SecurityTab
+            credentials={credentials.data}
+            audit={audit.data}
+            pluginConnections={pluginConnections.data}
+            page={securityPage}
+            onPageChange={setSecurityPage}
+            loading={credentials.isLoading || audit.isLoading || pluginConnections.isLoading}
+          />
+        ) : null}
+      </div>
+      {confirmation ? (
+        <ConfirmDialog
+          open
+          title={confirmation.title}
+          description={confirmation.description}
+          confirmLabel={confirmation.confirmLabel}
+          destructive={confirmation.destructive}
+          onOpenChange={(open) => {
+            if (!open) setConfirmation(null);
           }}
-          page={userPage}
-          onPageChange={setUserPage}
-          users={users.data}
-          loading={users.isLoading}
-          updating={updateUser.isPending}
-          onToggle={(user) => {
-            if (window.confirm(`${user.isActive ? 'Vô hiệu hóa' : 'Kích hoạt'} ${user.email}?`))
-              void updateUser.mutate({ userId: user.id, isActive: !user.isActive });
-          }}
+          onConfirm={confirmation.onConfirm}
         />
       ) : null}
-      {tab === 'system' ? (
-        <SystemTab
-          worker={overview.data?.worker}
-          providers={overview.data?.providers}
-          loading={overview.isLoading}
-          updatingModel={
-            updateModel.isPending
-              ? `${updateModel.variables?.provider}/${updateModel.variables?.modelId}`
-              : null
-          }
-          onToggleModel={(provider, modelId, isActive) => {
-            if (window.confirm(`${isActive ? 'Bật' : 'Tắt'} model ${modelId}?`))
-              void updateModel.mutate({ provider, modelId, isActive });
-          }}
-        />
-      ) : null}
-      {tab === 'security' ? (
-        <SecurityTab
-          credentials={credentials.data}
-          audit={audit.data}
-          page={securityPage}
-          onPageChange={setSecurityPage}
-          loading={credentials.isLoading || audit.isLoading}
-        />
-      ) : null}
-    </div>
+    </>
   );
 }
 
@@ -406,18 +445,49 @@ function SystemTab({
 function SecurityTab({
   credentials,
   audit,
+  pluginConnections,
   page,
   onPageChange,
   loading,
 }: {
   credentials?: List<Credential>;
   audit?: List<Audit>;
+  pluginConnections?: List<PluginConnection>;
   page: number;
   onPageChange: (page: number) => void;
   loading: boolean;
 }) {
   return (
-    <div className="grid gap-6 xl:grid-cols-2">
+    <div className="grid gap-6 xl:grid-cols-3">
+      <Panel>
+        <div className="border-b p-5">
+          <h2 className="font-semibold">Kết nối plugin</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Chỉ xem trạng thái kết nối; token không bao giờ hiển thị.
+          </p>
+        </div>
+        <div className="divide-y">
+          {loading ? (
+            <Empty>Đang tải kết nối plugin...</Empty>
+          ) : pluginConnections?.items.length ? (
+            pluginConnections.items.map((item) => (
+              <div key={item.id} className="p-4 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <strong className="truncate">{item.userEmail}</strong>
+                  <Badge variant={item.status === 'connected' ? 'secondary' : 'outline'}>{item.status}</Badge>
+                </div>
+                <p className="mt-2 font-medium">{item.connectorSlug}</p>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {item.scopeCount} quyền · Cập nhật: {date(item.updatedAt)} · Hết hạn: {date(item.expiresAt)}
+                </p>
+              </div>
+            ))
+          ) : (
+            <Empty>Chưa có plugin nào được kết nối.</Empty>
+          )}
+        </div>
+        <Pager page={page} total={pluginConnections?.total || 0} onChange={onPageChange} />
+      </Panel>
       <Panel>
         <div className="border-b p-5">
           <h2 className="font-semibold">Credential người dùng</h2>

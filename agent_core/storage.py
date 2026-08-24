@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextvars import ContextVar
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from secrets import token_urlsafe
 from uuid import uuid4
 
@@ -13,6 +13,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker, with_loader_criteria
 
 GLOBAL_DOCUMENT_SCOPE = "__library__"
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 def document_scope_key(project_id: str | None) -> str:
@@ -40,8 +43,8 @@ class User(Base):
     display_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     role: Mapped[str] = mapped_column(String(24), default="member")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 class AuthIdentity(Base):
@@ -51,7 +54,7 @@ class AuthIdentity(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     provider: Mapped[str] = mapped_column(String(32))
     provider_subject: Mapped[str] = mapped_column(String(320))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class AuthSession(Base):
@@ -60,7 +63,7 @@ class AuthSession(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class UserProviderCredential(Base):
@@ -72,9 +75,9 @@ class UserProviderCredential(Base):
     ciphertext: Mapped[str] = mapped_column(Text)
     key_version: Mapped[str] = mapped_column(String(32), default="v1")
     key_hint: Mapped[str] = mapped_column(String(8))
-    validated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    validated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 class ProviderModel(Base):
@@ -88,15 +91,15 @@ class ProviderModel(Base):
     approved: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     supports_tools: Mapped[bool] = mapped_column(Boolean, default=False)
-    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 class SystemSetting(Base):
     __tablename__ = "system_settings"
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[str] = mapped_column(String(500))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 class SystemAuditLog(Base):
@@ -108,7 +111,7 @@ class SystemAuditLog(Base):
     event_type: Mapped[str] = mapped_column(String(64), index=True)
     summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
 
 
 @event.listens_for(Session, "do_orm_execute")
@@ -137,8 +140,8 @@ class Chat(UserOwned, Base):
     title: Mapped[str] = mapped_column(String(160), default="Cuộc trò chuyện mới")
     provider: Mapped[str] = mapped_column(String(32))
     model: Mapped[str] = mapped_column(String(160))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     pinned: Mapped[bool] = mapped_column(Boolean, default=False)
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
     context_source_chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id", ondelete="SET NULL"), nullable=True)
@@ -160,7 +163,7 @@ class ChatMemoryChunk(UserOwned, Base):
     chunk_index: Mapped[int] = mapped_column(Integer)
     embedding: Mapped[list[float]] = mapped_column(Vector(384))
     forgotten: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class ChatShare(UserOwned, Base):
@@ -173,8 +176,8 @@ class ChatShare(UserOwned, Base):
     provider: Mapped[str] = mapped_column(String(32))
     model: Mapped[str] = mapped_column(String(160))
     messages: Mapped[list] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
@@ -191,8 +194,31 @@ class ChatMessage(UserOwned, Base):
     tool_calls: Mapped[list | None] = mapped_column(JSON, nullable=True)
     attachments: Mapped[list | None] = mapped_column(JSON, nullable=True)
     content_blocks: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    sources: Mapped[list | None] = mapped_column(JSON, nullable=True)
     pinned: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class ResponseFeedback(UserOwned, Base):
+    __tablename__ = "response_feedback"
+    __table_args__ = (UniqueConstraint("user_id", "message_id", name="uq_response_feedback_user_message"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    message_id: Mapped[str] = mapped_column(ForeignKey("chat_messages.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class UserPreference(UserOwned, Base):
+    __tablename__ = "user_preferences"
+    __table_args__ = (UniqueConstraint("user_id", name="uq_user_preferences_user"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    style_scores: Mapped[dict] = mapped_column(JSON, default=dict)
+    topic_counts: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 class PromptTemplate(UserOwned, Base):
@@ -202,8 +228,8 @@ class PromptTemplate(UserOwned, Base):
     name: Mapped[str] = mapped_column(String(160))
     content: Mapped[str] = mapped_column(Text)
     project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 class MediaAttachment(UserOwned, Base):
@@ -214,7 +240,7 @@ class MediaAttachment(UserOwned, Base):
     stored_name: Mapped[str] = mapped_column(String(255), unique=True)
     mime_type: Mapped[str] = mapped_column(String(80))
     size_bytes: Mapped[int] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class LibraryAsset(UserOwned, Base):
@@ -233,7 +259,7 @@ class LibraryAsset(UserOwned, Base):
     is_project_source: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     index_status: Mapped[str] = mapped_column(String(16), default="pending")
     index_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     chunks: Mapped[list["ArtifactChunk"]] = relationship(back_populates="asset", cascade="all, delete-orphan")
 
 
@@ -258,8 +284,8 @@ class Project(UserOwned, Base):
     status: Mapped[str] = mapped_column(String(24), default="active")
     instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
     memory_mode: Mapped[str] = mapped_column(String(24), default="default")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 class Schedule(UserOwned, Base):
@@ -278,8 +304,8 @@ class Schedule(UserOwned, Base):
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     timezone: Mapped[str] = mapped_column(String(64), default="Asia/Ho_Chi_Minh")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 class ScheduleRun(UserOwned, Base):
@@ -292,39 +318,44 @@ class ScheduleRun(UserOwned, Base):
     status: Mapped[str] = mapped_column(String(16), default="running")
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Plugin(UserOwned, Base):
     __tablename__ = "plugins"
+    __table_args__ = (
+        UniqueConstraint("user_id", "slug", name="uq_plugins_user_slug"),
+        UniqueConstraint("user_id", "catalog_slug", name="uq_plugins_user_catalog_slug"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    slug: Mapped[str] = mapped_column(String(80), unique=True)
+    slug: Mapped[str] = mapped_column(String(80))
     name: Mapped[str] = mapped_column(String(160))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    catalog_slug: Mapped[str | None] = mapped_column(String(80), unique=True, nullable=True)
+    catalog_slug: Mapped[str | None] = mapped_column(String(80), nullable=True)
     category: Mapped[str | None] = mapped_column(String(48), nullable=True)
     capabilities: Mapped[list | None] = mapped_column(JSON, nullable=True)
     connection_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 class ConnectorConnection(UserOwned, Base):
     __tablename__ = "connector_connections"
+    __table_args__ = (UniqueConstraint("user_id", "connector_slug", name="uq_connector_connections_user_slug"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    connector_slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    connector_slug: Mapped[str] = mapped_column(String(80), index=True)
     encrypted_token: Mapped[str] = mapped_column(Text)
     account_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     scopes: Mapped[list] = mapped_column(JSON, default=list)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="connected")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 class OAuthState(UserOwned, Base):
@@ -333,7 +364,7 @@ class OAuthState(UserOwned, Base):
     state: Mapped[str] = mapped_column(String(128), primary_key=True)
     connector_slug: Mapped[str] = mapped_column(String(80), index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class ConnectorAuditLog(UserOwned, Base):
@@ -345,7 +376,7 @@ class ConnectorAuditLog(UserOwned, Base):
     event_type: Mapped[str] = mapped_column(String(64), index=True)
     tool_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
 
 
 class Document(UserOwned, Base):
@@ -361,7 +392,7 @@ class Document(UserOwned, Base):
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     chunks: Mapped[list["DocumentChunk"]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
     )
@@ -386,8 +417,8 @@ class KnowledgeCollection(UserOwned, Base):
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(160))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 class KnowledgeCollectionDocument(Base):
@@ -418,21 +449,21 @@ class BackgroundJob(UserOwned, Base):
     status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
-    run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, index=True)
+    run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 class WorkerStatus(Base):
     __tablename__ = "worker_status"
 
     worker_id: Mapped[str] = mapped_column(String(48), primary_key=True, default="default")
-    last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     current_job_type: Mapped[str | None] = mapped_column(String(48), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 class Database:
@@ -490,6 +521,81 @@ class ChatRepository:
             session.commit()
             return chat
 
+    def create_branch(self, chat_id: str, assistant_message_id: str) -> Chat:
+        """Copy only the selected assistant turn and the user turn immediately before it."""
+        with self.database.session() as session:
+            parent = session.get(Chat, chat_id)
+            if parent is None:
+                raise ValueError("Không tìm thấy chat.")
+            assistant = session.get(ChatMessage, assistant_message_id)
+            if assistant is None or assistant.chat_id != chat_id or assistant.role != "assistant":
+                raise ValueError("Chỉ có thể mở nhánh từ phản hồi AI thuộc chat này.")
+            user = session.scalar(
+                select(ChatMessage)
+                .where(
+                    ChatMessage.chat_id == chat_id,
+                    ChatMessage.role == "user",
+                    ChatMessage.position < assistant.position,
+                )
+                .order_by(ChatMessage.position.desc())
+                .limit(1)
+            )
+            if user is None:
+                raise ValueError("Không tìm thấy câu hỏi đứng trước phản hồi này.")
+            branch = Chat(
+                title=user.content.strip()[:80] or "Nhánh hội thoại",
+                provider=parent.provider,
+                model=parent.model,
+                project_id=parent.project_id,
+                collection_id=parent.collection_id,
+                parent_chat_id=parent.id,
+                branch_from_position=assistant.position,
+            )
+            session.add(branch)
+            session.flush()
+            for position, source in enumerate((user, assistant)):
+                session.add(
+                    ChatMessage(
+                        chat_id=branch.id,
+                        position=position,
+                        role=source.role,
+                        content=source.content,
+                        attachments=source.attachments if source.role == "user" else None,
+                        content_blocks=source.content_blocks if source.role == "assistant" else None,
+                        sources=source.sources if source.role == "assistant" else None,
+                    )
+                )
+            session.commit()
+            return branch
+
+    def prepare_regeneration(self, chat_id: str, assistant_message_id: str) -> str:
+        """Remove the latest exchange so streaming can recreate it without duplicate turns."""
+        with self.database.session() as session:
+            assistant = session.get(ChatMessage, assistant_message_id)
+            if assistant is None or assistant.chat_id != chat_id or assistant.role != "assistant":
+                raise ValueError("Không tìm thấy phản hồi AI cần tạo lại.")
+            latest_position = session.scalar(
+                select(func.max(ChatMessage.position)).where(ChatMessage.chat_id == chat_id)
+            )
+            if latest_position != assistant.position:
+                raise ValueError("Chỉ có thể tạo lại phản hồi AI mới nhất.")
+            user = session.scalar(
+                select(ChatMessage)
+                .where(
+                    ChatMessage.chat_id == chat_id,
+                    ChatMessage.role == "user",
+                    ChatMessage.position < assistant.position,
+                )
+                .order_by(ChatMessage.position.desc())
+                .limit(1)
+            )
+            if user is None:
+                raise ValueError("Không tìm thấy câu hỏi đứng trước phản hồi này.")
+            content = user.content
+            session.execute(delete(ChatMessage).where(ChatMessage.chat_id == chat_id, ChatMessage.position >= user.position))
+            session.commit()
+            return content
+
     def set_message_pin(self, message_id: str, pinned: bool) -> ChatMessage | None:
         with self.database.session() as session:
             message = session.get(ChatMessage, message_id)
@@ -535,7 +641,7 @@ class ChatRepository:
                     if isinstance(raw_created_at, datetime)
                     else datetime.fromisoformat(raw_created_at)
                     if isinstance(raw_created_at, str)
-                    else datetime.utcnow()
+                    else utc_now()
                 )
                 session.add(ChatMessage(
                     chat_id=chat_id, position=position, role=item["role"], content=item.get("content", ""),
@@ -544,12 +650,13 @@ class ChatRepository:
                     attachments=[{key: value for key, value in attachment.items() if key != "data"}
                                  for attachment in item.get("attachments", [])] or None,
                     content_blocks=item.get("content_blocks") or None,
+                    sources=item.get("sources") or None,
                     created_at=created_at,
                 ))
             user_message = next((item["content"] for item in history if item["role"] == "user"), "")
             if chat.title == "Cuộc trò chuyện mới" and user_message:
                 chat.title = user_message.strip()[:80]
-            chat.updated_at = datetime.utcnow()
+            chat.updated_at = utc_now()
             session.commit()
 
     def update_model(self, chat_id: str, provider: str, model: str) -> None:
@@ -559,7 +666,7 @@ class ChatRepository:
                 raise ValueError("Không tìm thấy chat.")
             chat.provider = provider
             chat.model = model
-            chat.updated_at = datetime.utcnow()
+            chat.updated_at = utc_now()
             session.commit()
 
     def update(self, chat_id: str, **values) -> Chat | None:
@@ -574,7 +681,7 @@ class ChatRepository:
                 # existing "not supplied" behavior.
                 if key in allowed and (key in {"project_id", "collection_id"} or value is not None):
                     setattr(chat, key, value)
-            chat.updated_at = datetime.utcnow()
+            chat.updated_at = utc_now()
             session.commit()
             return chat
 
@@ -610,7 +717,7 @@ class ChatRepository:
             else:
                 share.title, share.provider, share.model, share.messages, share.expires_at = chat.title, chat.provider, chat.model, messages, expires_at
                 share.token = token_urlsafe(24)
-                share.updated_at = datetime.utcnow()
+                share.updated_at = utc_now()
             session.commit()
             return share
 
@@ -645,6 +752,7 @@ class ChatRepository:
                     "name": message.tool_name, "tool_calls": message.tool_calls,
                     "attachments": message.attachments,
                     "content_blocks": message.content_blocks,
+                    "sources": message.sources,
                     "pinned": message.pinned,
                     "created_at": message.created_at.isoformat(),
                 }.items() if value is not None}
@@ -690,7 +798,7 @@ class WorkspaceRepository:
                 return None
             for key, value in values.items():
                 setattr(item, key, value)
-            item.updated_at = datetime.utcnow()
+            item.updated_at = utc_now()
             session.commit()
             return item
 
@@ -726,7 +834,7 @@ class ConnectorRepository:
                 item.scopes = scopes
                 item.expires_at = expires_at
                 item.status = status
-                item.updated_at = datetime.utcnow()
+                item.updated_at = utc_now()
             session.commit()
             return item
 
@@ -736,7 +844,7 @@ class ConnectorRepository:
             if item is None:
                 return None
             item.status = status
-            item.updated_at = datetime.utcnow()
+            item.updated_at = utc_now()
             session.commit()
             return item
 
@@ -773,6 +881,53 @@ class ConnectorRepository:
     def list_audit(self, connector_slug: str, limit: int = 20) -> list[ConnectorAuditLog]:
         with self.database.session() as session:
             return list(session.scalars(select(ConnectorAuditLog).where(ConnectorAuditLog.connector_slug == connector_slug).order_by(desc(ConnectorAuditLog.created_at)).limit(limit)))
+
+    def list_connection_metadata(
+        self,
+        offset: int,
+        limit: int,
+        query: str | None = None,
+        connector_slug: str | None = None,
+        status: str | None = None,
+    ) -> tuple[list[dict[str, object]], int]:
+        """Return admin-safe connection metadata without ever selecting token material."""
+        filters = []
+        if query:
+            term = f"%{query.strip()}%"
+            filters.append(or_(User.email.ilike(term), ConnectorConnection.connector_slug.ilike(term)))
+        if connector_slug:
+            filters.append(ConnectorConnection.connector_slug == connector_slug)
+        if status:
+            filters.append(ConnectorConnection.status == status)
+        statement = (
+            select(
+                ConnectorConnection.id.label("id"),
+                ConnectorConnection.connector_slug.label("connector_slug"),
+                ConnectorConnection.status.label("status"),
+                ConnectorConnection.scopes.label("scopes"),
+                ConnectorConnection.expires_at.label("expires_at"),
+                ConnectorConnection.created_at.label("created_at"),
+                ConnectorConnection.updated_at.label("updated_at"),
+                User.id.label("user_id"),
+                User.email.label("user_email"),
+            )
+            .join(User, User.id == ConnectorConnection.user_id)
+            .where(*filters)
+            .order_by(desc(ConnectorConnection.updated_at))
+            .offset(offset)
+            .limit(limit)
+            .execution_options(skip_user_scope=True)
+        )
+        count_statement = (
+            select(func.count())
+            .select_from(ConnectorConnection)
+            .join(User, User.id == ConnectorConnection.user_id)
+            .where(*filters)
+            .execution_options(skip_user_scope=True)
+        )
+        with self.database.session() as session:
+            rows = [dict(row._mapping) for row in session.execute(statement).all()]
+            return rows, int(session.scalar(count_statement) or 0)
 
 
 class AuthRepository:
@@ -839,7 +994,7 @@ class AuthRepository:
                 item = UserProviderCredential(user_id=user_id, provider=provider, ciphertext=ciphertext, key_hint=key_hint)
                 session.add(item)
             else:
-                item.ciphertext, item.key_hint, item.validated_at, item.updated_at = ciphertext, key_hint, datetime.utcnow(), datetime.utcnow()
+                item.ciphertext, item.key_hint, item.validated_at, item.updated_at = ciphertext, key_hint, utc_now(), utc_now()
             session.commit()
             return item
 
@@ -923,7 +1078,7 @@ class AuthRepository:
             session.execute(delete(AuthSession).where(AuthSession.token_hash == token_hash)); session.commit()
 
     def claim_legacy_data(self, user_id: str) -> None:
-        entities = (Chat, ChatMemoryChunk, ChatShare, ChatMessage, PromptTemplate, MediaAttachment, LibraryAsset, ArtifactChunk, Project, Schedule, ScheduleRun, Plugin, ConnectorConnection, OAuthState, ConnectorAuditLog, Document, DocumentChunk, KnowledgeCollection, BackgroundJob)
+        entities = (Chat, ChatMemoryChunk, ChatShare, ChatMessage, ResponseFeedback, UserPreference, PromptTemplate, MediaAttachment, LibraryAsset, ArtifactChunk, Project, Schedule, ScheduleRun, Plugin, ConnectorConnection, OAuthState, ConnectorAuditLog, Document, DocumentChunk, KnowledgeCollection, BackgroundJob)
         with self.database.session() as session:
             for entity in entities:
                 session.execute(entity.__table__.update().where(entity.user_id.is_(None)).values(user_id=user_id))
@@ -986,7 +1141,7 @@ class ScheduleRepository:
             if run is None:
                 return None
             run.status = "failed" if error else "succeeded"
-            run.summary, run.error, run.finished_at = summary, error, datetime.utcnow()
+            run.summary, run.error, run.finished_at = summary, error, utc_now()
             session.commit()
             return run
 
@@ -1008,7 +1163,7 @@ class ScheduleRepository:
         with self.database.session() as session:
             schedule = session.get(Schedule, schedule_id)
             if schedule is not None:
-                schedule.chat_id, schedule.updated_at = chat_id, datetime.utcnow()
+                schedule.chat_id, schedule.updated_at = chat_id, utc_now()
                 session.commit()
 
 

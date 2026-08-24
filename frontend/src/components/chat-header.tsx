@@ -1,13 +1,14 @@
 import { useEffect, useState, type ChangeEvent } from 'react';
-import { Menu, Sparkles } from 'lucide-react';
+import { Menu } from 'lucide-react';
 
-import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import type { Chat, Config } from '@/src/types';
 
 type Props = {
   chat: Chat | null;
   config: Config | null;
+  provider?: string;
+  model?: string;
   busy?: boolean;
   onOpenSidebar?: () => void;
   onProviderChange: (event: ChangeEvent<HTMLSelectElement>) => void;
@@ -19,6 +20,8 @@ type Props = {
 export function ChatHeader({
   chat,
   config,
+  provider,
+  model,
   busy = false,
   onOpenSidebar,
   onProviderChange,
@@ -26,7 +29,9 @@ export function ChatHeader({
   collections = [],
   onCollectionChange,
 }: Props) {
-  const models = chat && config ? config.providers[chat.provider] || [] : [];
+  const selectedProvider = chat?.provider || provider;
+  const selectedModel = chat?.model || model;
+  const models = config && selectedProvider ? config.providers[selectedProvider] || [] : [];
   const [hasScrolled, setHasScrolled] = useState(() => window.scrollY > 0);
 
   useEffect(() => {
@@ -55,18 +60,18 @@ export function ChatHeader({
         <div>
           <h1 className="font-semibold">Local Agent</h1>
           <p className="text-xs text-muted-foreground">
-            {chat ? `${chat.provider} · ${chat.model}` : 'Đang tải...'}
+            {selectedProvider && selectedModel
+              ? `${selectedProvider} · ${selectedModel}`
+              : config
+                ? 'Chưa có model khả dụng'
+                : 'Đang tải cấu hình...'}
           </p>
         </div>
       </div>
-      {chat && config && (
+      {config && selectedProvider && selectedModel && (
         <div className="hidden items-center gap-2 sm:flex">
-          <Badge variant="outline">
-            <Sparkles size={12} />
-            Model
-          </Badge>
           <select
-            value={chat.provider}
+            value={selectedProvider}
             onChange={onProviderChange}
             disabled={busy}
             className="select-control disabled:cursor-not-allowed disabled:opacity-60"
@@ -75,7 +80,7 @@ export function ChatHeader({
               <option key={name}>{name}</option>
             ))}
           </select>
-          {chat.projectId ? (
+          {chat?.projectId ? (
             <select
               value={chat.collectionId || ''}
               onChange={(event) => onCollectionChange?.(event.target.value || null)}
@@ -92,7 +97,7 @@ export function ChatHeader({
             </select>
           ) : null}
           <select
-            value={chat.model}
+            value={selectedModel}
             onChange={onModelChange}
             disabled={busy}
             className="select-control disabled:cursor-not-allowed disabled:opacity-60"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -26,10 +27,11 @@ from agent_core.agent import Agent
 from agent_core.artifacts import ArtifactService, build_artifact_tool
 from agent_core.config import Settings, load_settings
 from agent_core.credentials import CredentialError, UserCredentialService
-from agent_core.knowledge import KnowledgeService, build_knowledge_tool
+from agent_core.knowledge import NO_DOCUMENTS_RESULT, KnowledgeService, build_knowledge_tool
 from agent_core.media import MediaService
 from agent_core.library import LibraryService
 from agent_core.memory import MemoryService
+from agent_core.personalization import PersonalizationService
 from agent_core.google_workspace import GOOGLE_WORKSPACE_SLUG, GoogleConnectorError, GoogleWorkspaceExecutor, GoogleWorkspaceService
 from agent_core.plugin_catalog import CATALOG, catalog_json, find_catalog_plugin
 from agent_core.plugin_execution import EXECUTORS, connected_read_tools
@@ -54,6 +56,7 @@ class Services:
     auth: AuthService
     model_registry: ModelRegistryRepository
     credentials: UserCredentialService
+    personalization: PersonalizationService
 
 
 class CreateChatRequest(BaseModel):
@@ -136,6 +139,17 @@ class PromptTemplateRequest(BaseModel):
 
 class PinMessageRequest(BaseModel):
     pinned: bool
+
+
+class FeedbackRequest(BaseModel):
+    kind: Literal["helpful", "incorrect", "too_long", "too_short", "unclear", "wrong_style"]
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class BranchChatRequest(BaseModel):
+    assistant_message_id: str = Field(alias="assistantMessageId")
+
+    model_config = {"populate_by_name": True}
 
 
 class AdminUserStatusRequest(BaseModel):
@@ -262,6 +276,24 @@ def message_json(message: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+SOURCE_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\((/api/documents/[^)#]+(?:#[^)]+)?)\)")
+
+
+def detach_response_sources(content: str) -> tuple[str, list[dict[str, str]]]:
+    """Move document links out of the visible answer into the message source menu."""
+    sources: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for name, url in SOURCE_LINK_PATTERN.findall(content):
+        if url not in seen:
+            sources.append({"name": name, "url": url})
+            seen.add(url)
+    if not sources:
+        return content, []
+    lines = [line for line in content.splitlines() if "/api/documents/" not in line]
+    cleaned = "\n".join(lines).strip()
+    return cleaned or "Đã sử dụng tài liệu trong Thư viện để trả lời.", sources
+
+
 def template_json(item: PromptTemplate) -> dict[str, Any]:
     return {"id": item.id, "name": item.name, "content": item.content, "projectId": item.project_id, "createdAt": item.created_at.isoformat(), "updatedAt": item.updated_at.isoformat()}
 
@@ -322,6 +354,8 @@ def make_agent(
     app_services: Services,
     chat: Chat,
     memory_context: str = "",
+    knowledge_context: str = "",
+    personalization_context: str = "",
     plugin_tools: list[ToolSpec] | None = None,
     history: list[dict[str, Any]] | None = None,
 ) -> Agent:
@@ -354,7 +388,7 @@ def make_agent(
             build_knowledge_tool(app_services.knowledge, chat.project_id, chat.collection_id),
             ([build_artifact_tool(app_services.artifacts, chat.project_id)] if chat.project_id else []) + [export_tool, *(plugin_tools or [])],
         ),
-        system_prompt=DEFAULT_SYSTEM_PROMPT + (f"\n\nHướng dẫn dự án:\n{project.instructions}" if project and project.instructions else "") + ("\n\nKhi dùng knowledge base, giữ nguyên Markdown link của nguồn và nêu số trang để người dùng có thể mở đúng PDF." if chat.collection_id else "") + source_context + (f"\n\n{memory_context}" if memory_context else ""),
+        system_prompt=DEFAULT_SYSTEM_PROMPT + (f"\n\nHướng dẫn dự án:\n{project.instructions}" if project and project.instructions else "") + ("\n\nKhi dùng knowledge base, giữ nguyên Markdown link của nguồn và nêu vị trí nguồn để người dùng mở đúng tài liệu." if chat.collection_id or chat.project_id is None else "") + source_context + (f"\n\nNgữ cảnh Thư viện RAG đã được truy xuất tự động trước câu hỏi này:\n{knowledge_context}\n\nƯu tiên trả lời dựa trên ngữ cảnh này khi nó liên quan trực tiếp; giữ nguyên link nguồn. Nếu không liên quan, không được suy diễn hoặc viện dẫn nó." if knowledge_context else "") + (f"\n\n{personalization_context}" if personalization_context else "") + (f"\n\n{memory_context}" if memory_context else ""),
         max_steps=settings.max_steps,
     )
     stored_history = history if history is not None else app_services.chats.history(chat.id)
@@ -390,6 +424,7 @@ async def lifespan(app: FastAPI):
         auth=AuthService(auth_repository, settings),
         model_registry=model_registry,
         credentials=UserCredentialService(auth_repository, settings),
+        personalization=PersonalizationService(database),
     )
     queue_pending_artifacts(app.state.services)
     yield
@@ -643,6 +678,38 @@ def admin_audit(request: Request, offset: int = Query(default=0, ge=0), limit: i
         subject = services().auth.repository.get_user(item.subject_user_id) if item.subject_user_id else None
         return {"id": item.id, "eventType": item.event_type, "actorUserId": item.actor_user_id, "actorEmail": actor.email if actor else None, "subjectUserId": item.subject_user_id, "subjectEmail": subject.email if subject else None, "summary": item.summary, "createdAt": item.created_at.isoformat()}
     return {"items": [audit_json(item) for item in rows], "total": total}
+
+
+@app.get("/api/admin/plugin-connections", tags=["System admin"])
+def admin_plugin_connections(
+    request: Request,
+    q: str | None = Query(default=None, max_length=160),
+    connector_slug: str | None = Query(default=None, max_length=80),
+    status: str | None = Query(default=None, max_length=32),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=25, ge=1, le=100),
+) -> dict[str, Any]:
+    require_system_admin(request)
+    rows, total = ConnectorRepository(services().chats.database).list_connection_metadata(
+        offset, limit, q, connector_slug, status
+    )
+    return {
+        "items": [
+            {
+                "id": connection["id"],
+                "userId": connection["user_id"],
+                "userEmail": connection["user_email"],
+                "connectorSlug": connection["connector_slug"],
+                "status": connection["status"],
+                "scopeCount": len(connection["scopes"] or []),
+                "expiresAt": connection["expires_at"].isoformat() if connection["expires_at"] else None,
+                "createdAt": connection["created_at"].isoformat(),
+                "updatedAt": connection["updated_at"].isoformat(),
+            }
+            for connection in rows
+        ],
+        "total": total,
+    }
 
 
 def enqueue_document_index(document: Document) -> BackgroundJob:
@@ -921,6 +988,31 @@ def pin_message(message_id: str, payload: PinMessageRequest) -> dict[str, Any]:
     if message is None:
         raise HTTPException(status_code=404, detail="Chỉ có thể ghim message của bạn.")
     return {"messageId": message.id, "pinned": message.pinned}
+
+
+@app.post("/api/messages/{message_id}/feedback", status_code=201, tags=["Chats"])
+def create_response_feedback(message_id: str, payload: FeedbackRequest) -> dict[str, Any]:
+    try:
+        item = services().personalization.record_feedback(message_id, payload.kind, payload.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"id": item.id, "messageId": item.message_id, "kind": item.kind, "note": item.note}
+
+
+@app.post("/api/chats/{chat_id}/branches", status_code=201, tags=["Chats"])
+def create_chat_branch(chat_id: str, payload: BranchChatRequest) -> dict[str, Any]:
+    try:
+        return chat_json(services().chats.create_branch(chat_id, payload.assistant_message_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/chats/{chat_id}/regenerate", tags=["Chats"])
+def prepare_chat_regeneration(chat_id: str, payload: BranchChatRequest) -> dict[str, str]:
+    try:
+        return {"content": services().chats.prepare_regeneration(chat_id, payload.assistant_message_id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/api/chats/{chat_id}/pins", tags=["Chats"])
@@ -1324,13 +1416,20 @@ def google_authorize() -> dict[str, str]:
 
 
 @app.get("/api/connectors/google/callback", include_in_schema=False)
-def google_callback(code: str | None = None, state: str | None = None, error: str | None = None) -> RedirectResponse:
+def google_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None) -> RedirectResponse:
     base_url = services().settings.app_web_url
     if error or not code or not state:
         return RedirectResponse(f"{base_url}/plugins?{urlencode({'google': 'cancelled'})}", status_code=303)
     try:
         services().google_workspace.complete_authorization(code, state)
         set_google_plugin_connection("connected")
+        user = request.state.user
+        services().auth.repository.add_system_audit(
+            "plugin_connected",
+            actor_user_id=user.id,
+            subject_user_id=user.id,
+            summary="Đã kết nối Google Workspace (chỉ đọc).",
+        )
         result = "connected"
     except GoogleConnectorError:
         result = "failed"
@@ -1338,9 +1437,16 @@ def google_callback(code: str | None = None, state: str | None = None, error: st
 
 
 @app.delete("/api/connectors/google", status_code=204, tags=["Connectors"])
-def google_disconnect() -> None:
+def google_disconnect(request: Request) -> None:
     services().google_workspace.disconnect()
     set_google_plugin_connection("not_connected", enabled=False)
+    user = request.state.user
+    services().auth.repository.add_system_audit(
+        "plugin_disconnected",
+        actor_user_id=user.id,
+        subject_user_id=user.id,
+        summary="Đã ngắt Google Workspace.",
+    )
 
 
 @app.get("/api/plugin-catalog", tags=["Plugin catalog"])
@@ -1437,13 +1543,40 @@ def stream_chat(chat_id: str, content: str, attachments: list[dict]) -> Iterator
                 # Long-term memory is an enhancement: an unavailable embedding
                 # model must never prevent the current conversation from working.
                 memory_context = ""
-                events.put(("status", {"message": "Không thể đọc Thư viện, vẫn tiếp tục trả lời..."}))
+                events.put(("status", {"message": "Không thể đọc Memory, vẫn tiếp tục trả lời..."}))
+            knowledge_context = ""
+            if chat.project_id is None or chat.collection_id:
+                try:
+                    events.put(("status", {"message": "Đang tìm trong Thư viện..."}))
+                    retrieved = app_services.knowledge.search(content, project_id=chat.project_id, collection_id=chat.collection_id)
+                    knowledge_context = "" if retrieved == NO_DOCUMENTS_RESULT else retrieved
+                except Exception:  # noqa: BLE001
+                    # Retrieval is a priority, not a single point of failure for chat.
+                    events.put(("status", {"message": "Không thể tìm Thư viện RAG, vẫn tiếp tục trả lời..."}))
+            try:
+                app_services.personalization.observe_user_message(content)
+                personalization_context = app_services.personalization.context()
+            except Exception:  # noqa: BLE001
+                personalization_context = ""
             plugin_tools = connected_read_tools(app_services.workspace.list_plugins())
-            agent = make_agent(app_services, chat, memory_context, plugin_tools=plugin_tools, history=full_history)
+            agent = make_agent(
+                app_services,
+                chat,
+                memory_context,
+                knowledge_context,
+                personalization_context=personalization_context,
+                plugin_tools=plugin_tools,
+                history=full_history,
+            )
             initial_history_length = len(agent.history)
             result = agent.run(content, attachments, on_step=lambda item: events.put((item["type"], item)))
             if result.content_blocks:
                 agent.history[-1]["content_blocks"] = result.content_blocks
+            if agent.history and agent.history[-1].get("role") == "assistant":
+                visible_content, sources = detach_response_sources(agent.history[-1].get("content", ""))
+                agent.history[-1]["content"] = visible_content
+                if sources:
+                    agent.history[-1]["sources"] = sources
             saved_history = persisted_history(full_history, agent.history, initial_history_length)
             turn_created_at = datetime.now(UTC).isoformat()
             for item in saved_history[len(full_history):]:

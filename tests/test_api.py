@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -26,8 +27,9 @@ from agent_core.artifacts import extract_artifact_text
 from agent_core.plugin_catalog import CATALOG, find_catalog_plugin
 from agent_core.plugin_execution import connected_read_tools
 from agent_core.memory import MemoryService
+from agent_core.knowledge import ALLOWED_DOCUMENT_SUFFIXES, build_knowledge_tool, extract_document_parts
 from agent_core.credentials import CredentialError, UserCredentialService
-from agent_core.storage import Chat, Plugin, Schedule, ScheduleRepository, current_user_id, document_scope_key
+from agent_core.storage import Chat, Plugin, Schedule, ScheduleRepository, current_user_id, document_scope_key, utc_now
 
 
 def test_message_json_exposes_message_creation_time() -> None:
@@ -38,6 +40,10 @@ def test_message_json_exposes_message_creation_time() -> None:
         "content": "Xin chào",
         "createdAt": created_at,
     }
+
+
+def test_utc_now_is_timezone_aware() -> None:
+    assert utc_now().tzinfo is UTC
 
 
 def test_health_and_public_config_do_not_expose_provider_keys(monkeypatch) -> None:
@@ -127,6 +133,71 @@ def test_stream_chat_restores_the_chat_owner_in_its_worker_thread(monkeypatch) -
     assert '"createdAt"' in message_event
 
 
+def test_stream_chat_retrieves_the_global_library_before_creating_the_agent(monkeypatch) -> None:
+    chat = Chat(id="chat-1", user_id="user-1", provider="openai", model="gpt-5.6-terra")
+    observed: dict[str, object] = {}
+
+    class Chats:
+        database = object()
+        def get(self, _chat_id): return chat
+        def history(self, _chat_id): return []
+        def replace_history(self, _chat_id, _history): pass
+
+    class AgentStub:
+        history: list[dict] = []
+        def run(self, _content, _attachments, on_step):
+            self.history = [{"role": "user", "content": "RAG là gì?"}, {"role": "assistant", "content": "RAG"}]
+            return SimpleNamespace(text="RAG", content_blocks=[])
+
+    class Jobs:
+        def __init__(self, _database): pass
+        def enqueue(self, _kind, _payload): pass
+
+    class Knowledge:
+        def search(self, query, top_k=4, project_id=None, collection_id=None):
+            observed["search"] = (query, top_k, project_id, collection_id)
+            return "[Nguồn 1: [rag.md](/api/documents/doc-1/file), đoạn 1]\\nRAG dùng truy hồi."
+
+    service = SimpleNamespace(
+        chats=Chats(),
+        knowledge=Knowledge(),
+        memory=SimpleNamespace(recall=lambda *_args, **_kwargs: ""),
+        workspace=SimpleNamespace(get=lambda *_args, **_kwargs: None, list_plugins=lambda: []),
+    )
+    monkeypatch.setattr(main_module, "services", lambda: service)
+    def make_agent_stub(*args, **kwargs):
+        observed["context"] = args[3]
+        return AgentStub()
+    monkeypatch.setattr(main_module, "make_agent", make_agent_stub)
+    monkeypatch.setattr(main_module, "BackgroundJobRepository", Jobs)
+
+    list(main_module.stream_chat("chat-1", "RAG là gì?", []))
+
+    assert observed["search"] == ("RAG là gì?", 4, None, None)
+    assert "RAG dùng truy hồi" in str(observed["context"])
+
+
+def test_knowledge_extracts_markdown_and_docx_parts(tmp_path: Path) -> None:
+    markdown = tmp_path / "rag.md"
+    markdown.write_text("# RAG\nRAG truy hồi ngữ cảnh trước khi trả lời.", encoding="utf-8")
+    markdown_parts, markdown_count = extract_document_parts(markdown, ".md")
+    assert markdown_count == len(markdown_parts) == 1
+    assert "truy hồi" in markdown_parts[0][1]
+
+    from docx import Document as DocxDocument
+
+    document = DocxDocument()
+    document.add_paragraph("DOCX cũng trở thành nguồn cho RAG.")
+    stream = BytesIO()
+    document.save(stream)
+    docx_path = tmp_path / "rag.docx"
+    docx_path.write_bytes(stream.getvalue())
+    docx_parts, docx_count = extract_document_parts(docx_path, ".docx")
+    assert docx_count == len(docx_parts) == 1
+    assert "nguồn cho RAG" in docx_parts[0][1]
+    assert ALLOWED_DOCUMENT_SUFFIXES == {".pdf", ".docx", ".md"}
+
+
 def test_chat_history_list_is_paginated(monkeypatch) -> None:
     records = [
         SimpleNamespace(
@@ -197,6 +268,24 @@ def test_make_agent_does_not_mutate_the_history_being_persisted(monkeypatch) -> 
     agent.history.append({"role": "assistant", "content": "Câu trả lời mới"})
 
     assert history == [{"role": "user", "content": "Câu hỏi cũ"}]
+
+
+def test_global_knowledge_tool_searches_only_global_documents() -> None:
+    calls = []
+    service = SimpleNamespace(search=lambda *args: calls.append(args) or "[1] global.pdf (trang 1)\nNội dung")
+
+    tool = build_knowledge_tool(service)
+
+    assert tool is not None
+    assert tool.func("Tìm nội dung", 3).startswith("[1] global.pdf")
+    assert calls == [("Tìm nội dung", 3, None, None)]
+
+
+def test_project_knowledge_requires_a_selected_collection() -> None:
+    service = SimpleNamespace(search=lambda *_args: "not used")
+
+    assert build_knowledge_tool(service, "project-1") is None
+    assert build_knowledge_tool(service, "project-1", "collection-1") is not None
 
 
 def test_memory_recall_is_scoped_to_the_current_chat_and_optional_source() -> None:

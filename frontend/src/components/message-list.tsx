@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { RichResponseLazy } from '@/src/components/rich-response-lazy';
+import { AssistantMessageActions } from '@/src/components/assistant-message-actions';
 import type { Message } from '@/src/types';
 
 gsap.registerPlugin(useGSAP, ScrollToPlugin);
@@ -37,6 +38,8 @@ type Props = {
   scrollContainerRef: RefObject<HTMLDivElement | null>;
   onRunwayRelease: () => void;
   onPin?: (message: Message) => void;
+  onBranch?: (message: Message) => Promise<void>;
+  onRegenerate?: (message: Message) => Promise<void>;
 };
 
 export function MessageList({
@@ -48,9 +51,13 @@ export function MessageList({
   scrollContainerRef,
   onRunwayRelease,
   onPin,
+  onBranch,
+  onRegenerate,
 }: Props) {
   const latestUserMessageRef = useRef<HTMLElement | null>(null);
   const previousAssistantRef = useRef<HTMLElement | null>(null);
+  const latestAssistantResponseRef = useRef<HTMLElement | null>(null);
+  const pendingAssistantRef = useRef<HTMLElement | null>(null);
   const responseRunwayRef = useRef<HTMLDivElement | null>(null);
   const latestUserIndex = messages.reduce(
     (latestIndex, message, index) => (message.role === 'user' ? index : latestIndex),
@@ -59,6 +66,11 @@ export function MessageList({
   const previousAssistantIndex = messages.reduce(
     (latestIndex, message, index) =>
       index < latestUserIndex && message.role === 'assistant' ? index : latestIndex,
+    -1,
+  );
+  const latestAssistantResponseIndex = messages.reduce(
+    (latestIndex, message, index) =>
+      index > latestUserIndex && message.role === 'assistant' ? index : latestIndex,
     -1,
   );
 
@@ -118,7 +130,15 @@ export function MessageList({
       scrollContainer.addEventListener('touchmove', onTouchMove, { passive: true });
 
       const animateAfterLayout = () => {
-        const target = previousAssistantRef.current || latestUserMessageRef.current;
+        // Keep the response area in view: first the pending "thinking" state,
+        // then the new assistant reply, and only then the outgoing user turn.
+        // Preferring the previous assistant reply makes long replies pull the
+        // viewport back up when the user sends the next message.
+        const target =
+          pendingAssistantRef.current ||
+          latestAssistantResponseRef.current ||
+          latestUserMessageRef.current ||
+          previousAssistantRef.current;
         if (!target) return;
 
         // First measure without the runway. This guarantees that short chats
@@ -141,7 +161,7 @@ export function MessageList({
               scrollContainer.scrollTop +
                 targetBounds.top -
                 containerBounds.top -
-                scrollContainer.clientHeight * (previousAssistantRef.current ? 0.2 : 0.32),
+                scrollContainer.clientHeight * (target === latestUserMessageRef.current ? 0.32 : 0.2),
             ),
             maxScroll,
           );
@@ -172,7 +192,7 @@ export function MessageList({
       };
     },
     {
-      dependencies: [userScrollRequest, isRunwayRequested],
+      dependencies: [userScrollRequest, status, messages.length, isRunwayRequested],
       scope: scrollContainerRef,
       revertOnUpdate: true,
     },
@@ -210,11 +230,13 @@ export function MessageList({
             <article
               id={message.messageId ? `message-${message.messageId}` : undefined}
               ref={
-                index === previousAssistantIndex
-                  ? previousAssistantRef
-                  : index === latestUserIndex
-                    ? latestUserMessageRef
-                    : undefined
+                index === latestAssistantResponseIndex
+                  ? latestAssistantResponseRef
+                  : index === previousAssistantIndex
+                    ? previousAssistantRef
+                    : index === latestUserIndex
+                      ? latestUserMessageRef
+                      : undefined
               }
               className={cn('group flex gap-3 leading-7', message.role === 'user' && 'flex-row-reverse')}
             >
@@ -260,6 +282,14 @@ export function MessageList({
                     </div>
                   ) : null}
                 </div>
+                {message.messageId && message.role === 'assistant' && onBranch && onRegenerate ? (
+                  <AssistantMessageActions
+                    message={message}
+                    isLatest={index === latestAssistantResponseIndex}
+                    onBranch={onBranch}
+                    onRegenerate={onRegenerate}
+                  />
+                ) : null}
                 {message.messageId && message.role === 'user' ? (
                   <div className="mt-1 flex justify-end gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
                     <Tooltip>
@@ -309,7 +339,7 @@ export function MessageList({
         );
       })}
       {status && (
-        <article className="flex min-h-0 flex-1 gap-3 leading-7">
+        <article ref={pendingAssistantRef} className="flex min-h-0 flex-1 gap-3 leading-7">
           <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground">
             <Sparkles size={15} />
           </span>

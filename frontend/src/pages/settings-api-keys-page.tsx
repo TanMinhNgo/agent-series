@@ -2,6 +2,7 @@ import { KeyRound, LoaderCircle, ShieldCheck, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { ApiError } from '@/src/hooks/client';
 import { useApiKeys } from '@/src/hooks/use-api-keys';
 
@@ -14,6 +15,7 @@ const providers = [
 export function SettingsApiKeysPage() {
   const [provider, setProvider] = useState<(typeof providers)[number]['id']>('gemini');
   const [apiKey, setApiKey] = useState('');
+  const [deletingProvider, setDeletingProvider] = useState<string | null>(null);
   const { keys, save, remove } = useApiKeys();
   const selected = providers.find((item) => item.id === provider)!;
   const error = keys.error || save.error || remove.error;
@@ -113,10 +115,7 @@ export function SettingsApiKeysPage() {
                   variant="outline"
                   size="sm"
                   disabled={remove.isPending}
-                  onClick={() => {
-                    if (window.confirm(`Xóa API key ${item.provider}? Bạn sẽ không thể hoàn tác.`))
-                      remove.mutate(item.provider);
-                  }}
+                  onClick={() => setDeletingProvider(item.provider)}
                 >
                   <Trash2 /> Xóa
                 </Button>
@@ -127,6 +126,17 @@ export function SettingsApiKeysPage() {
           )}
         </div>
       </section>
+      <ConfirmDialog
+        open={Boolean(deletingProvider)}
+        title="Xóa API key?"
+        description={`Xóa API key ${deletingProvider || ''}? Bạn sẽ không thể hoàn tác.`}
+        confirmLabel="Xóa API key"
+        destructive
+        onOpenChange={(open) => {
+          if (!open) setDeletingProvider(null);
+        }}
+        onConfirm={() => remove.mutateAsync(deletingProvider!)}
+      />
     </div>
   );
 }

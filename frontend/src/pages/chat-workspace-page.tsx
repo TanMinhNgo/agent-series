@@ -8,6 +8,7 @@ import { ChatHeader } from '@/src/components/chat-header';
 import { MessageList } from '@/src/components/message-list';
 import { Button } from '@/components/ui/button';
 import type { WorkspaceView } from '@/src/components/workspace-panel';
+import type { AdminTab } from '@/src/features/admin/types/admin';
 import { useChatActions } from '@/src/hooks/use-chat-actions';
 import { useCreateChat } from '@/src/hooks/use-create-chat';
 import { useGetChatMessages } from '@/src/hooks/use-get-chat-messages';
@@ -21,7 +22,8 @@ import { useUploadMedia } from '@/src/hooks/use-upload-media';
 import { useWorkspace } from '@/src/hooks/use-workspace';
 import { useAuth } from '@/src/hooks/use-auth';
 import { useChatWorkspaceData } from '@/src/hooks/use-chat-workspace-data';
-import type { Chat, Theme } from '@/src/types';
+import { request } from '@/src/hooks/client';
+import type { Chat, Message, Theme } from '@/src/types';
 import { SettingsApiKeysPage } from '@/src/pages/settings-api-keys-page';
 
 const WorkspacePanel = lazy(() =>
@@ -48,16 +50,41 @@ type ChatWorkspaceProps = {
   libraryPage: boolean;
   workspaceView?: WorkspaceView;
   adminPage: boolean;
+  adminView?: AdminTab;
   settingsPage?: boolean;
   isSystemAdmin: boolean;
   navigate: (to: string) => void;
 };
+
+const NEW_CHAT_SELECTION_KEY = 'agent-series.new-chat-selection';
+
+type DraftSelection = { provider: string; model: string };
+
+function savedNewChatSelection(): DraftSelection {
+  try {
+    const value = sessionStorage.getItem(NEW_CHAT_SELECTION_KEY);
+    if (!value) return { provider: '', model: '' };
+    const selection: unknown = JSON.parse(value);
+    if (
+      typeof selection === 'object' &&
+      selection !== null &&
+      typeof (selection as DraftSelection).provider === 'string' &&
+      typeof (selection as DraftSelection).model === 'string'
+    ) {
+      return selection as DraftSelection;
+    }
+  } catch {
+    // A malformed browser value should fall back to the configured default.
+  }
+  return { provider: '', model: '' };
+}
 
 export function ChatWorkspace({
   chatId,
   libraryPage,
   workspaceView,
   adminPage,
+  adminView,
   settingsPage = false,
   isSystemAdmin,
   navigate,
@@ -67,6 +94,7 @@ export function ChatWorkspace({
     () => (localStorage.getItem('agent-series.theme') as Theme) || 'system',
   );
   const [prompt, setPrompt] = useState('');
+  const [draftSelection, setDraftSelection] = useState(savedNewChatSelection);
   const [status, setStatus] = useState<string | null>(null);
   const [uiError, setUiError] = useState<string | null>(null);
   const [userScrollRequest, setUserScrollRequest] = useState(0);
@@ -104,6 +132,14 @@ export function ChatWorkspace({
   const { projects } = useWorkspace();
   const { collections, templates, pins, pin, saveTemplate, updateTemplate, deleteTemplate } =
     useChatWorkspaceData(activeChat?.id, activeChat?.projectId);
+  const draftProvider =
+    config.data && config.data.providers[draftSelection.provider]
+      ? draftSelection.provider
+      : (config.data?.defaultProvider ?? draftSelection.provider);
+  const draftModels = config.data?.providers[draftProvider] || [];
+  const draftModel = draftModels.includes(draftSelection.model)
+    ? draftSelection.model
+    : draftModels[0] || config.data?.defaultModel || draftSelection.model;
 
   useEffect(() => {
     document.documentElement.classList.toggle(
@@ -127,14 +163,25 @@ export function ChatWorkspace({
     uploadMedia.error?.message ||
     streamChat.error?.message ||
     null;
-  const createAndSelect = async (provider?: string, model?: string, contextSourceChatId?: string) => {
+  const startNewChat = () => {
     setUiError(null);
-    const chat = await createChat.mutateAsync({ provider, model, contextSourceChatId });
-    navigate(`/chat/${chat.id}`);
+    setPrompt('');
+    setStatus(null);
+    setRunwayChatId(null);
+    if (activeChat) {
+      const selection = { provider: activeChat.provider, model: activeChat.model };
+      sessionStorage.setItem(NEW_CHAT_SELECTION_KEY, JSON.stringify(selection));
+      setDraftSelection(selection);
+    }
+    setSidebarOpen(false);
+    navigate('/');
   };
   const changeModel = async (event: ChangeEvent<HTMLSelectElement>) => {
-    if (!activeChat) return;
     const model = event.target.value;
+    if (!activeChat) {
+      setDraftSelection((selection) => ({ ...selection, model }));
+      return;
+    }
     if (model === activeChat.model) return;
     setUiError(null);
     await chatActions.update.mutateAsync({
@@ -143,8 +190,13 @@ export function ChatWorkspace({
     });
   };
   const changeProvider = async (event: ChangeEvent<HTMLSelectElement>) => {
-    if (!activeChat) return;
     const provider = event.target.value;
+    if (!activeChat) {
+      const model = config.data?.providers[provider]?.[0];
+      if (!model) return;
+      setDraftSelection({ provider, model });
+      return;
+    }
     if (provider === activeChat.provider) return;
     const model = config.data?.providers[provider]?.[0];
     if (!model) return;
@@ -171,6 +223,47 @@ export function ChatWorkspace({
     await chatActions.remove.mutateAsync(chat.id);
     if (chat.id === activeChat?.id) navigate('/');
   };
+  const branchFromMessage = async (message: Message) => {
+    if (!activeChat || !message.messageId) return;
+    setUiError(null);
+    try {
+      const branch = await request<Chat>({
+        url: `/chats/${activeChat.id}/branches`,
+        method: 'POST',
+        data: { assistantMessageId: message.messageId },
+      });
+      navigate(`/chat/${branch.id}`);
+    } catch (reason) {
+      setUiError(reason instanceof Error ? reason.message : 'Không thể mở nhánh chat.');
+    }
+  };
+  const regenerateMessage = async (message: Message) => {
+    if (!activeChat || !message.messageId || streamChat.isPending) return;
+    setUiError(null);
+    setStatus(null);
+    try {
+      const { content } = await request<{ content: string }>({
+        url: `/chats/${activeChat.id}/regenerate`,
+        method: 'POST',
+        data: { assistantMessageId: message.messageId },
+      });
+      await streamChat.mutateAsync({
+        chatId: activeChat.id,
+        content,
+        skipOptimisticUser: true,
+        replaceAssistantMessageId: message.messageId,
+        onEvent: (name, data) => {
+          if (name === 'status') setStatus(String(data.message));
+          if (name === 'tool_call') setStatus(`Đang dùng ${String(data.name)}...`);
+          if (name === 'tool_result') setStatus(`Đã nhận kết quả từ ${String(data.name)}.`);
+          if (name === 'message') setStatus(null);
+          if (name === 'error') setUiError(String(data.message));
+        },
+      });
+    } catch (reason) {
+      setUiError(reason instanceof Error ? reason.message : 'Không thể tạo lại phản hồi.');
+    }
+  };
   const send = async (contentValue: string, files: File[]) => {
     if (
       (!contentValue.trim() && !files.length) ||
@@ -186,14 +279,19 @@ export function ChatWorkspace({
     setStatus(null);
     setUiError(null);
     try {
-      const chat = activeChat || (await createChat.mutateAsync({}));
+      const chat =
+        activeChat ||
+        (await createChat.mutateAsync({
+          provider: draftProvider || undefined,
+          model: draftModel || undefined,
+        }));
       if (!activeChat) navigate(`/chat/${chat.id}`);
-      const pdfs = files.filter((file) => file.type === 'application/pdf');
+      const knowledgeFiles = files.filter((file) => /\.(pdf|docx|md)$/i.test(file.name));
       const images = files.filter((file) => file.type.startsWith('image/'));
       const [uploadedImages] = await Promise.all([
         images.length ? uploadMedia.mutateAsync(images) : Promise.resolve([]),
-        pdfs.length
-          ? uploadDocuments.mutateAsync({ files: pdfs, projectId: chat.projectId || undefined })
+        knowledgeFiles.length
+          ? uploadDocuments.mutateAsync({ files: knowledgeFiles, projectId: chat.projectId || undefined })
           : Promise.resolve([]),
       ]);
       await streamChat.mutateAsync({
@@ -234,9 +332,7 @@ export function ChatWorkspace({
               if (chats.hasNextPage && !chats.isFetchingNextPage) void chats.fetchNextPage();
             }}
             theme={theme}
-            onCreateChat={() => {
-              void createAndSelect();
-            }}
+            onCreateChat={startNewChat}
             onSelectChat={(chat: Chat) => {
               navigate(`/chat/${chat.id}`);
             }}
@@ -254,7 +350,7 @@ export function ChatWorkspace({
             isSystemAdmin={isSystemAdmin}
             onOpenAdmin={() => {
               setSidebarOpen(false);
-              navigate('/admin');
+              navigate('/admin/overview');
             }}
             user={auth.session.user}
             onOpenApiKeys={() => navigate('/settings/api-keys')}
@@ -281,10 +377,7 @@ export function ChatWorkspace({
                   if (chats.hasNextPage && !chats.isFetchingNextPage) void chats.fetchNextPage();
                 }}
                 theme={theme}
-                onCreateChat={() => {
-                  setSidebarOpen(false);
-                  void createAndSelect();
-                }}
+                onCreateChat={startNewChat}
                 onSelectChat={(chat) => {
                   setSidebarOpen(false);
                   navigate(`/chat/${chat.id}`);
@@ -308,7 +401,7 @@ export function ChatWorkspace({
                 isSystemAdmin={isSystemAdmin}
                 onOpenAdmin={() => {
                   setSidebarOpen(false);
-                  navigate('/admin');
+                  navigate('/admin/overview');
                 }}
                 user={auth.session.user}
                 onOpenApiKeys={() => {
@@ -335,6 +428,8 @@ export function ChatWorkspace({
             <ChatHeader
               chat={activeChat}
               config={config.data || null}
+              provider={draftProvider}
+              model={draftModel}
               busy={createChat.isPending || chatActions.update.isPending || streamChat.isPending}
               onOpenSidebar={() => setSidebarOpen(true)}
               onProviderChange={(event) => void changeProvider(event)}
@@ -355,7 +450,7 @@ export function ChatWorkspace({
             </Suspense>
           ) : adminPage ? (
             <Suspense fallback={<WorkspacePanelFallback />}>
-              <AdminPage />
+              <AdminPage view={adminView || 'overview'} navigate={navigate} />
             </Suspense>
           ) : settingsPage ? (
             <SettingsApiKeysPage />
@@ -394,11 +489,14 @@ export function ChatWorkspace({
                       message.messageId &&
                       pin.mutate({ messageId: message.messageId, pinned: !message.pinned })
                     }
+                    onBranch={branchFromMessage}
+                    onRegenerate={regenerateMessage}
                   />
                 </div>
               </div>
               <div className="mx-auto w-full max-w-5xl px-4 sm:px-8 lg:px-12">
                 <ChatComposer
+                  key={activeChat?.id || 'new-chat'}
                   prompt={prompt}
                   busy={
                     chatActions.update.isPending ||

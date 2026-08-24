@@ -99,9 +99,10 @@ function ProtectedRoutes() {
       <Route path="schedules" element={<WorkspacePage {...props} view="schedules" />} />
       <Route path="plugins" element={<WorkspacePage {...props} view="plugins" />} />
       <Route path="settings/api-keys" element={<SettingsPage {...props} />} />
+      <Route path="admin" element={<Navigate to="/admin/overview" replace />} />
       <Route
-        path="admin"
-        element={props.isSystemAdmin ? <AdminPage {...props} /> : <Navigate to="/" replace />}
+        path="admin/:view"
+        element={props.isSystemAdmin ? <AdminRoute {...props} /> : <Navigate to="/" replace />}
       />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
@@ -111,6 +112,14 @@ function ProtectedRoutes() {
 function ChatRoute(props: { isSystemAdmin: boolean; navigate: (to: string) => void }) {
   const { chatId } = useParams();
   return <ChatPage {...props} chatId={chatId} />;
+}
+
+function AdminRoute(props: { isSystemAdmin: boolean; navigate: (to: string) => void }) {
+  const { view } = useParams();
+  const validViews = ['overview', 'users', 'system', 'security'] as const;
+  if (!validViews.includes(view as (typeof validViews)[number]))
+    return <Navigate to="/admin/overview" replace />;
+  return <AdminPage {...props} view={view as (typeof validViews)[number]} />;
 }
 
 export function AppRouter() {

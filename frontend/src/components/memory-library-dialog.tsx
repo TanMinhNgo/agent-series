@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { LoaderCircle, Search, Trash2, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { request } from '@/src/hooks/client';
 
 type Memory = {
@@ -17,6 +18,7 @@ export function MemoryLibraryDialog({ onClose }: { onClose: () => void }) {
   const [items, setItems] = useState<Memory[]>([]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [confirmingForgetAll, setConfirmingForgetAll] = useState(false);
   const load = async (term = '') => {
     setLoading(true);
     try {
@@ -47,7 +49,6 @@ export function MemoryLibraryDialog({ onClose }: { onClose: () => void }) {
     setItems((current) => current.filter((item) => item.id !== id));
   };
   const forgetAll = async () => {
-    if (!window.confirm('Xóa toàn bộ memory trong Thư viện? Điều này không xóa lịch sử chat.')) return;
     await request<void>({ url: '/memories', method: 'DELETE' });
     setItems([]);
   };
@@ -82,7 +83,7 @@ export function MemoryLibraryDialog({ onClose }: { onClose: () => void }) {
               placeholder="Tìm trong memory..."
             />
           </label>
-          <Button variant="destructive" onClick={() => void forgetAll()} disabled={!items.length}>
+          <Button variant="destructive" onClick={() => setConfirmingForgetAll(true)} disabled={!items.length}>
             <Trash2 /> Xóa hết
           </Button>
         </div>
@@ -122,6 +123,15 @@ export function MemoryLibraryDialog({ onClose }: { onClose: () => void }) {
           )}
         </div>
       </section>
+      <ConfirmDialog
+        open={confirmingForgetAll}
+        title="Xóa toàn bộ memory?"
+        description="Thao tác này không xóa lịch sử chat, nhưng không thể hoàn tác."
+        confirmLabel="Xóa toàn bộ"
+        destructive
+        onOpenChange={setConfirmingForgetAll}
+        onConfirm={forgetAll}
+      />
     </div>
   );
 }

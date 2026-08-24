@@ -21,5 +21,8 @@ export type Message = {
   content: string;
   attachments?: MediaAttachment[];
   contentBlocks?: ResponseBlock[];
+  sources?: { name: string; url: string }[];
   pinned?: boolean;
+  /** Present only while a locally queued turn has not been confirmed by the API. */
+  optimistic?: boolean;
 };

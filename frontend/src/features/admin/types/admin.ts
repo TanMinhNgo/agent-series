@@ -30,6 +30,17 @@ export type AdminCredential = {
   validatedAt: string;
   updatedAt: string;
 };
+export type AdminPluginConnection = {
+  id: string;
+  userId: string;
+  userEmail: string;
+  connectorSlug: string;
+  status: 'connected' | 'reauth_required' | 'not_connected';
+  scopeCount: number;
+  expiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
 export type AdminAudit = {
   id: string;
   eventType: string;

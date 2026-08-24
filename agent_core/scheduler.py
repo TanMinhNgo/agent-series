@@ -12,8 +12,12 @@ from agent_core.knowledge import KnowledgeService
 from agent_core.library import LibraryService
 from agent_core.media import MediaService
 from agent_core.memory import MemoryService
+from agent_core.personalization import PersonalizationService
+from agent_core.google_workspace import GoogleWorkspaceService
+from agent_core.auth import AuthService
+from agent_core.credentials import UserCredentialService
 from agent_core.plugin_execution import connected_read_tools
-from agent_core.storage import BackgroundJobRepository, ChatRepository, Database, MediaRepository, Schedule, ScheduleRepository, WorkspaceRepository
+from agent_core.storage import AuthRepository, BackgroundJobRepository, ChatRepository, ConnectorRepository, Database, MediaRepository, ModelRegistryRepository, Schedule, ScheduleRepository, WorkspaceRepository
 
 
 class ScheduleWorker:
@@ -56,7 +60,13 @@ class ScheduleWorker:
                 memory_context = ""
             plugin_tools = connected_read_tools(self.services.workspace.list_plugins())
             full_history = self.services.chats.history(chat.id)
-            agent = make_agent(self.services, chat, memory_context, plugin_tools=plugin_tools, history=full_history)
+            agent = make_agent(
+                self.services,
+                chat,
+                memory_context=memory_context,
+                plugin_tools=plugin_tools,
+                history=full_history,
+            )
             initial_history_length = len(agent.history)
             result = agent.run(schedule.prompt or schedule.title)
             if result.content_blocks:
@@ -76,6 +86,9 @@ def build_worker() -> ScheduleWorker:
     settings = load_settings()
     database = Database(settings.database_url)
     media = MediaService(MediaRepository(database), settings.media_dir)
+    auth_repository = AuthRepository(database)
+    model_registry = ModelRegistryRepository(database)
+    model_registry.seed(settings.provider_models)
     services = Services(
         settings=settings,
         chats=ChatRepository(database),
@@ -85,6 +98,11 @@ def build_worker() -> ScheduleWorker:
         artifacts=ArtifactService(database, settings.media_dir, settings.embedding_model),
         memory=MemoryService(database, settings.embedding_model),
         workspace=WorkspaceRepository(database),
+        google_workspace=GoogleWorkspaceService(ConnectorRepository(database), settings),
+        auth=AuthService(auth_repository, settings),
+        model_registry=model_registry,
+        credentials=UserCredentialService(auth_repository, settings),
+        personalization=PersonalizationService(database),
     )
     queue_pending_artifacts(services)
     return ScheduleWorker(services)
