@@ -96,6 +96,28 @@ def test_message_json_preserves_separate_sources() -> None:
     assert payload["sources"] == [{"name": "rag.md", "url": "/api/documents/rag/file"}]
 
 
+def test_messages_include_only_current_users_feedback(monkeypatch) -> None:
+    class Chats:
+        def get(self, _chat_id): return SimpleNamespace(id="chat-1")
+        def history(self, _chat_id):
+            return [
+                {"message_id": "user-1", "role": "user", "content": "Câu hỏi"},
+                {"message_id": "assistant-1", "role": "assistant", "content": "Trả lời"},
+            ]
+
+    class Personalization:
+        def feedback_by_message_ids(self, message_ids):
+            assert message_ids == ["assistant-1"]
+            return {"assistant-1": "helpful"}
+
+    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(chats=Chats(), personalization=Personalization()))
+
+    result = main_module.messages("chat-1")
+
+    assert result[0].get("feedbackKind") is None
+    assert result[1]["feedbackKind"] == "helpful"
+
+
 def test_feedback_branch_and_regenerate_endpoints_delegate_the_selected_message(monkeypatch) -> None:
     calls: list[tuple[str, str, str | None]] = []
     timestamp = datetime(2026, 8, 24, tzinfo=UTC)

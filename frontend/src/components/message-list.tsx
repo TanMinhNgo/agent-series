@@ -30,6 +30,7 @@ function formatTimeSeparator(timestamp: Date) {
 }
 
 type Props = {
+  chatId?: string;
   messages: Message[];
   status: string | null;
   error: string | null;
@@ -43,6 +44,7 @@ type Props = {
 };
 
 export function MessageList({
+  chatId,
   messages,
   status,
   error,
@@ -284,6 +286,7 @@ export function MessageList({
                 </div>
                 {message.messageId && message.role === 'assistant' && onBranch && onRegenerate ? (
                   <AssistantMessageActions
+                    chatId={chatId}
                     message={message}
                     isLatest={index === latestAssistantResponseIndex}
                     onBranch={onBranch}

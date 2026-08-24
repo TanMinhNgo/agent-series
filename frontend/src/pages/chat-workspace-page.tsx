@@ -240,7 +240,7 @@ export function ChatWorkspace({
   const regenerateMessage = async (message: Message) => {
     if (!activeChat || !message.messageId || streamChat.isPending) return;
     setUiError(null);
-    setStatus(null);
+    setStatus('Agent đang suy nghĩ...');
     try {
       const { content } = await request<{ content: string }>({
         url: `/chats/${activeChat.id}/regenerate`,
@@ -257,10 +257,14 @@ export function ChatWorkspace({
           if (name === 'tool_call') setStatus(`Đang dùng ${String(data.name)}...`);
           if (name === 'tool_result') setStatus(`Đã nhận kết quả từ ${String(data.name)}.`);
           if (name === 'message') setStatus(null);
-          if (name === 'error') setUiError(String(data.message));
+          if (name === 'error') {
+            setStatus(null);
+            setUiError(String(data.message));
+          }
         },
       });
     } catch (reason) {
+      setStatus(null);
       setUiError(reason instanceof Error ? reason.message : 'Không thể tạo lại phản hồi.');
     }
   };
@@ -276,7 +280,10 @@ export function ChatWorkspace({
     sendLock.current = true;
     const content = contentValue.trim() || 'Hãy phân tích các tệp đính kèm này.';
     setPrompt('');
-    setStatus(null);
+    // Show the thinking state immediately. Waiting for the first SSE event
+    // leaves a noticeable blank period while uploads, retrieval, or the API
+    // connection is still being established.
+    setStatus('Agent đang suy nghĩ...');
     setUiError(null);
     try {
       const chat =
@@ -303,7 +310,10 @@ export function ChatWorkspace({
           if (name === 'tool_call') setStatus(`Đang dùng ${String(data.name)}...`);
           if (name === 'tool_result') setStatus(`Đã nhận kết quả từ ${String(data.name)}.`);
           if (name === 'message') setStatus(null);
-          if (name === 'error') setUiError(String(data.message));
+          if (name === 'error') {
+            setStatus(null);
+            setUiError(String(data.message));
+          }
         },
         onUserMessageQueued: () => {
           setRunwayChatId(chat.id);
@@ -311,6 +321,7 @@ export function ChatWorkspace({
         },
       });
     } catch (reason) {
+      setStatus(null);
       setUiError(reason instanceof Error ? reason.message : 'Gửi tin nhắn thất bại.');
     } finally {
       sendLock.current = false;
@@ -478,6 +489,7 @@ export function ChatWorkspace({
                   ) : null}
                   <MessageList
                     key={activeChat?.id || 'new-chat'}
+                    chatId={activeChat?.id}
                     messages={messages.data || []}
                     status={status}
                     error={error}

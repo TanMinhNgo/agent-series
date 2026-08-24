@@ -271,6 +271,8 @@ def message_json(message: dict[str, Any]) -> dict[str, Any]:
         result["messageId"] = result.pop("message_id")
     if "content_blocks" in result:
         result["contentBlocks"] = result.pop("content_blocks") or []
+    if "feedback_kind" in result:
+        result["feedbackKind"] = result.pop("feedback_kind")
     if "created_at" in result:
         result["createdAt"] = result.pop("created_at")
     return result
@@ -991,7 +993,14 @@ def get_chat(chat_id: str) -> dict[str, Any]:
 def messages(chat_id: str) -> list[dict[str, Any]]:
     if services().chats.get(chat_id) is None:
         raise HTTPException(status_code=404, detail="Không tìm thấy chat.")
-    return [message_json(item) for item in services().chats.history(chat_id) if item["role"] in {"user", "assistant"}]
+    history = [item for item in services().chats.history(chat_id) if item["role"] in {"user", "assistant"}]
+    feedback = services().personalization.feedback_by_message_ids(
+        [item["message_id"] for item in history if item["role"] == "assistant" and item.get("message_id")]
+    )
+    return [
+        message_json({**item, "feedback_kind": feedback.get(item.get("message_id"))} if item["role"] == "assistant" else item)
+        for item in history
+    ]
 
 
 @app.patch("/api/messages/{message_id}/pin", tags=["Chats"])

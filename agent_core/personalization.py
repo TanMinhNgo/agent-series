@@ -80,6 +80,16 @@ class PersonalizationService:
             session.commit()
             return feedback
 
+    def feedback_by_message_ids(self, message_ids: list[str]) -> dict[str, str]:
+        """Return the current user's saved feedback for a batch of assistant turns."""
+        if not message_ids or not current_user_id.get():
+            return {}
+        with self.database.session() as session:
+            feedback = session.scalars(
+                select(ResponseFeedback).where(ResponseFeedback.message_id.in_(message_ids))
+            ).all()
+        return {item.message_id: item.kind for item in feedback}
+
     def context(self) -> str:
         user_id = current_user_id.get()
         if not user_id:

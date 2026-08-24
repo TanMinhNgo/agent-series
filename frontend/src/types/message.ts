@@ -22,6 +22,7 @@ export type Message = {
   attachments?: MediaAttachment[];
   contentBlocks?: ResponseBlock[];
   sources?: { name: string; url: string }[];
+  feedbackKind?: 'helpful' | 'incorrect' | 'too_long' | 'too_short' | 'unclear' | 'wrong_style';
   pinned?: boolean;
   /** Present only while a locally queued turn has not been confirmed by the API. */
   optimistic?: boolean;

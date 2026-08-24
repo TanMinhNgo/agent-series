@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   BookOpen,
   Check,
@@ -24,7 +25,10 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { request } from '@/src/hooks/client';
+import { queryKeys } from '@/src/hooks/query-keys';
 import type { Message } from '@/src/types';
+import { markdownToPlainText } from '@/lib/markdown-to-plain-text';
+import { cn } from '@/lib/utils';
 
 type Source = { name: string; url: string };
 type FeedbackKind = 'helpful' | 'incorrect' | 'too_long' | 'too_short' | 'unclear' | 'wrong_style';
@@ -38,30 +42,35 @@ function sourcesIn(content: string): Source[] {
 }
 
 export function AssistantMessageActions({
+  chatId,
   message,
   isLatest,
   onBranch,
   onRegenerate,
 }: {
+  chatId?: string;
   message: Message;
   isLatest: boolean;
   onBranch: (message: Message) => Promise<void>;
   onRegenerate: (message: Message) => Promise<void>;
 }) {
+  const queryClient = useQueryClient();
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [feedbackKind, setFeedbackKind] = useState<FeedbackKind>('unclear');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const sources = useMemo(
     () => message.sources || sourcesIn(message.content),
     [message.content, message.sources],
   );
+  const savedFeedbackKind = message.feedbackKind || null;
 
   const copy = async () => {
-    await navigator.clipboard?.writeText(message.content);
+    await navigator.clipboard?.writeText(markdownToPlainText(message.content));
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1500);
   };
@@ -89,17 +98,30 @@ export function AssistantMessageActions({
   const submitFeedback = async (kind: FeedbackKind = feedbackKind, feedbackNote = note) => {
     if (!message.messageId) return;
     setBusy(true);
+    setFeedbackError(null);
     try {
-      await request({
+      const saved = await request<{ kind: FeedbackKind }>({
         url: `/messages/${message.messageId}/feedback`,
         method: 'POST',
         data: { kind, note: feedbackNote },
       });
+      if (chatId) {
+        queryClient.setQueryData<Message[]>(queryKeys.messages(chatId), (items = []) =>
+          items.map((item) =>
+            item.messageId === message.messageId ? { ...item, feedbackKind: saved.kind } : item,
+          ),
+        );
+      }
       setFeedbackOpen(false);
+    } catch (reason) {
+      setFeedbackError(reason instanceof Error ? reason.message : 'Không thể lưu đánh giá.');
     } finally {
       setBusy(false);
     }
   };
+  const isHelpful = savedFeedbackKind === 'helpful';
+  const hasNegativeFeedback = Boolean(savedFeedbackKind && !isHelpful);
+  const FeedbackIcon = hasNegativeFeedback ? ThumbsDown : ThumbsUp;
 
   return (
     <>
@@ -119,19 +141,37 @@ export function AssistantMessageActions({
               <Button
                 size="icon-sm"
                 variant="ghost"
-                className="size-7 rounded-md"
-                aria-label="Đánh giá phản hồi"
+                className={cn('size-7 rounded-md', savedFeedbackKind && 'text-primary hover:text-primary')}
+                aria-label={
+                  savedFeedbackKind
+                    ? `Đã đánh giá: ${isHelpful ? 'trả lời tốt' : 'trả lời tệ'}`
+                    : 'Đánh giá phản hồi'
+                }
               />
             }
           >
-            <ThumbsUp />
+            <span className="relative">
+              <FeedbackIcon className={savedFeedbackKind ? 'fill-current' : undefined} />
+              {savedFeedbackKind ? (
+                <Check className="absolute -bottom-1.5 -right-2 size-2.5 rounded-full bg-background" />
+              ) : null}
+            </span>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" side="top" sideOffset={8} className="w-40">
             <DropdownMenuItem onClick={() => void submitFeedback('helpful', '')}>
-              <ThumbsUp /> Trả lời tốt
+              <ThumbsUp className={isHelpful ? 'fill-current text-primary' : undefined} />
+              Trả lời tốt
+              {isHelpful ? <Check className="ml-auto size-4" /> : null}
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setFeedbackOpen(true)}>
-              <ThumbsDown /> Trả lời tệ
+            <DropdownMenuItem
+              onClick={() => {
+                setFeedbackError(null);
+                setFeedbackOpen(true);
+              }}
+            >
+              <ThumbsDown className={hasNegativeFeedback ? 'fill-current text-primary' : undefined} />
+              Trả lời tệ
+              {hasNegativeFeedback ? <Check className="ml-auto size-4" /> : null}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -187,6 +227,7 @@ export function AssistantMessageActions({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      {feedbackError ? <p className="mt-1 text-xs text-destructive">{feedbackError}</p> : null}
       {feedbackOpen ? (
         <Modal title="Phản hồi này cần cải thiện ở đâu?" onClose={() => setFeedbackOpen(false)}>
           <div className="grid gap-2">
@@ -222,6 +263,7 @@ export function AssistantMessageActions({
               {busy ? 'Đang lưu...' : 'Gửi đánh giá'}
             </Button>
           </div>
+          {feedbackError ? <p className="mt-3 text-sm text-destructive">{feedbackError}</p> : null}
         </Modal>
       ) : null}
       {sourcesOpen ? (
