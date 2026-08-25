@@ -34,6 +34,14 @@ export function useChatWorkspaceData(chatId?: string, projectId?: string | null)
       void client.invalidateQueries({ queryKey: queryKeys.chatPins(chatId) });
     },
   });
+  const scheduleProposal = useMutation({
+    mutationFn: ({ proposalId, action }: { proposalId: string; action: 'confirm' | 'dismiss' }) =>
+      request({ url: `/chats/${chatId}/schedule-proposals/${proposalId}/${action}`, method: 'POST' }),
+    onSuccess: () => {
+      if (chatId) void client.invalidateQueries({ queryKey: queryKeys.messages(chatId) });
+      void client.invalidateQueries({ queryKey: queryKeys.schedules });
+    },
+  });
   const saveTemplate = useMutation({
     mutationFn: ({ name, content }: { name: string; content: string }) =>
       request({ url: '/templates', method: 'POST', data: { name, content, projectId: projectId || null } }),
@@ -62,5 +70,14 @@ export function useChatWorkspaceData(chatId?: string, projectId?: string | null)
     mutationFn: (id: string) => request<void>({ url: `/templates/${id}`, method: 'DELETE' }),
     onSuccess: () => client.invalidateQueries({ queryKey: ['templates'] }),
   });
-  return { collections, templates, pins, pin, saveTemplate, updateTemplate, deleteTemplate };
+  return {
+    collections,
+    templates,
+    pins,
+    pin,
+    scheduleProposal,
+    saveTemplate,
+    updateTemplate,
+    deleteTemplate,
+  };
 }

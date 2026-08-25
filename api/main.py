@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
+from uuid import uuid4
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -19,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 
@@ -31,6 +33,7 @@ from agent_core.knowledge import NO_DOCUMENTS_RESULT, KnowledgeService, build_kn
 from agent_core.media import MediaService
 from agent_core.library import LibraryService
 from agent_core.memory import MemoryService
+from agent_core.ollama import OllamaCatalog, OllamaError
 from agent_core.personalization import PersonalizationService
 from agent_core.google_workspace import GOOGLE_WORKSPACE_SLUG, GoogleConnectorError, GoogleWorkspaceExecutor, GoogleWorkspaceService
 from agent_core.plugin_catalog import CATALOG, catalog_json, find_catalog_plugin
@@ -39,7 +42,7 @@ from agent_core.prompts import DEFAULT_SYSTEM_PROMPT
 from agent_core.providers import build_client
 from agent_core.storage import ArtifactChunk, AuthRepository, BackgroundJob, BackgroundJobRepository, Chat, ChatMessage, ChatRepository, ChatShare, ConnectorRepository, Database, Document, KnowledgeCollection, LibraryAsset, MediaAttachment, MediaRepository, ModelRegistryRepository, Plugin, Project, PromptTemplate, Schedule, ScheduleRepository, ScheduleRun, WorkspaceRepository, current_user_id
 from agent_core.auth import AuthError, AuthService, SESSION_COOKIE
-from agent_core.tools import ToolSpec, build_default_registry
+from agent_core.tools import ToolRegistry, ToolSpec, build_default_registry
 from agent_core.web_search import WebSearchService, build_web_search_tool, sources_from_web_steps
 
 
@@ -59,6 +62,7 @@ class Services:
     credentials: UserCredentialService
     personalization: PersonalizationService
     web_search: WebSearchService
+    ollama: OllamaCatalog
 
 
 class CreateChatRequest(BaseModel):
@@ -200,6 +204,25 @@ class ScheduleUpdateRequest(BaseModel):
     timezone: str | None = None
 
     model_config = {"populate_by_name": True}
+
+
+class ScheduleProposalPayload(BaseModel):
+    """The small, server-validated draft an AI may show inside a chat."""
+
+    title: str = Field(min_length=1, max_length=160)
+    prompt: str = Field(min_length=1, max_length=10_000)
+    starts_at: datetime = Field(alias="startsAt")
+    recurrence: Literal["once", "daily", "weekly"] = "once"
+    timezone: str = Field(default="Asia/Ho_Chi_Minh", min_length=1, max_length=80)
+
+    model_config = {"populate_by_name": True}
+
+    @field_validator("starts_at")
+    @classmethod
+    def starts_at_must_have_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Thời điểm lịch phải có múi giờ.")
+        return value
 
 
 class PluginRequest(BaseModel):
@@ -349,6 +372,8 @@ def model_error_message(chat: Chat, error: Exception) -> str:
     raw = str(error)
     normalized = raw.lower()
     label = f"{chat.provider} / {chat.model}"
+    if chat.provider == "ollama" and isinstance(error, OllamaError):
+        return f"Ollama local ({chat.model}): {raw}"
     if "reasoning_effort" in normalized and "function tools" in normalized:
         return f"Model {label} không hỗ trợ reasoning khi dùng công cụ ở chế độ hiện tại. Hãy thử gửi lại hoặc chọn model khác."
     if "model" in normalized and ("not found" in normalized or "does not exist" in normalized):
@@ -380,6 +405,8 @@ def make_agent(
     personalization_context: str = "",
     plugin_tools: list[ToolSpec] | None = None,
     history: list[dict[str, Any]] | None = None,
+    schedule_proposals: list[dict[str, Any]] | None = None,
+    allow_schedule_proposals: bool = True,
 ) -> Agent:
     try:
         settings = selected_settings(chat.provider, chat.model, chat.user_id)
@@ -406,16 +433,57 @@ def make_agent(
     )
     web_search = getattr(app_services, "web_search", None)
     web_tool = build_web_search_tool(web_search) if web_search is not None else None
-    extra_tools = ([build_artifact_tool(app_services.artifacts, chat.project_id)] if chat.project_id else []) + [export_tool, *(plugin_tools or [])]
-    if web_tool is not None:
-        extra_tools.append(web_tool)
+    knowledge_tool = build_knowledge_tool(app_services.knowledge, chat.project_id, chat.collection_id)
+    schedule_tool: ToolSpec | None = None
+    if chat.provider != "ollama" and allow_schedule_proposals and schedule_proposals is not None:
+        def propose_schedule(title: str, prompt: str, startsAt: str, recurrence: str = "once", timezone: str = "Asia/Ho_Chi_Minh") -> str:
+            proposal = ScheduleProposalPayload.model_validate({
+                "title": title, "prompt": prompt, "startsAt": startsAt,
+                "recurrence": recurrence, "timezone": timezone,
+            })
+            proposal_id = str(uuid4())
+            block = {
+                "type": "schedule-proposal",
+                "config": {
+                    "proposalId": proposal_id,
+                    "status": "pending",
+                    "title": proposal.title,
+                    "prompt": proposal.prompt,
+                    "startsAt": proposal.starts_at.isoformat(),
+                    "recurrence": proposal.recurrence,
+                    "timezone": proposal.timezone,
+                    "projectId": chat.project_id,
+                },
+            }
+            schedule_proposals.append(block)
+            return json.dumps({"proposalId": proposal_id, "status": "pending", "message": "Đã tạo thẻ xác nhận lịch trình. Người dùng phải bấm Tạo lịch trước khi lịch được lưu."}, ensure_ascii=False)
+
+        schedule_tool = ToolSpec(
+            name="propose_schedule",
+            description="Tạo thẻ xác nhận lịch trình trong chat, KHÔNG tự lưu lịch. Chỉ dùng khi người dùng yêu cầu tạo lịch/nhắc việc và đã nêu rõ cả ngày lẫn giờ. startsAt phải là ISO 8601 có timezone, ví dụ 2026-08-25T09:00:00+07:00.",
+            parameters={"type": "object", "properties": {
+                "title": {"type": "string"}, "prompt": {"type": "string"},
+                "startsAt": {"type": "string"}, "recurrence": {"type": "string", "enum": ["once", "daily", "weekly"]},
+                "timezone": {"type": "string"},
+            }, "required": ["title", "prompt", "startsAt"]},
+            func=propose_schedule,
+        )
+    if chat.provider == "ollama":
+        # Local models only receive the indexed-library tool.  Do not expose
+        # network, plugin, calculator, currency, or file-write capabilities.
+        registry = ToolRegistry([knowledge_tool] if knowledge_tool is not None else [])
+        web_tool = None
+    else:
+        extra_tools = ([build_artifact_tool(app_services.artifacts, chat.project_id)] if chat.project_id else []) + [export_tool, *(plugin_tools or [])]
+        if schedule_tool is not None:
+            extra_tools.append(schedule_tool)
+        if web_tool is not None:
+            extra_tools.append(web_tool)
+        registry = build_default_registry(knowledge_tool, extra_tools)
     agent = Agent(
         build_client(settings),
-        build_default_registry(
-            build_knowledge_tool(app_services.knowledge, chat.project_id, chat.collection_id),
-            extra_tools,
-        ),
-        system_prompt=DEFAULT_SYSTEM_PROMPT + (f"\n\nHướng dẫn dự án:\n{project.instructions}" if project and project.instructions else "") + ("\n\nKhi dùng knowledge base, giữ nguyên Markdown link của nguồn và nêu vị trí nguồn để người dùng mở đúng tài liệu." if chat.collection_id or chat.project_id is None else "") + ("\n\nKhi Thư viện không có hoặc chưa đủ dữ liệu, dùng `search_web`. Chỉ dùng URL do tool trả về; không tự tạo link hoặc nguồn. Không cần tạo mục Nguồn ở cuối câu trả lời vì hệ thống tự hiển thị trong menu trích nguồn." if web_tool is not None else "") + source_context + (f"\n\nNgữ cảnh Thư viện RAG đã được truy xuất tự động trước câu hỏi này:\n{knowledge_context}\n\nƯu tiên trả lời dựa trên ngữ cảnh này khi nó liên quan trực tiếp; giữ nguyên link nguồn. Nếu không liên quan, không được suy diễn hoặc viện dẫn nó." if knowledge_context else "") + (f"\n\n{personalization_context}" if personalization_context else "") + (f"\n\n{memory_context}" if memory_context else ""),
+        registry,
+        system_prompt=DEFAULT_SYSTEM_PROMPT + (f"\n\nHướng dẫn dự án:\n{project.instructions}" if project and project.instructions else "") + ("\n\nKhi dùng knowledge base, giữ nguyên Markdown link của nguồn và nêu vị trí nguồn để người dùng mở đúng tài liệu." if chat.collection_id or chat.project_id is None else "") + ("\n\nKhi Thư viện không có hoặc chưa đủ dữ liệu, dùng `search_web`. Chỉ dùng URL do tool trả về; không tự tạo link hoặc nguồn. Không cần tạo mục Nguồn ở cuối câu trả lời vì hệ thống tự hiển thị trong menu trích nguồn." if web_tool is not None else "") + ("\n\nLịch trình: chỉ gọi `propose_schedule` khi người dùng yêu cầu rõ tạo lịch/nhắc việc VÀ đã có cả ngày lẫn giờ. Nếu thiếu một trong hai, hãy hỏi lại; không đoán. Nếu chỉ thấy việc đáng theo dõi nhưng chưa được yêu cầu, chỉ gợi ý bằng text và hỏi xác nhận, không gọi tool. Thẻ chỉ là đề xuất; lịch chỉ được tạo khi người dùng bấm xác nhận." if schedule_tool is not None else "") + ("\n\nBạn đang chạy Ollama local. Không thể tạo lịch trình hay xử lý tác vụ nặng trong chế độ này; nếu người dùng muốn các việc đó, hãy đề nghị đổi sang provider cloud ổn định hơn." if chat.provider == "ollama" else "") + source_context + (f"\n\nNgữ cảnh Thư viện RAG đã được truy xuất tự động trước câu hỏi này:\n{knowledge_context}\n\nƯu tiên trả lời dựa trên ngữ cảnh này khi nó liên quan trực tiếp; giữ nguyên link nguồn. Nếu không liên quan, không được suy diễn hoặc viện dẫn nó." if knowledge_context else "") + (f"\n\n{personalization_context}" if personalization_context else "") + (f"\n\n{memory_context}" if memory_context else ""),
         max_steps=settings.max_steps,
     )
     stored_history = history if history is not None else app_services.chats.history(chat.id)
@@ -453,6 +521,7 @@ async def lifespan(app: FastAPI):
         credentials=UserCredentialService(auth_repository, settings),
         personalization=PersonalizationService(database),
         web_search=WebSearchService(settings.tavily_api_key),
+        ollama=OllamaCatalog(settings.ollama_base_url),
     )
     queue_pending_artifacts(app.state.services)
     yield
@@ -526,21 +595,41 @@ def require_system_admin(request: Request):
 
 def selected_settings(provider: str, model: str, user_id: str | None) -> Settings:
     app_services = services()
+    if provider == "ollama":
+        app_services.ollama.require_model(model)
+        return app_services.settings.with_provider_model(provider, model)
     if model not in app_services.model_registry.active().get(provider, ()):
         raise ValueError("Model đang tắt hoặc chưa được hệ thống cho phép.")
     return app_services.settings.with_provider_model(provider, model, app_services.credentials.api_key(user_id, provider))
 
 
-def available_provider_models(user_id: str | None) -> dict[str, list[str]]:
+def available_provider_models(user_id: str | None, ollama_models: tuple[str, ...] | None = None) -> dict[str, list[str]]:
     app_services = services()
     configured = app_services.settings.configured_provider_models()
     personal_providers = {item.provider for item in app_services.credentials.list_metadata(user_id)} if user_id else set()
     active = app_services.model_registry.active()
-    return {
+    providers = {
         provider: [model for model in models if model in active.get(provider, ())]
         for provider, models in app_services.settings.provider_models.items()
         if (provider in configured or provider in personal_providers) and any(model in active.get(provider, ()) for model in models)
     }
+    if ollama_models is None:
+        try:
+            models = app_services.ollama.models()
+        except OllamaError:
+            models = ()
+    else:
+        models = ollama_models
+    if models:
+        providers["ollama"] = list(models)
+    return providers
+
+
+def ollama_status() -> dict[str, Any]:
+    try:
+        return {"available": True, "message": None, "models": list(services().ollama.models())}
+    except OllamaError as exc:
+        return {"available": False, "message": str(exc), "models": []}
 
 
 def credential_json(item) -> dict[str, Any]:
@@ -810,13 +899,15 @@ def health() -> dict[str, str]:
 def config(request: Request) -> dict[str, Any]:
     settings = services().settings
     user = services().auth.session_user(request.cookies.get(SESSION_COOKIE))
-    providers = available_provider_models(user.id if user else None)
+    local_status = ollama_status()
+    providers = available_provider_models(user.id if user else None, tuple(local_status["models"]))
     default_provider = settings.provider if settings.active_model in providers.get(settings.provider, []) else next(iter(providers), settings.provider)
     default_model = settings.active_model if settings.active_model in providers.get(default_provider, []) else (providers.get(default_provider) or [settings.active_model])[0]
     return {
         "providers": providers,
         "defaultProvider": default_provider,
         "defaultModel": default_model,
+        "providerStatus": {"ollama": local_status},
     }
 
 
@@ -1369,6 +1460,68 @@ def create_schedule(payload: ScheduleRequest) -> dict[str, Any]:
     return schedule_json(services().workspace.create(Schedule, **values))
 
 
+def mutate_schedule_proposal(chat_id: str, proposal_id: str, action: Literal["confirm", "dismiss"]) -> dict[str, Any]:
+    """Confirm/dismiss exactly one content block, atomically with Schedule creation."""
+    if services().chats.get(chat_id) is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy chat.")
+    with services().chats.database.session() as session:
+        messages = session.scalars(
+            select(ChatMessage)
+            .where(ChatMessage.chat_id == chat_id, ChatMessage.role == "assistant")
+            .order_by(ChatMessage.position)
+            .with_for_update()
+        ).all()
+        for message in messages:
+            blocks = deepcopy(message.content_blocks or [])
+            for block in blocks:
+                config = block.get("config") if isinstance(block, dict) else None
+                if block.get("type") != "schedule-proposal" or not isinstance(config, dict) or config.get("proposalId") != proposal_id:
+                    continue
+                status = config.get("status")
+                if action == "dismiss":
+                    if status == "pending":
+                        config["status"] = "dismissed"
+                        message.content_blocks = blocks
+                        session.commit()
+                    return {"status": config.get("status"), "proposalId": proposal_id}
+                if status == "confirmed":
+                    return {"status": "confirmed", "proposalId": proposal_id, "scheduleId": config.get("scheduleId")}
+                if status != "pending":
+                    raise HTTPException(status_code=409, detail="Đề xuất này đã bị hủy.")
+                try:
+                    proposal = ScheduleProposalPayload.model_validate(config)
+                except Exception as exc:  # malformed old/model-generated block
+                    raise HTTPException(status_code=422, detail="Đề xuất lịch trình không hợp lệ.") from exc
+                schedule = Schedule(
+                    title=proposal.title,
+                    prompt=proposal.prompt,
+                    starts_at=proposal.starts_at,
+                    recurrence=proposal.recurrence,
+                    timezone=proposal.timezone,
+                    project_id=config.get("projectId"),
+                    status="active",
+                    next_run_at=proposal.starts_at,
+                )
+                session.add(schedule)
+                session.flush()
+                config["status"] = "confirmed"
+                config["scheduleId"] = schedule.id
+                message.content_blocks = blocks
+                session.commit()
+                return {"status": "confirmed", "proposalId": proposal_id, "scheduleId": schedule.id, "schedule": schedule_json(schedule)}
+    raise HTTPException(status_code=404, detail="Không tìm thấy đề xuất lịch trình.")
+
+
+@app.post("/api/chats/{chat_id}/schedule-proposals/{proposal_id}/confirm", status_code=201, tags=["Schedules"])
+def confirm_chat_schedule_proposal(chat_id: str, proposal_id: str) -> dict[str, Any]:
+    return mutate_schedule_proposal(chat_id, proposal_id, "confirm")
+
+
+@app.post("/api/chats/{chat_id}/schedule-proposals/{proposal_id}/dismiss", tags=["Schedules"])
+def dismiss_chat_schedule_proposal(chat_id: str, proposal_id: str) -> dict[str, Any]:
+    return mutate_schedule_proposal(chat_id, proposal_id, "dismiss")
+
+
 @app.patch("/api/schedules/{schedule_id}", tags=["Schedules"])
 def update_schedule(schedule_id: str, payload: ScheduleUpdateRequest) -> dict[str, Any]:
     current = services().workspace.get(Schedule, schedule_id)
@@ -1410,9 +1563,16 @@ def run_schedule_now(schedule_id: str) -> dict[str, str]:
         raise HTTPException(status_code=404, detail="Không tìm thấy lịch trình.")
     from agent_core.scheduler import ScheduleWorker
 
-    chat = ScheduleWorker(services()).ensure_chat(schedule)
-    Thread(target=ScheduleWorker(services()).run_now, args=(schedule_id,), daemon=True).start()
-    return {"status": "queued", "chatId": chat.id}
+    worker = ScheduleWorker(services())
+    try:
+        prepared = worker.start_manual(schedule_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if prepared is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy lịch trình.")
+    scheduled, chat, run_id = prepared
+    Thread(target=worker.execute, args=(scheduled, run_id, True), daemon=True).start()
+    return {"status": "running", "chatId": chat.id, "runId": run_id}
 
 
 @app.get("/api/plugins", tags=["Plugins"])
@@ -1604,6 +1764,7 @@ def stream_chat(chat_id: str, content: str, attachments: list[dict]) -> Iterator
             except Exception:  # noqa: BLE001
                 personalization_context = ""
             plugin_tools = connected_read_tools(app_services.workspace.list_plugins())
+            schedule_proposals: list[dict[str, Any]] = []
             agent = make_agent(
                 app_services,
                 chat,
@@ -1612,9 +1773,12 @@ def stream_chat(chat_id: str, content: str, attachments: list[dict]) -> Iterator
                 personalization_context=personalization_context,
                 plugin_tools=plugin_tools,
                 history=full_history,
+                schedule_proposals=schedule_proposals,
             )
             initial_history_length = len(agent.history)
             result = agent.run(content, attachments, on_step=lambda item: events.put((item["type"], item)))
+            if schedule_proposals:
+                result.content_blocks = [*result.content_blocks, *schedule_proposals]
             if result.content_blocks:
                 agent.history[-1]["content_blocks"] = result.content_blocks
             if agent.history and agent.history[-1].get("role") == "assistant":
@@ -1659,6 +1823,9 @@ def stream_chat(chat_id: str, content: str, attachments: list[dict]) -> Iterator
 
 @app.post("/api/chats/{chat_id}/stream", tags=["Chat streaming"])
 def chat_stream(chat_id: str, payload: ChatRequest) -> StreamingResponse:
+    chat = services().chats.get(chat_id)
+    if chat is not None and chat.provider == "ollama" and payload.attachment_ids:
+        raise HTTPException(status_code=422, detail="Ollama local hiện chỉ hỗ trợ chat văn bản. Hãy bỏ attachment hoặc chọn provider cloud.")
     try:
         attachments = services().media.for_prompt(payload.attachment_ids)
     except ValueError as exc:

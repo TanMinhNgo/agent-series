@@ -1,19 +1,84 @@
 import { useState } from 'react';
+import { CalendarClock, Check, X } from 'lucide-react';
 
 import type { ResponseBlock } from '@/src/types';
+import { Button } from '@/components/ui/button';
 
 const limit = (value: number, minimum: number, maximum: number) =>
   Math.min(Math.max(value, minimum), maximum);
 
-export function ResponseBlocks({ blocks }: { blocks: ResponseBlock[] }) {
+type ProposalAction = (proposalId: string, action: 'confirm' | 'dismiss') => void;
+
+export function ResponseBlocks({
+  blocks,
+  onScheduleProposalAction,
+}: {
+  blocks: ResponseBlock[];
+  onScheduleProposalAction?: ProposalAction;
+}) {
   return (
     <div className="mt-5 space-y-4">
       {blocks.map((block, index) => {
         if (block.type === 'trig-circle') return <TrigCircle key={index} config={block.config} />;
         if (block.type === 'chart') return <Chart key={index} config={block.config} />;
-        return <DataTable key={index} config={block.config} />;
+        if (block.type === 'data-table') return <DataTable key={index} config={block.config} />;
+        return <ScheduleProposal key={index} config={block.config} onAction={onScheduleProposalAction} />;
       })}
     </div>
+  );
+}
+
+function ScheduleProposal({
+  config,
+  onAction,
+}: {
+  config: Extract<ResponseBlock, { type: 'schedule-proposal' }>['config'];
+  onAction?: ProposalAction;
+}) {
+  const date = new Date(config.startsAt);
+  const when = Number.isNaN(date.getTime())
+    ? config.startsAt
+    : new Intl.DateTimeFormat('vi-VN', {
+        dateStyle: 'full',
+        timeStyle: 'short',
+        timeZone: config.timezone || 'Asia/Ho_Chi_Minh',
+      }).format(date);
+  const recurrence = { once: 'Một lần', daily: 'Mỗi ngày', weekly: 'Mỗi tuần' }[config.recurrence];
+  const status = { pending: 'Chờ xác nhận', confirmed: 'Đã tạo lịch', dismissed: 'Đã hủy' }[config.status];
+  return (
+    <section className="rounded-2xl border border-primary/25 bg-primary/[.04] p-4 sm:p-5">
+      <div className="flex items-start gap-3">
+        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
+          <CalendarClock size={18} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-semibold">{config.title}</h3>
+            <span className="rounded-full border px-2 py-0.5 text-xs text-muted-foreground">{status}</span>
+          </div>
+          <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">{config.prompt}</p>
+          <p className="mt-3 text-sm">
+            <span className="text-muted-foreground">Chạy: </span>
+            {when} · {recurrence}
+          </p>
+          {config.projectId ? (
+            <p className="mt-1 text-xs text-muted-foreground">Thuộc dự án hiện tại</p>
+          ) : null}
+          {config.status === 'pending' && onAction ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => onAction(config.proposalId, 'confirm')}>
+                <Check />
+                Tạo lịch
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => onAction(config.proposalId, 'dismiss')}>
+                <X />
+                Hủy
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </section>
   );
 }
 

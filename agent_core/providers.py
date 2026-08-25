@@ -23,9 +23,12 @@ from __future__ import annotations
 
 import json
 import base64
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from dataclasses import dataclass, field
 
 from .config import Settings
+from .ollama import OllamaModelNotFoundError, OllamaUnavailableError
 from .tools.base import ToolSpec
 
 
@@ -319,6 +322,79 @@ class OpenAIClient:
 
 
 # ============================================================================
+# OLLAMA — local runtime, no API key. Tool exposure is restricted by api/main.py.
+# ============================================================================
+class OllamaClient:
+    def __init__(self, base_url: str, model: str, temperature: float, max_tokens: int):
+        self._base_url = base_url.rstrip("/")
+        self._model = model
+        self._temperature = temperature
+        self._max_tokens = max_tokens
+
+    def _to_messages(self, system: str, history: list[dict]) -> list[dict]:
+        messages = [{"role": "system", "content": system}]
+        for item in history:
+            role = item["role"]
+            if role == "assistant":
+                message = {"role": "assistant", "content": item.get("content", "")}
+                if item.get("tool_calls"):
+                    message["tool_calls"] = [
+                        {"function": {"name": call["name"], "arguments": call["args"]}}
+                        for call in item["tool_calls"]
+                    ]
+                messages.append(message)
+            elif role == "tool":
+                messages.append({"role": "tool", "content": item["content"]})
+            else:
+                messages.append({"role": "user", "content": item["content"]})
+        return messages
+
+    @staticmethod
+    def _to_tools(tools: list[ToolSpec]) -> list[dict]:
+        return [{"type": "function", "function": {"name": tool.name, "description": tool.description, "parameters": tool.parameters}} for tool in tools]
+
+    def complete(self, system: str, history: list[dict], tools: list[ToolSpec]) -> NormalizedReply:
+        payload = {
+            "model": self._model,
+            "messages": self._to_messages(system, history),
+            "stream": False,
+            "options": {"temperature": self._temperature, "num_predict": self._max_tokens},
+        }
+        if tools:
+            payload["tools"] = self._to_tools(tools)
+        request = Request(
+            f"{self._base_url}/api/chat",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=120) as response:
+                body = json.loads(response.read().decode() or "{}")
+        except HTTPError as exc:
+            if exc.code == 404:
+                raise OllamaModelNotFoundError(f"Model Ollama '{self._model}' không còn được cài.") from exc
+            raise OllamaUnavailableError(f"Ollama trả HTTP {exc.code} khi tạo phản hồi.") from exc
+        except (URLError, TimeoutError, OSError) as exc:
+            raise OllamaUnavailableError("Không thể kết nối Ollama local hoặc model đã quá thời gian phản hồi.") from exc
+        except json.JSONDecodeError as exc:
+            raise OllamaUnavailableError("Ollama trả về phản hồi không hợp lệ.") from exc
+
+        message = body.get("message") or {}
+        calls = []
+        for index, call in enumerate(message.get("tool_calls") or []):
+            function = call.get("function") or {}
+            arguments = function.get("arguments") or {}
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    arguments = {}
+            calls.append({"id": call.get("id") or f"ollama_call_{index}", "name": function.get("name", ""), "args": arguments if isinstance(arguments, dict) else {}})
+        return NormalizedReply(text=str(message.get("content") or "").strip(), tool_calls=calls)
+
+
+# ============================================================================
 # "Nhà máy" chọn client theo cấu hình — agent chỉ cần gọi build_client(settings)
 # ============================================================================
 def build_client(settings: Settings):
@@ -331,4 +407,6 @@ def build_client(settings: Settings):
         return OpenAIClient(
             settings.openai_api_key, settings.openai_model, settings.temperature, settings.max_tokens
         )
+    if settings.provider == "ollama":
+        return OllamaClient(settings.ollama_base_url, settings.ollama_model, settings.temperature, settings.max_tokens)
     raise RuntimeError(f"Provider không hỗ trợ: {settings.provider}")

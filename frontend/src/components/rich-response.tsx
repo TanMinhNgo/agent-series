@@ -74,7 +74,15 @@ const components: Components = {
   code: ({ children, className }) => <CodeBlock className={className}>{children}</CodeBlock>,
 };
 
-export function RichResponse({ content, blocks = [] }: { content: string; blocks?: ResponseBlock[] }) {
+export function RichResponse({
+  content,
+  blocks = [],
+  onScheduleProposalAction,
+}: {
+  content: string;
+  blocks?: ResponseBlock[];
+  onScheduleProposalAction?: (proposalId: string, action: 'confirm' | 'dismiss') => void;
+}) {
   // KaTeX's inline fractions are deliberately compact.  The chat uses a display-style
   // fraction so labels such as "Cạnh đối" and "Cạnh kề" have readable clearance.
   const spaciousFractions = content.replace(/\\frac(?=\s*\{)/g, '\\dfrac');
@@ -87,7 +95,9 @@ export function RichResponse({ content, blocks = [] }: { content: string; blocks
       >
         {spaciousFractions}
       </ReactMarkdown>
-      {blocks.length ? <ResponseBlocks blocks={blocks} /> : null}
+      {blocks.length ? (
+        <ResponseBlocks blocks={blocks} onScheduleProposalAction={onScheduleProposalAction} />
+      ) : null}
     </div>
   );
 }

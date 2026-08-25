@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   CalendarDays,
   ChevronLeft,
@@ -468,6 +469,7 @@ function DeleteProjectDialog({
 
 function SchedulesView() {
   const { schedules, projects, scheduleActions, runScheduleNow } = useWorkspace();
+  const navigate = useNavigate();
   const [filter, setFilter] = useState<'active' | 'paused' | 'all'>('active');
   const [editing, setEditing] = useState<Schedule | null | undefined>();
   const [deleting, setDeleting] = useState<Schedule | null>(null);
@@ -477,6 +479,10 @@ function SchedulesView() {
     if (editing) await scheduleActions.update.mutateAsync({ id: editing.id, data });
     else await scheduleActions.create.mutateAsync({ ...data, status: 'active', nextRunAt: data.startsAt });
     setEditing(undefined);
+  };
+  const startNow = async (scheduleId: string) => {
+    const run = await runScheduleNow.mutateAsync(scheduleId);
+    navigate(`/chat/${run.chatId}`);
   };
   if (schedules.isLoading || projects.isLoading) return <WorkspaceSkeleton />;
   if (schedules.error || projects.error)
@@ -531,6 +537,8 @@ function SchedulesView() {
                     : 'Không còn lần chạy'}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
+                  Đã thiết lập: {new Date(item.startsAt).toLocaleString('vi-VN')}
+                  {' · '}
                   {item.lastRunAt
                     ? `Đã chạy: ${new Date(item.lastRunAt).toLocaleString('vi-VN')}`
                     : 'Chưa chạy lần nào'}
@@ -549,7 +557,7 @@ function SchedulesView() {
                   size="sm"
                   variant="secondary"
                   disabled={runScheduleNow.isPending}
-                  onClick={() => void runScheduleNow.mutateAsync(item.id)}
+                  onClick={() => void startNow(item.id)}
                 >
                   <CirclePlay /> Chạy ngay
                 </Button>
@@ -595,7 +603,7 @@ function SchedulesView() {
             setEditing(undefined);
           }}
           onSave={save}
-          onRunNow={editing ? () => runScheduleNow.mutateAsync(editing.id) : undefined}
+          onRunNow={editing ? () => startNow(editing.id) : undefined}
           runningNow={runScheduleNow.isPending}
           onDelete={editing ? async () => setDeleting(editing) : undefined}
         />
@@ -889,7 +897,11 @@ function ScheduleRunHistory({
             <div key={run.id} className="rounded-lg bg-background p-2 text-xs">
               <p className="font-medium">
                 {run.status === 'succeeded' ? 'Hoàn tất' : run.status === 'failed' ? 'Thất bại' : 'Đang chạy'}{' '}
-                · {new Date(run.startedAt).toLocaleString('vi-VN')}
+                · Dự kiến {new Date(run.scheduledFor).toLocaleString('vi-VN')}
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                Bắt đầu {new Date(run.startedAt).toLocaleString('vi-VN')}
+                {run.finishedAt ? ` · Kết thúc ${new Date(run.finishedAt).toLocaleString('vi-VN')}` : ''}
               </p>
               <p className="mt-1 text-muted-foreground">
                 {run.error || run.summary || 'Đang chờ kết quả...'}

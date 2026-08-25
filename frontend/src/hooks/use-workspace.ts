@@ -95,7 +95,10 @@ export const useWorkspace = () => {
   const scheduleActions = useResourceActions<ScheduleInput>('schedule');
   const runScheduleNow = useMutation({
     mutationFn: (id: string) =>
-      request<{ status: string; chatId: string }>({ url: `/schedules/${id}/run-now`, method: 'POST' }),
+      request<{ status: string; chatId: string; runId: string }>({
+        url: `/schedules/${id}/run-now`,
+        method: 'POST',
+      }),
     onSuccess: (_, id) => {
       void client.invalidateQueries({ queryKey: queryKeys.schedules });
       void client.invalidateQueries({ queryKey: ['schedule-runs', id] });

@@ -30,3 +30,13 @@ def test_agent_stops_at_step_limit():
     reply = NormalizedReply(tool_calls=[{"id": "1", "name": "echo", "args": {"text": "x"}}])
     agent = Agent(FakeClient([reply, reply]), ToolRegistry([ToolSpec("echo", "", {}, lambda text: text)]), max_steps=2)
     assert "giới hạn số bước" in agent.run("x").text
+
+
+def test_agent_can_answer_an_already_persisted_user_message():
+    agent = Agent(FakeClient([NormalizedReply(text="Đã chạy lịch.")]), ToolRegistry([]))
+    agent.history = [{"role": "user", "content": "Chạy lịch"}]
+
+    result = agent.run("Chạy lịch", append_user_message=False)
+
+    assert result.text == "Đã chạy lịch."
+    assert [item["role"] for item in agent.history] == ["user", "assistant"]

@@ -66,6 +66,9 @@ export function ChatHeader({
                 ? 'Chưa có model khả dụng'
                 : 'Đang tải cấu hình...'}
           </p>
+          {selectedProvider === 'ollama' && config?.providerStatus?.ollama?.available === false ? (
+            <p className="mt-1 text-xs text-destructive">{config.providerStatus.ollama.message}</p>
+          ) : null}
         </div>
       </div>
       {config && selectedProvider && selectedModel && (

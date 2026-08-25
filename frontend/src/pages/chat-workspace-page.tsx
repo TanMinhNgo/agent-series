@@ -137,8 +137,16 @@ export function ChatWorkspace({
   const uploadMedia = useUploadMedia();
   const streamChat = useStreamChat();
   const { projects } = useWorkspace();
-  const { collections, templates, pins, pin, saveTemplate, updateTemplate, deleteTemplate } =
-    useChatWorkspaceData(activeChat?.id, activeChat?.projectId);
+  const {
+    collections,
+    templates,
+    pins,
+    pin,
+    scheduleProposal,
+    saveTemplate,
+    updateTemplate,
+    deleteTemplate,
+  } = useChatWorkspaceData(activeChat?.id, activeChat?.projectId);
   const draftProvider =
     config.data && config.data.providers[draftSelection.provider]
       ? draftSelection.provider
@@ -539,6 +547,9 @@ export function ChatWorkspace({
                     onPin={(message) =>
                       message.messageId &&
                       pin.mutate({ messageId: message.messageId, pinned: !message.pinned })
+                    }
+                    onScheduleProposalAction={(proposalId, action) =>
+                      scheduleProposal.mutate({ proposalId, action })
                     }
                     onBranch={branchFromMessage}
                     onRegenerate={regenerateMessage}

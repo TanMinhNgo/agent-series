@@ -11,7 +11,21 @@ export type ResponseBlock =
         series?: { label?: string; values?: number[]; color?: string }[];
       };
     }
-  | { type: 'data-table'; config: { title?: string; columns?: string[]; rows?: (string | number)[][] } };
+  | { type: 'data-table'; config: { title?: string; columns?: string[]; rows?: (string | number)[][] } }
+  | {
+      type: 'schedule-proposal';
+      config: {
+        proposalId: string;
+        status: 'pending' | 'confirmed' | 'dismissed';
+        title: string;
+        prompt: string;
+        startsAt: string;
+        recurrence: 'once' | 'daily' | 'weekly';
+        timezone?: string;
+        projectId?: string | null;
+        scheduleId?: string;
+      };
+    };
 
 export type Message = {
   messageId?: string;

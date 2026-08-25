@@ -24,6 +24,8 @@ alembic>=1.14.0
 psycopg[binary]>=3.2.0   # PostgreSQL driver
 pgvector>=0.3.0
 sentence-transformers>=3.0.0
+# Chỉ dùng splitter của LangChain; không kéo Agent/Chain/Loader vào kiến trúc lõi.
+langchain-text-splitters>=0.3.0
 pytest>=8.0.0
 python-docx>=1.1.2
 openpyxl>=3.1.5

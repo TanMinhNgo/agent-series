@@ -22,7 +22,7 @@
 Browser (React/Vite)
         │  REST + SSE
         ▼
-FastAPI API ── Agent core ── LLM provider (Gemini / Claude / OpenAI)
+FastAPI API ── Agent core ── LLM provider (Gemini / Claude / OpenAI / Ollama local)
         │
         ├── PostgreSQL + pgvector (chat, memory, RAG)
         └── Local storage (PDF knowledge base, media uploads)
@@ -76,9 +76,10 @@ Các biến quan trọng trong `.env`:
 
 | Biến | Ý nghĩa |
 | --- | --- |
-| `LLM_PROVIDER` | `gemini`, `anthropic` hoặc `openai` |
+| `LLM_PROVIDER` | `gemini`, `anthropic`, `openai` hoặc `ollama` |
 | `*_API_KEY` | API key tương ứng; không commit file `.env` |
 | `*_MODEL` / `*_MODELS` | Model mặc định và danh sách model cho UI |
+| `OLLAMA_BASE_URL` | Ollama local, mặc định `http://127.0.0.1:11434`; model được tự phát hiện từ máy |
 | `DATABASE_URL` | PostgreSQL mặc định của Docker Compose |
 | `EMBEDDING_MODEL` | Embedding multilingual chạy local, dùng cho PDF và memory |
 | `KNOWLEDGE_DIR` | Thư mục lưu PDF gốc |
@@ -89,6 +90,12 @@ Các biến quan trọng trong `.env`:
 Lần đầu dùng RAG/memory, `sentence-transformers` có thể tải embedding model từ Hugging Face. Nếu bước này lỗi, chat thường vẫn hoạt động nhưng chưa đọc/lưu được memory ở lượt đó.
 
 PDF scan không có text layer sẽ được đánh dấu **Cần OCR** thay vì index lỗi; OCR engine chưa được cài trong bản local này.
+
+## Ollama local
+
+Khi Ollama chạy cùng máy, khởi động Ollama rồi pull model bạn muốn dùng. Agent Series tự đọc model đã cài và hiện chúng trong selector provider; không cần API key hoặc danh sách model cố định trong `.env`.
+
+Ollama ở bản hiện tại nhận chat văn bản và chỉ được gọi `search_knowledge_base` cho RAG local. Web search, plugin, tạo file và attachment vẫn thuộc provider cloud để tránh mở rộng quyền tool cho model local. LangChain chỉ được dùng ở `langchain-text-splitters` để chia chunk khi index tài liệu mới; pgvector, embedding và retrieval hiện có không bị thay thế.
 
 ## Đăng nhập bằng Google
 
@@ -149,6 +156,12 @@ Set-Location frontend
 npm run lint
 npm run build
 ```
+
+## CI GitHub Actions
+
+Workflow `.github/workflows/ci.yml` chạy ở mọi pull request và mỗi lần push vào `main`: migration + pytest với PostgreSQL pgvector, format/lint/build frontend, cache pip/npm và upload artifact `agent-series-deploy-<commit SHA>` trong 30 ngày. Artifact chứa `frontend/dist`, API/agent core, migrations, dependency manifest và `version.json`, nên workflow deploy sau này có thể tải đúng bản đã được kiểm tra thay vì build lại. Không chứa `.env`, uploads hoặc dữ liệu runtime.
+
+Để bật SonarQube, thêm hai repository secrets: `SONAR_TOKEN` và `SONAR_HOST_URL` (URL server SonarQube). Khi chưa cấu hình token, job SonarQube được skip nhưng CI build/test vẫn chạy bình thường.
 
 ## Lưu ý bảo mật
 

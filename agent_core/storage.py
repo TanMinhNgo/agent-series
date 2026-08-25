@@ -1145,6 +1145,13 @@ class ScheduleRepository:
             schedule = session.get(Schedule, schedule_id, with_for_update=True)
             if schedule is None:
                 return None
+            running = session.scalar(
+                select(ScheduleRun.id)
+                .where(ScheduleRun.schedule_id == schedule_id, ScheduleRun.status == "running")
+                .limit(1)
+            )
+            if running is not None:
+                raise ValueError("Lịch trình đang chạy. Hãy chờ lần chạy hiện tại hoàn tất.")
             run = ScheduleRun(
                 schedule_id=schedule.id,
                 scheduled_for=now,

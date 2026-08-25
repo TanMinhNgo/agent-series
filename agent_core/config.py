@@ -28,7 +28,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 class Settings:
     """Toàn bộ cấu hình của agent, gom về một chỗ (immutable cho an toàn)."""
 
-    # --- Chọn nhà cung cấp LLM đang dùng: "gemini" | "anthropic" | "openai" ---
+    # --- Chọn nhà cung cấp LLM đang dùng: cloud hoặc Ollama local ---
     provider: str
 
     # --- API key + tên model cho TỪNG provider (chỉ cái đang chọn mới bắt buộc) ---
@@ -38,6 +38,8 @@ class Settings:
     anthropic_model: str
     openai_api_key: str
     openai_model: str
+    ollama_base_url: str
+    ollama_model: str
 
     # --- Tham số điều khiển "bộ não" của agent ---
     # temperature: độ "sáng tạo/ngẫu nhiên" của model. Với AGENT ta để THẤP (0.0–0.3)
@@ -82,6 +84,7 @@ class Settings:
             "gemini": self.gemini_api_key,
             "anthropic": self.anthropic_api_key,
             "openai": self.openai_api_key,
+            "ollama": "",
         }[self.provider]
 
     @property
@@ -90,6 +93,7 @@ class Settings:
             "gemini": self.gemini_model,
             "anthropic": self.anthropic_model,
             "openai": self.openai_model,
+            "ollama": self.ollama_model,
         }[self.provider]
 
     def configured_provider_models(self) -> dict[str, tuple[str, ...]]:
@@ -106,6 +110,10 @@ class Settings:
 
     def with_provider_model(self, provider: str, model: str, api_key: str | None = None) -> "Settings":
         """Create settings for a model selected in the UI without exposing keys."""
+        if provider == "ollama":
+            if not model.strip():
+                raise ValueError("Bạn chưa chọn model Ollama.")
+            return replace(self, provider=provider, ollama_model=model)
         if provider not in self.provider_models or model not in self.provider_models[provider]:
             raise ValueError("Provider hoặc model chưa được hệ thống cho phép.")
         resolved_key = api_key or {"gemini": self.gemini_api_key, "anthropic": self.anthropic_api_key, "openai": self.openai_api_key}[provider]
@@ -133,10 +141,10 @@ def load_settings() -> Settings:
     """
     # .strip().lower() để tránh lỗi vặt do gõ dư dấu cách hoặc viết HOA trong .env
     provider = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
-    if provider not in {"gemini", "anthropic", "openai"}:
+    if provider not in {"gemini", "anthropic", "openai", "ollama"}:
         raise RuntimeError(
             f"LLM_PROVIDER='{provider}' không hợp lệ. "
-            "Chỉ nhận: gemini | anthropic | openai (sửa trong .env)."
+            "Chỉ nhận: gemini | anthropic | openai | ollama (sửa trong .env)."
         )
 
     settings = Settings(
@@ -151,6 +159,8 @@ def load_settings() -> Settings:
         # OpenAI (Codex/GPT): mặc định model gọn nhẹ; bạn tự đổi theo model mình có.
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-5.6-terra").strip(),
+        ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip().rstrip("/"),
+        ollama_model=os.getenv("OLLAMA_MODEL", "").strip(),
         temperature=float(os.getenv("AGENT_TEMPERATURE", "0.2")),
         max_steps=int(os.getenv("AGENT_MAX_STEPS", "5")),
         max_tokens=int(os.getenv("AGENT_MAX_TOKENS", "2048")),

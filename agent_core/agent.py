@@ -71,17 +71,22 @@ class Agent:
         user_text: str,
         attachments: list[dict] | None = None,
         on_step: Optional[Callable[[dict], None]] = None,
+        append_user_message: bool = True,
     ) -> AgentResult:
         """Xử lý MỘT câu hỏi của người dùng, trả về câu trả lời cuối + các bước đã đi.
 
         `on_step` (tuỳ chọn): hàm callback để báo cho UI biết agent vừa gọi tool nào —
         nhờ đó UI hiển thị tiến trình trực tiếp. Nếu không truyền thì bỏ qua.
         """
-        # Thêm câu người dùng vào lịch sử.
-        message = {"role": "user", "content": user_text}
-        if attachments:
-            message["attachments"] = attachments
-        self.history.append(message)
+        # Normal chat adds its prompt here. Scheduled runs persist the prompt
+        # before their worker starts so the chat is never empty; they reuse it.
+        if append_user_message:
+            message = {"role": "user", "content": user_text}
+            if attachments:
+                message["attachments"] = attachments
+            self.history.append(message)
+        elif not self.history or self.history[-1].get("role") != "user":
+            raise ValueError("Lịch sử phải có message người dùng trước khi Agent trả lời.")
         steps: list[Step] = []
 
         # Vòng lặp có GIỚI HẠN số bước (phanh an toàn chống lặp vô hạn).

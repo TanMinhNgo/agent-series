@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from pypdf import PdfReader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import select
 
 from .storage import Database, Document, DocumentChunk, KnowledgeCollection, KnowledgeCollectionDocument, document_scope_key
@@ -24,18 +25,13 @@ def _chunks(text: str) -> list[str]:
     text = re.sub(r"\s+", " ", text).strip()
     if not text:
         return []
-    result, start = [], 0
-    while start < len(text):
-        end = min(len(text), start + CHUNK_SIZE)
-        if end < len(text):
-            boundary = text.rfind(" ", start, end)
-            if boundary > start + CHUNK_SIZE // 2:
-                end = boundary
-        result.append(text[start:end].strip())
-        if end == len(text):
-            break
-        start = max(end - CHUNK_OVERLAP, start + 1)
-    return result
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=CHUNK_SIZE,
+        chunk_overlap=CHUNK_OVERLAP,
+        separators=["\n\n", "\n", ". ", " ", ""],
+        length_function=len,
+    )
+    return [chunk.strip() for chunk in splitter.split_text(text) if chunk.strip()]
 
 
 def extract_document_parts(path: Path, suffix: str) -> tuple[list[tuple[int, str]], int]:

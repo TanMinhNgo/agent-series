@@ -41,6 +41,7 @@ type Props = {
   onPin?: (message: Message) => void;
   onBranch?: (message: Message) => Promise<void>;
   onRegenerate?: (message: Message) => Promise<void>;
+  onScheduleProposalAction?: (proposalId: string, action: 'confirm' | 'dismiss') => void;
 };
 
 export function MessageList({
@@ -55,6 +56,7 @@ export function MessageList({
   onPin,
   onBranch,
   onRegenerate,
+  onScheduleProposalAction,
 }: Props) {
   const latestUserMessageRef = useRef<HTMLElement | null>(null);
   const previousAssistantRef = useRef<HTMLElement | null>(null);
@@ -262,7 +264,11 @@ export function MessageList({
                   )}
                 >
                   {message.role === 'assistant' ? (
-                    <RichResponseLazy content={message.content} blocks={message.contentBlocks} />
+                    <RichResponseLazy
+                      content={message.content}
+                      blocks={message.contentBlocks}
+                      onScheduleProposalAction={onScheduleProposalAction}
+                    />
                   ) : (
                     <p className="m-0 whitespace-pre-wrap text-[.95rem]">{message.content}</p>
                   )}
