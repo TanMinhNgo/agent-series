@@ -47,9 +47,8 @@ jobs:
           cache-dependency-path: requirements-ci.lock
 
       - name: Install backend dependencies
-        # The lock contains every direct/transitive test dependency with hashes.
-        # Do not resolve optional Linux CUDA extras dynamically in this CPU CI job.
-        run: python -m pip install --require-hashes --no-deps --requirement requirements-ci.lock
+        # The lock pins the CPU-only PyTorch wheel and every transitive dependency.
+        run: python -m pip install --require-hashes --requirement requirements-ci.lock
 
       - name: Apply database migrations
         run: python -m alembic upgrade head
