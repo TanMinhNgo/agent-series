@@ -163,7 +163,7 @@ Workflow `.github/workflows/ci.yml` chạy ở mọi pull request và mỗi lầ
 
 Để bật SonarQube, thêm hai repository secrets: `SONAR_TOKEN` và `SONAR_HOST_URL` (URL server SonarQube). Khi chưa cấu hình token, job SonarQube được skip nhưng CI build/test vẫn chạy bình thường.
 
-Backend CI dùng `requirements-ci.lock` có version và hash cố định. Sau khi thay đổi `requirements.txt`, chạy `python -m pip install uv` (một lần) rồi `uv pip compile requirements.txt -o requirements-ci.lock --generate-hashes`; commit cả hai file.
+Backend CI dùng `requirements-ci.lock` có version cố định. Sau khi thay đổi `requirements.txt`, chạy `python -m pip install uv` (một lần) rồi `uv pip compile requirements.txt -o requirements-ci.lock`; commit cả hai file.
 
 ## Lưu ý bảo mật
 
