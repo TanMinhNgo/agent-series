@@ -39,14 +39,6 @@ class ScheduleWorker:
             self.execute(schedule, run.id, prompt_persisted=prompt_persisted)
         return len(claimed)
 
-    def run_now(self, schedule_id: str, now: datetime | None = None) -> bool:
-        claimed = self.runs.claim_manual(schedule_id, now or datetime.now(UTC))
-        if claimed is None:
-            return False
-        schedule, run = claimed
-        self.execute(schedule, run.id)
-        return True
-
     def start_manual(self, schedule_id: str, now: datetime | None = None) -> tuple[Schedule, Chat, str] | None:
         """Claim and prepare a manual run before the API redirects to its chat."""
         claimed = self.runs.claim_manual(schedule_id, now or datetime.now(UTC))
