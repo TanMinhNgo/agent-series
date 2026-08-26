@@ -101,7 +101,10 @@ export function AppSidebar({
   onOpenApiKeys,
   onLogout,
 }: Props) {
-  const recent = chats.filter((chat) => !chat.archived);
+  // The backend already sorts pinned first, so every pinned chat is on the
+  // first page and this split never hides one behind lazy-loaded history.
+  const pinned = chats.filter((chat) => chat.pinned && !chat.archived);
+  const recent = chats.filter((chat) => !chat.pinned && !chat.archived);
   const archived = chats.filter((chat) => chat.archived);
   const [renameTarget, setRenameTarget] = useState<Chat | null>(null);
   const [title, setTitle] = useState('');
@@ -197,22 +200,47 @@ export function AppSidebar({
         ) : null}
       </nav>
       <div className="min-h-0 flex-1 overflow-y-auto" onScroll={handleHistoryScroll}>
-        <p className="section-label">Gần đây</p>
-        <nav className="space-y-1">
-          {recent.map((chat) => (
-            <ChatRow
-              key={chat.id}
-              chat={chat}
-              active={activeChatId === chat.id}
-              onSelect={onSelectChat}
-              onRename={startRename}
-              onUpdate={onUpdate}
-              projects={projects}
-              onDelete={setDeleteTarget}
-              onShare={onShare}
-            />
-          ))}
-        </nav>
+        {pinned.length ? (
+          <section>
+            <p className="section-label">Đã ghim</p>
+            <nav className="space-y-1">
+              {pinned.map((chat) => (
+                <ChatRow
+                  key={chat.id}
+                  chat={chat}
+                  active={activeChatId === chat.id}
+                  onSelect={onSelectChat}
+                  onRename={startRename}
+                  onUpdate={onUpdate}
+                  projects={projects}
+                  onDelete={setDeleteTarget}
+                  onShare={onShare}
+                  showPinIcon={false}
+                />
+              ))}
+            </nav>
+          </section>
+        ) : null}
+        {/* Spacing lives on this wrapper: `.section-label` sets `margin` with a
+            shorthand, so a `mt-*` utility on the label itself is overridden. */}
+        <section className={pinned.length ? 'mt-5' : undefined}>
+          <p className="section-label">Gần đây</p>
+          <nav className="space-y-1">
+            {recent.map((chat) => (
+              <ChatRow
+                key={chat.id}
+                chat={chat}
+                active={activeChatId === chat.id}
+                onSelect={onSelectChat}
+                onRename={startRename}
+                onUpdate={onUpdate}
+                projects={projects}
+                onDelete={setDeleteTarget}
+                onShare={onShare}
+              />
+            ))}
+          </nav>
+        </section>
         {archived.length ? (
           <>
             <Separator className="my-5" />
@@ -394,8 +422,20 @@ type ChatRowProps = {
   onUpdate: Props['onUpdate'];
   onDelete: (chat: Chat) => void;
   onShare: (chat: Chat) => void;
+  /** Redundant inside the "Đã ghim" section, where the heading already says so. */
+  showPinIcon?: boolean;
 };
-function ChatRow({ chat, projects, active, onSelect, onRename, onUpdate, onDelete, onShare }: ChatRowProps) {
+function ChatRow({
+  chat,
+  projects,
+  active,
+  onSelect,
+  onRename,
+  onUpdate,
+  onDelete,
+  onShare,
+  showPinIcon = true,
+}: ChatRowProps) {
   return (
     <div className="group flex items-center gap-1">
       <Button
@@ -411,7 +451,7 @@ function ChatRow({ chat, projects, active, onSelect, onRename, onUpdate, onDelet
             aria-label="Chat AI mới, chưa đọc"
           />
         ) : null}
-        {chat.pinned ? <Pin className="mr-1.5 shrink-0" size={13} /> : null}
+        {chat.pinned && showPinIcon ? <Pin className="mr-1.5 shrink-0" size={13} /> : null}
         {chat.title || 'Cuộc trò chuyện mới'}
       </Button>
       <DropdownMenu>

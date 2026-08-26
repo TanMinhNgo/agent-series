@@ -980,6 +980,29 @@ def test_next_recurring_run_skips_missed_intervals() -> None:
     assert ScheduleRepository.next_run_after(schedule, datetime(2026, 8, 17, 10, tzinfo=UTC)) == datetime(2026, 8, 18, 9, tzinfo=UTC)
 
 
+def test_editing_a_schedule_does_not_rewind_next_run_at_when_timing_is_unchanged() -> None:
+    """The form resends startsAt every save; rewinding replays an executed slot."""
+    current = Schedule(
+        id="schedule-1",
+        title="Tin AI",
+        starts_at=datetime(2026, 8, 24, 11, tzinfo=UTC),
+        recurrence="daily",
+        next_run_at=datetime(2026, 8, 27, 11, tzinfo=UTC),
+    )
+    unchanged = ScheduleUpdateRequest.model_validate({
+        "title": "Tin AI",
+        "startsAt": "2026-08-24T11:00:00+00:00",
+        "recurrence": "daily",
+        "notifyEmail": True,
+    }).model_dump(exclude_unset=True)
+    assert not any(
+        key in unchanged and unchanged[key] != getattr(current, key) for key in ("starts_at", "recurrence")
+    )
+
+    retimed = ScheduleUpdateRequest.model_validate({"startsAt": "2026-09-01T07:00:00+00:00"}).model_dump(exclude_unset=True)
+    assert any(key in retimed and retimed[key] != getattr(current, key) for key in ("starts_at", "recurrence"))
+
+
 def test_plugin_tools_require_an_enabled_connected_read_plugin() -> None:
     plugin = Plugin(id="plugin-1", slug="github", name="GitHub", enabled=True, connection_status="connected", capabilities=["search"])
     assert connected_read_tools([plugin]) == []  # no executor is registered yet

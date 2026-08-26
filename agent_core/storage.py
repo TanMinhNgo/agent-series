@@ -1133,6 +1133,21 @@ class ScheduleRepository:
                 scheduled_for = schedule.next_run_at
                 if scheduled_for is None:
                     continue
+                already_ran = session.scalar(
+                    select(ScheduleRun.id)
+                    .where(ScheduleRun.schedule_id == schedule.id, ScheduleRun.scheduled_for == scheduled_for)
+                    .limit(1)
+                )
+                if already_ran is not None:
+                    # This slot already has a run: editing a schedule rewinds
+                    # `next_run_at` to `starts_at`, which can land on a past slot.
+                    # Roll forward instead of inserting a duplicate, whose unique
+                    # violation would abort the whole batch and stall the worker.
+                    schedule.next_run_at = self.next_run_after(schedule, now)
+                    if schedule.next_run_at is None:
+                        schedule.status = "completed"
+                    schedule.updated_at = now
+                    continue
                 run = ScheduleRun(
                     schedule_id=schedule.id,
                     scheduled_for=scheduled_for,

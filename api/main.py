@@ -1573,7 +1573,11 @@ def update_schedule(schedule_id: str, payload: ScheduleUpdateRequest) -> dict[st
             values["provider"], values["model"] = resolve_schedule_selection(requested_provider, requested_model, current_user_id.get())
         except (ValueError, CredentialError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if {"starts_at", "recurrence"}.intersection(values) and "next_run_at" not in values:
+    # The form resends every field, so only a real change to the timing may
+    # rewind `next_run_at`; otherwise editing anything (a title, a checkbox)
+    # would rewind an active schedule onto an already-executed past slot.
+    timing_changed = any(key in values and values[key] != getattr(current, key) for key in ("starts_at", "recurrence"))
+    if timing_changed and "next_run_at" not in values:
         values["next_run_at"] = values.get("starts_at", current.starts_at)
     if values.get("status") == "active" and current.status == "completed" and current.recurrence == "once":
         raise HTTPException(status_code=422, detail="Lịch một lần đã hoàn tất; hãy tạo lịch mới để chạy lại.")
