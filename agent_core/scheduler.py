@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from datetime import UTC, datetime
+from threading import Event, Thread
 
 from api.main import Services, make_agent, persisted_history, queue_pending_artifacts
 from agent_core.artifacts import ArtifactService
@@ -23,6 +24,36 @@ from agent_core.plugin_execution import connected_read_tools
 from agent_core.storage import AuthRepository, BackgroundJobRepository, Chat, ChatRepository, ConnectorRepository, Database, MediaRepository, ModelRegistryRepository, Schedule, ScheduleRepository, WorkspaceRepository, current_user_id
 
 RETRY_DELAYS_MINUTES = (5, 15, 30)
+HEARTBEAT_SECONDS = 60
+
+
+class RunHeartbeat:
+    """Keep a long run marked alive so stale recovery never reclaims it.
+
+    Without this, a run slower than the recovery timeout is marked failed while
+    still working: the user then sees a failure, may start a duplicate run, and
+    the original still finishes and emails. The beat runs on its own thread
+    because `execute()` blocks inside a single provider call.
+    """
+
+    def __init__(self, runs: ScheduleRepository, run_id: str, interval: float = HEARTBEAT_SECONDS):
+        self.runs, self.run_id, self.interval = runs, run_id, interval
+        self._stop = Event()
+        self._thread = Thread(target=self._beat, daemon=True)
+
+    def _beat(self) -> None:
+        while not self._stop.wait(self.interval):
+            try:
+                self.runs.touch_run(self.run_id)
+            except Exception:  # noqa: BLE001 - a missed beat must never break the run
+                pass
+
+    def __enter__(self) -> "RunHeartbeat":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc_info) -> None:
+        self._stop.set()
 
 
 class ScheduleWorker:
@@ -137,6 +168,13 @@ class ScheduleWorker:
     def execute(self, schedule: Schedule, run_id: str, prompt_persisted: bool = False) -> None:
         user_token = current_user_id.set(schedule.user_id)
         try:
+            with RunHeartbeat(self.runs, run_id):
+                self._run_turn(schedule, run_id, prompt_persisted)
+        finally:
+            current_user_id.reset(user_token)
+
+    def _run_turn(self, schedule: Schedule, run_id: str, prompt_persisted: bool) -> None:
+        try:
             # ContextVar values do not cross into worker threads. Restore the
             # owner so user-scoped repositories can access this schedule's chat.
             # An old ownerless linked chat is safely replaced on its next run.
@@ -214,8 +252,6 @@ class ScheduleWorker:
             else:
                 run_error = "Lỗi không thể tự thử lại; xem cấu hình provider và thử lại."
             self.runs.finish(run_id, error=run_error)
-        finally:
-            current_user_id.reset(user_token)
 
 
 def build_worker() -> ScheduleWorker:

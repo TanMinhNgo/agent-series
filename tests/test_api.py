@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -38,7 +39,7 @@ from agent_core.memory import MemoryService
 from agent_core.knowledge import ALLOWED_DOCUMENT_SUFFIXES, build_knowledge_tool, extract_document_parts
 from agent_core.credentials import CredentialError, UserCredentialService
 from agent_core.storage import Chat, Plugin, Schedule, ScheduleRepository, current_user_id, document_scope_key, utc_now
-from agent_core.scheduler import ScheduleWorker
+from agent_core.scheduler import RunHeartbeat, ScheduleWorker
 from agent_core.notifications import public_chat_url
 from agent_core.web_search import WebSearchService, WebSourceUnavailable
 
@@ -404,6 +405,29 @@ def test_schedule_without_email_notification_never_touches_smtp(monkeypatch) -> 
 def test_absent_web_sources_are_never_treated_as_a_transient_provider_error() -> None:
     assert ScheduleWorker._is_transient_error(WebSourceUnavailable("Không thể tìm web: timed out")) is False
     assert ScheduleWorker._is_transient_error(RuntimeError("503 UNAVAILABLE")) is True
+
+
+def test_run_heartbeat_reports_while_running_and_stops_on_exit() -> None:
+    beats: list[str] = []
+    runs = SimpleNamespace(touch_run=lambda run_id: beats.append(run_id))
+
+    with RunHeartbeat(runs, "run-1", interval=0.01):
+        deadline = time.monotonic() + 2
+        while not beats and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+    assert beats and beats[0] == "run-1"
+    settled = len(beats)
+    time.sleep(0.05)
+    assert len(beats) == settled, "heartbeat must stop once the run leaves the context"
+
+
+def test_a_failing_heartbeat_never_interrupts_the_run() -> None:
+    def explode(_run_id):
+        raise RuntimeError("mất kết nối DB")
+
+    with RunHeartbeat(SimpleNamespace(touch_run=explode), "run-1", interval=0.01):
+        time.sleep(0.05)
 
 
 def test_chat_link_is_omitted_for_a_localhost_app_url() -> None:

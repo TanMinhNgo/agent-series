@@ -325,6 +325,7 @@ class ScheduleRun(UserOwned, Base):
     retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     email_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     email_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     email_error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -1137,6 +1138,7 @@ class ScheduleRepository:
                     scheduled_for=scheduled_for,
                     status="running",
                     started_at=now,
+                    heartbeat_at=now,
                     user_id=schedule.user_id,
                 )
                 session.add(run)
@@ -1160,7 +1162,9 @@ class ScheduleRepository:
             ).all()
             claimed: list[tuple[Schedule, ScheduleRun]] = []
             for schedule, run in rows:
-                run.status, run.retry_at = "running", None
+                # `started_at` still points at the first attempt, so the heartbeat
+                # must be refreshed or recovery would reclaim this retry at once.
+                run.status, run.retry_at, run.heartbeat_at = "running", None, now
                 claimed.append((schedule, run))
             session.commit()
             return claimed
@@ -1192,6 +1196,7 @@ class ScheduleRepository:
                 scheduled_for=now,
                 status="running",
                 started_at=now,
+                heartbeat_at=now,
                 user_id=schedule.user_id,
             )
             session.add(run)
@@ -1240,12 +1245,28 @@ class ScheduleRepository:
     def recover_stale_runs(self, now: datetime, timeout: timedelta = timedelta(minutes=20)) -> int:
         with self.database.session() as session:
             stale = session.scalars(
-                select(ScheduleRun).where(ScheduleRun.status == "running", ScheduleRun.started_at < now - timeout)
+                select(ScheduleRun).where(
+                    ScheduleRun.status == "running",
+                    # A slow run still reporting a heartbeat is alive, not stale.
+                    # Only silence since the last beat (or the start, for runs
+                    # predating heartbeats) means the worker really died.
+                    func.coalesce(ScheduleRun.heartbeat_at, ScheduleRun.started_at) < now - timeout,
+                )
             ).all()
             for run in stale:
                 run.status, run.error, run.finished_at = "failed", "Worker timeout; hãy chạy lại thủ công.", now
             session.commit()
             return len(stale)
+
+    def touch_run(self, run_id: str, now: datetime | None = None) -> bool:
+        """Report that this run's worker is still alive; False once it is not ours."""
+        with self.database.session() as session:
+            run = session.get(ScheduleRun, run_id)
+            if run is None or run.status != "running":
+                return False
+            run.heartbeat_at = now or utc_now()
+            session.commit()
+            return True
 
     def list_runs(self, schedule_id: str, limit: int = 30) -> list[ScheduleRun]:
         with self.database.session() as session:
