@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -38,6 +39,8 @@ from agent_core.knowledge import ALLOWED_DOCUMENT_SUFFIXES, build_knowledge_tool
 from agent_core.credentials import CredentialError, UserCredentialService
 from agent_core.storage import Chat, Plugin, Schedule, ScheduleRepository, current_user_id, document_scope_key, utc_now
 from agent_core.scheduler import ScheduleWorker
+from agent_core.notifications import public_chat_url
+from agent_core.web_search import WebSearchService, WebSourceUnavailable
 
 
 def test_message_json_exposes_message_creation_time() -> None:
@@ -183,6 +186,10 @@ def test_schedule_worker_retries_transient_provider_errors_without_duplicate_pro
 
     class Runs:
         def finish(self, _run_id, **values): finished.append(values)
+        def schedule_retry(self, _run_id, error, delays):
+            assert error == "Provider tạm thời không khả dụng; đang chờ tự thử lại."
+            assert delays == (5, 15, 30)
+            return datetime(2026, 8, 26, 5, tzinfo=UTC), 1
 
     class AgentStub:
         def __init__(self, history): self.history = [dict(item) for item in history]
@@ -190,7 +197,7 @@ def test_schedule_worker_retries_transient_provider_errors_without_duplicate_pro
             nonlocal attempts
             attempts += 1
             assert append_user_message is False
-            if attempts < 3:
+            if attempts == 1:
                 raise RuntimeError("503 UNAVAILABLE")
             self.history.append({"role": "assistant", "content": "Đã hoàn tất."})
             return SimpleNamespace(text="Đã hoàn tất.", content_blocks=[])
@@ -205,13 +212,203 @@ def test_schedule_worker_retries_transient_provider_errors_without_duplicate_pro
     monkeypatch.setattr("agent_core.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
     monkeypatch.setattr("agent_core.scheduler.connected_read_tools", lambda _plugins: [])
     monkeypatch.setattr("agent_core.scheduler.BackgroundJobRepository", lambda _database: SimpleNamespace(enqueue=lambda *_args, **_kwargs: None))
-    monkeypatch.setattr("agent_core.scheduler.time.sleep", lambda _seconds: None)
+    worker.execute(Schedule(id="schedule-1", user_id="user-1", title="Báo cáo", prompt="Tạo báo cáo", chat_id=chat.id), "run-1")
+
+    assert attempts == 1
+    assert [item["role"] for item in stored_history] == ["user"]
+    assert finished == []
+
+    worker.execute(Schedule(id="schedule-1", user_id="user-1", title="Báo cáo", prompt="Tạo báo cáo", chat_id=chat.id), "run-1", prompt_persisted=True)
+
+    assert attempts == 2
+    assert [item["role"] for item in stored_history] == ["user", "assistant"]
+    assert finished == [{"summary": "Đã hoàn tất."}]
+
+
+def test_schedule_worker_creates_chat_with_saved_schedule_provider_model() -> None:
+    created: list[tuple[str, str]] = []
+    chat = Chat(id="schedule-chat", user_id="user-1", provider="openai", model="gpt-test")
+
+    class Chats:
+        database = object()
+        def get(self, _chat_id): return None
+        def create(self, provider, model):
+            created.append((provider, model))
+            return chat
+        def update(self, _chat_id, **_values): return chat
+
+    worker = ScheduleWorker(SimpleNamespace(
+        chats=Chats(),
+        settings=SimpleNamespace(provider="gemini", active_model="gemini-default"),
+    ))
+    worker.runs = SimpleNamespace(attach_chat=lambda *_args: None)
+
+    result = worker.ensure_chat(Schedule(
+        id="schedule-1", user_id="user-1", title="Báo cáo",
+        provider="openai", model="gpt-test",
+    ))
+
+    assert result is chat
+    assert created == [("openai", "gpt-test")]
+
+
+def test_schedule_worker_reports_final_transient_failure_after_retry_budget(monkeypatch) -> None:
+    stored_history: list[dict] = []
+    finished: list[dict] = []
+    chat = Chat(id="schedule-chat", user_id="user-1", provider="gemini", model="gemini-test")
+
+    class Chats:
+        database = object()
+        def get(self, _chat_id): return chat
+        def history(self, _chat_id): return [dict(item) for item in stored_history]
+        def replace_history(self, _chat_id, history): stored_history[:] = [dict(item) for item in history]
+        def set_unread(self, _chat_id, _unread): return chat
+
+    class Runs:
+        def schedule_retry(self, *_args): return None
+        def finish(self, _run_id, **values): finished.append(values)
+
+    class AgentStub:
+        def __init__(self, history): self.history = history
+        def run(self, *_args, **_kwargs): raise RuntimeError("503 UNAVAILABLE")
+
+    services = SimpleNamespace(chats=Chats(), memory=SimpleNamespace(recall=lambda *_args: ""), workspace=SimpleNamespace(list_plugins=lambda: []))
+    worker = ScheduleWorker(services)
+    worker.runs = Runs()
+    monkeypatch.setattr("agent_core.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
+    monkeypatch.setattr("agent_core.scheduler.connected_read_tools", lambda _plugins: [])
 
     worker.execute(Schedule(id="schedule-1", user_id="user-1", title="Báo cáo", prompt="Tạo báo cáo", chat_id=chat.id), "run-1")
 
-    assert attempts == 3
-    assert [item["role"] for item in stored_history] == ["user", "assistant"]
-    assert finished == [{"summary": "Đã hoàn tất."}]
+    assert "sau 3 lần thử lại" in stored_history[-1]["content"]
+    assert finished == [{"error": "Provider tạm thời không khả dụng; đã hết số lần tự thử lại."}]
+
+
+def _grounded_worker(monkeypatch, *, search_result: str, notify_email: bool, send=None):
+    """Build a worker whose collaborators are all stubs, for grounding/email tests."""
+    state = SimpleNamespace(history=[], emails=[], finished=[], retries=0, agent_calls=0, sent=[])
+    chat = Chat(id="schedule-chat", user_id="user-1", provider="openai", model="gpt-test")
+
+    class Chats:
+        database = object()
+        def get(self, _chat_id): return chat
+        def history(self, _chat_id): return [dict(item) for item in state.history]
+        def replace_history(self, _chat_id, history): state.history[:] = [dict(item) for item in history]
+        def set_unread(self, _chat_id, _unread): return chat
+
+    class Runs:
+        def finish(self, _run_id, **values): state.finished.append(values)
+        def schedule_retry(self, *_args):
+            state.retries += 1
+            return None
+        def record_email(self, _run_id, *, status, error=None): state.emails.append((status, error))
+
+    class AgentStub:
+        def __init__(self, history):
+            # Mirrors the real agent: with append_user_message=False the prompt
+            # argument is ignored, so only this history reaches the model.
+            self.history = [dict(item) for item in history]
+            state.agent_history = [dict(item) for item in history]
+
+        def run(self, _prompt, *, append_user_message=True):
+            state.agent_calls += 1
+            assert append_user_message is False
+            self.history.append({"role": "assistant", "content": "Bản tin."})
+            return SimpleNamespace(text="Bản tin.", content_blocks=[])
+
+    def default_send(_to, _subject, _body): state.sent.append(_to)
+
+    services = SimpleNamespace(
+        chats=Chats(),
+        memory=SimpleNamespace(recall=lambda *_args: ""),
+        workspace=SimpleNamespace(list_plugins=lambda: []),
+        web_search=SimpleNamespace(search=lambda *_args, **_kwargs: search_result, enabled=True),
+        email=SimpleNamespace(enabled=True, send=send or default_send),
+        auth=SimpleNamespace(repository=SimpleNamespace(get_user=lambda _id: SimpleNamespace(email="owner@example.com"))),
+        settings=SimpleNamespace(app_web_url="https://agent.example.com"),
+    )
+    services.web_search.require_sources = WebSearchService.require_sources.__get__(services.web_search)
+    worker = ScheduleWorker(services)
+    worker.runs = Runs()
+    monkeypatch.setattr("agent_core.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
+    monkeypatch.setattr("agent_core.scheduler.connected_read_tools", lambda _plugins: [])
+    monkeypatch.setattr("agent_core.scheduler.BackgroundJobRepository", lambda _database: SimpleNamespace(enqueue=lambda *_args, **_kwargs: None))
+    schedule = Schedule(
+        id="schedule-1", user_id="user-1", title="Tin AI", prompt="Tổng hợp tin AI",
+        chat_id=chat.id, require_web_source=True, notify_email=notify_email,
+    )
+    return worker, schedule, state
+
+
+SEARCH_OK = json.dumps({
+    "sources": [{"name": "VnExpress", "url": "https://vnexpress.net/ai", "kind": "external"}],
+    "context": "[VnExpress](https://vnexpress.net/ai)\nTin mới.",
+})
+
+
+def test_grounded_schedule_run_attaches_sources_and_sends_one_email(monkeypatch) -> None:
+    worker, schedule, state = _grounded_worker(monkeypatch, search_result=SEARCH_OK, notify_email=True)
+
+    worker.execute(schedule, "run-1")
+
+    assert state.agent_calls == 1
+    # The sources must reach the model through history, not the ignored prompt arg.
+    assert "https://vnexpress.net/ai" in state.agent_history[-1]["content"]
+    assert state.agent_history[-1]["role"] == "user"
+    # ...while the chat still persists the plain prompt the user wrote.
+    assert state.history[0]["content"] == "Tổng hợp tin AI"
+    assert state.history[-1]["sources"] == [{"name": "VnExpress", "url": "https://vnexpress.net/ai", "kind": "external"}]
+    assert state.finished == [{"summary": "Bản tin."}]
+    assert state.sent == ["owner@example.com"] and state.emails == [("sent", None)]
+
+
+def test_missing_web_sources_fail_the_run_before_any_provider_call(monkeypatch) -> None:
+    worker, schedule, state = _grounded_worker(
+        monkeypatch, search_result="[Lỗi] Không thể tìm web: timed out", notify_email=True
+    )
+
+    worker.execute(schedule, "run-1")
+
+    assert state.agent_calls == 0
+    assert state.retries == 0
+    assert state.emails == [] and state.sent == []
+    assert "Không lấy được nguồn web mới" in state.finished[0]["error"]
+    assert "không lấy được nguồn web mới" in state.history[-1]["content"]
+
+
+def test_email_failure_keeps_the_run_successful_and_reports_only_the_email(monkeypatch) -> None:
+    def failing_send(*_args):
+        raise RuntimeError("SMTP từ chối kết nối.")
+
+    worker, schedule, state = _grounded_worker(
+        monkeypatch, search_result=SEARCH_OK, notify_email=True, send=failing_send
+    )
+
+    worker.execute(schedule, "run-1")
+
+    assert state.finished == [{"summary": "Bản tin."}]
+    assert state.retries == 0
+    assert state.emails == [("failed", "SMTP từ chối kết nối.")]
+    assert [item["role"] for item in state.history] == ["user", "assistant"]
+
+
+def test_schedule_without_email_notification_never_touches_smtp(monkeypatch) -> None:
+    worker, schedule, state = _grounded_worker(monkeypatch, search_result=SEARCH_OK, notify_email=False)
+
+    worker.execute(schedule, "run-1")
+
+    assert state.finished == [{"summary": "Bản tin."}]
+    assert state.emails == [] and state.sent == []
+
+
+def test_absent_web_sources_are_never_treated_as_a_transient_provider_error() -> None:
+    assert ScheduleWorker._is_transient_error(WebSourceUnavailable("Không thể tìm web: timed out")) is False
+    assert ScheduleWorker._is_transient_error(RuntimeError("503 UNAVAILABLE")) is True
+
+
+def test_chat_link_is_omitted_for_a_localhost_app_url() -> None:
+    assert public_chat_url("http://localhost:5173", "chat-1") is None
+    assert public_chat_url("https://agent.example.com", "chat-1") == "https://agent.example.com/chat/chat-1"
 
 
 def test_health_and_public_config_do_not_expose_provider_keys(monkeypatch) -> None:
@@ -728,12 +925,24 @@ def test_project_status_is_limited_to_workspace_statuses() -> None:
 
 
 def test_schedule_request_accepts_frontend_camel_case_fields() -> None:
-    payload = ScheduleRequest.model_validate({"title": "Demo", "startsAt": "2026-08-13T09:00:00+07:00", "endsAt": None, "projectId": None})
+    payload = ScheduleRequest.model_validate({"title": "Demo", "startsAt": "2026-08-13T09:00:00+07:00", "endsAt": None, "projectId": None, "provider": "openai", "model": "gpt-test"})
     assert payload.starts_at.hour == 9
+    assert (payload.provider, payload.model) == ("openai", "gpt-test")
 
 
 def test_schedule_update_accepts_a_status_only_patch() -> None:
     assert ScheduleUpdateRequest.model_validate({"status": "paused"}).status == "paused"
+
+
+def test_schedule_request_accepts_notification_flags_in_camel_case() -> None:
+    payload = ScheduleRequest.model_validate({
+        "title": "Tin AI",
+        "startsAt": "2026-08-13T09:00:00+07:00",
+        "requireWebSource": True,
+        "notifyEmail": True,
+    })
+    assert (payload.require_web_source, payload.notify_email) == (True, True)
+    assert ScheduleRequest.model_validate({"title": "X", "startsAt": "2026-08-13T09:00:00+07:00"}).notify_email is False
 
 
 def test_next_recurring_run_skips_missed_intervals() -> None:

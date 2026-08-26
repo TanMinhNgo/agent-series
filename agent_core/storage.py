@@ -299,7 +299,11 @@ class Schedule(UserOwned, Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
     chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id", ondelete="SET NULL"), nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(160), nullable=True)
     prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    require_web_source: Mapped[bool] = mapped_column(Boolean, default=False)
+    notify_email: Mapped[bool] = mapped_column(Boolean, default=False)
     recurrence: Mapped[str] = mapped_column(String(16), default="once")
     status: Mapped[str] = mapped_column(String(16), default="active")
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -317,8 +321,13 @@ class ScheduleRun(UserOwned, Base):
     schedule_id: Mapped[str] = mapped_column(ForeignKey("schedules.id", ondelete="CASCADE"), index=True)
     scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     status: Mapped[str] = mapped_column(String(16), default="running")
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    email_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    email_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    email_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -1140,6 +1149,22 @@ class ScheduleRepository:
             session.commit()
             return claimed
 
+    def claim_due_retries(self, now: datetime) -> list[tuple[Schedule, ScheduleRun]]:
+        """Claim delayed provider retries without creating another schedule run."""
+        with self.database.session() as session:
+            rows = session.execute(
+                select(Schedule, ScheduleRun)
+                .join(ScheduleRun, ScheduleRun.schedule_id == Schedule.id)
+                .where(ScheduleRun.status == "retrying", ScheduleRun.retry_at.is_not(None), ScheduleRun.retry_at <= now)
+                .with_for_update(skip_locked=True)
+            ).all()
+            claimed: list[tuple[Schedule, ScheduleRun]] = []
+            for schedule, run in rows:
+                run.status, run.retry_at = "running", None
+                claimed.append((schedule, run))
+            session.commit()
+            return claimed
+
     def claim_manual(self, schedule_id: str, now: datetime) -> tuple[Schedule, ScheduleRun] | None:
         with self.database.session() as session:
             schedule = session.get(Schedule, schedule_id, with_for_update=True)
@@ -1152,6 +1177,16 @@ class ScheduleRepository:
             )
             if running is not None:
                 raise ValueError("Lịch trình đang chạy. Hãy chờ lần chạy hiện tại hoàn tất.")
+            pending_retries = session.scalars(
+                select(ScheduleRun)
+                .where(ScheduleRun.schedule_id == schedule_id, ScheduleRun.status == "retrying")
+                .with_for_update()
+            ).all()
+            for pending in pending_retries:
+                pending.status = "cancelled"
+                pending.retry_at = None
+                pending.error = "Đã thay bằng lần chạy thủ công."
+                pending.finished_at = now
             run = ScheduleRun(
                 schedule_id=schedule.id,
                 scheduled_for=now,
@@ -1164,13 +1199,41 @@ class ScheduleRepository:
             session.commit()
             return schedule, run
 
+    def schedule_retry(self, run_id: str, error: str, delays: tuple[int, ...], now: datetime | None = None) -> tuple[datetime, int] | None:
+        """Queue one durable retry, returning its due time and retry number."""
+        current_time = now or utc_now()
+        with self.database.session() as session:
+            run = session.get(ScheduleRun, run_id, with_for_update=True)
+            if run is None or run.retry_count >= len(delays):
+                return None
+            retry_at = current_time + timedelta(minutes=delays[run.retry_count])
+            run.retry_count += 1
+            run.status, run.retry_at, run.error, run.finished_at = "retrying", retry_at, error, None
+            session.commit()
+            return retry_at, run.retry_count
+
     def finish(self, run_id: str, *, summary: str | None = None, error: str | None = None) -> ScheduleRun | None:
         with self.database.session() as session:
             run = session.get(ScheduleRun, run_id)
             if run is None:
                 return None
             run.status = "failed" if error else "succeeded"
-            run.summary, run.error, run.finished_at = summary, error, utc_now()
+            run.summary, run.error, run.retry_at, run.finished_at = summary, error, None, utc_now()
+            session.commit()
+            return run
+
+    def get_run(self, schedule_id: str, run_id: str) -> ScheduleRun | None:
+        with self.database.session() as session:
+            return session.scalar(select(ScheduleRun).where(ScheduleRun.id == run_id, ScheduleRun.schedule_id == schedule_id))
+
+    def record_email(self, run_id: str, *, status: str, error: str | None = None) -> ScheduleRun | None:
+        """Track notification delivery without touching the AI run outcome."""
+        with self.database.session() as session:
+            run = session.get(ScheduleRun, run_id)
+            if run is None:
+                return None
+            run.email_status, run.email_error = status, error
+            run.email_sent_at = utc_now() if status == "sent" else None
             session.commit()
             return run
 

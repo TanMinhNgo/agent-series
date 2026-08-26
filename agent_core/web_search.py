@@ -20,6 +20,10 @@ def _safe_external_url(value: object) -> str | None:
     return value.strip() if parsed.scheme == "https" and parsed.netloc else None
 
 
+class WebSourceUnavailable(RuntimeError):
+    """Raised when a run demanding fresh web sources cannot obtain any."""
+
+
 class WebSearchService:
     def __init__(self, api_key: str):
         self.api_key = api_key.strip()
@@ -27,6 +31,19 @@ class WebSearchService:
     @property
     def enabled(self) -> bool:
         return bool(self.api_key)
+
+    def require_sources(self, query: str, max_results: int = 3) -> dict[str, Any]:
+        """Fetch sources for a run that must be grounded, or refuse to continue."""
+        if not self.enabled:
+            raise WebSourceUnavailable("Tìm web chưa được cấu hình (thiếu TAVILY_API_KEY).")
+        raw = self.search(query, max_results)
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            raise WebSourceUnavailable(raw.strip("[]") or "Không lấy được nguồn web.") from None
+        if not payload.get("sources"):
+            raise WebSourceUnavailable("Không có nguồn web đáng tin cậy cho yêu cầu này.")
+        return payload
 
     def search(self, query: str, max_results: int = 3) -> str:
         if not self.enabled:

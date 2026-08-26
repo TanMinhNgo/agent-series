@@ -33,7 +33,7 @@ python -m alembic upgrade head
 
 # 6) Chuẩn bị và khởi động Vite trong background.
 $frontendPath = Join-Path $PSScriptRoot "frontend"
-if (-not (Test-Path (Join-Path $frontendPath "node_modules"))) {
+if (-not (Test-Path (Join-Path $frontendPath "node_modules\\.bin\\vite.cmd"))) {
     Write-Host "Cai dat dependencies frontend..." -ForegroundColor Cyan
     Push-Location $frontendPath
     try {
@@ -44,12 +44,28 @@ if (-not (Test-Path (Join-Path $frontendPath "node_modules"))) {
     }
 }
 
-Write-Host "Mo React tai http://localhost:5173..." -ForegroundColor Green
+Write-Host "Khoi dong React..." -ForegroundColor Cyan
 $frontendJob = Start-Job -ScriptBlock {
     param($Path)
     Set-Location $Path
     npm run dev -- --host 127.0.0.1
 } -ArgumentList $frontendPath
+
+$frontendOnline = $false
+for ($attempt = 0; $attempt -lt 15; $attempt++) {
+    Start-Sleep -Seconds 1
+    if (Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue) {
+        $frontendOnline = $true
+        break
+    }
+}
+if (-not $frontendOnline) {
+    $frontendError = (Receive-Job -Job $frontendJob -ErrorAction SilentlyContinue | Out-String).Trim()
+    Stop-Job -Job $frontendJob -ErrorAction SilentlyContinue
+    Remove-Job -Job $frontendJob -Force -ErrorAction SilentlyContinue
+    throw "React (Vite) khong khoi dong duoc.$([Environment]::NewLine)$frontendError"
+}
+Write-Host "Mo React tai http://localhost:5173..." -ForegroundColor Green
 
 # Worker riêng: ưu tiên Scheduled Task bền vững theo user. Khi task chưa được
 # cài, vẫn fallback sang background job để local dev tiếp tục hoạt động.
@@ -77,8 +93,10 @@ for ($attempt = 0; $attempt -lt 10; $attempt++) {
     if ($workerOnline -eq "True") { break }
 }
 if ($workerOnline -ne "True") {
-    Stop-Job -Job $schedulerJob -ErrorAction SilentlyContinue
-    Remove-Job -Job $schedulerJob -Force -ErrorAction SilentlyContinue
+    if ($schedulerJob) {
+        Stop-Job -Job $schedulerJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $schedulerJob -Force -ErrorAction SilentlyContinue
+    }
     throw "Worker không gửi heartbeat. Xem logs\\worker-YYYY-MM-DD.log hoặc chạy .\\run-worker.ps1 để chẩn đoán."
 }
 

@@ -15,7 +15,11 @@ export type Schedule = {
   endsAt: string | null;
   notes: string | null;
   projectId: string | null;
+  provider: string | null;
+  model: string | null;
   prompt: string | null;
+  requireWebSource: boolean;
+  notifyEmail: boolean;
   recurrence: 'once' | 'daily' | 'weekly';
   status: 'active' | 'paused' | 'completed';
   nextRunAt: string | null;
@@ -29,9 +33,14 @@ export type ScheduleRun = {
   id: string;
   scheduleId: string;
   scheduledFor: string;
-  status: 'running' | 'succeeded' | 'failed';
+  status: 'running' | 'retrying' | 'succeeded' | 'failed' | 'cancelled';
+  retryCount: number;
+  retryAt: string | null;
   summary: string | null;
   error: string | null;
+  emailStatus: 'sent' | 'failed' | 'skipped' | null;
+  emailSentAt: string | null;
+  emailError: string | null;
   startedAt: string;
   finishedAt: string | null;
 };

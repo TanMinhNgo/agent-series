@@ -15,7 +15,17 @@ import type {
 type ProjectInput = Pick<Project, 'name' | 'description' | 'status' | 'instructions' | 'memoryMode'>;
 type ScheduleInput = Pick<
   Schedule,
-  'title' | 'startsAt' | 'endsAt' | 'notes' | 'projectId' | 'prompt' | 'recurrence'
+  | 'title'
+  | 'startsAt'
+  | 'endsAt'
+  | 'notes'
+  | 'projectId'
+  | 'provider'
+  | 'model'
+  | 'prompt'
+  | 'recurrence'
+  | 'requireWebSource'
+  | 'notifyEmail'
 > &
   Partial<Pick<Schedule, 'status' | 'nextRunAt' | 'timezone'>>;
 type PluginInput = Pick<Plugin, 'slug' | 'name' | 'description' | 'enabled' | 'config'>;
@@ -104,6 +114,13 @@ export const useWorkspace = () => {
       void client.invalidateQueries({ queryKey: ['schedule-runs', id] });
     },
   });
+  const resendScheduleRunEmail = useMutation({
+    mutationFn: ({ scheduleId, runId }: { scheduleId: string; runId: string }) =>
+      request<ScheduleRun>({ url: `/schedules/${scheduleId}/runs/${runId}/resend-email`, method: 'POST' }),
+    onSuccess: (_, { scheduleId }) => {
+      void client.invalidateQueries({ queryKey: ['schedule-runs', scheduleId] });
+    },
+  });
   const pluginActions = useResourceActions<PluginInput>('plugin');
   const installCatalogPlugin = useMutation({
     mutationFn: (slug: string) => request<Plugin>({ url: `/plugin-catalog/${slug}/install`, method: 'POST' }),
@@ -136,6 +153,7 @@ export const useWorkspace = () => {
     deleteProject,
     scheduleActions,
     runScheduleNow,
+    resendScheduleRunEmail,
     pluginActions,
     installCatalogPlugin,
     authorizeGoogle,
@@ -148,4 +166,5 @@ export const useScheduleRuns = (scheduleId?: string) =>
     queryKey: ['schedule-runs', scheduleId],
     queryFn: () => request<ScheduleRun[]>({ url: `/schedules/${scheduleId}/runs` }),
     enabled: Boolean(scheduleId),
+    refetchInterval: scheduleId ? 15_000 : false,
   });

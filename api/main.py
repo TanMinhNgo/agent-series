@@ -43,6 +43,7 @@ from agent_core.providers import build_client
 from agent_core.storage import ArtifactChunk, AuthRepository, BackgroundJob, BackgroundJobRepository, Chat, ChatMessage, ChatRepository, ChatShare, ConnectorRepository, Database, Document, KnowledgeCollection, LibraryAsset, MediaAttachment, MediaRepository, ModelRegistryRepository, Plugin, Project, PromptTemplate, Schedule, ScheduleRepository, ScheduleRun, WorkspaceRepository, current_user_id
 from agent_core.auth import AuthError, AuthService, SESSION_COOKIE
 from agent_core.tools import ToolRegistry, ToolSpec, build_default_registry
+from agent_core.notifications import EmailNotificationService, public_chat_url, schedule_run_email
 from agent_core.web_search import WebSearchService, build_web_search_tool, sources_from_web_steps
 
 
@@ -62,6 +63,7 @@ class Services:
     credentials: UserCredentialService
     personalization: PersonalizationService
     web_search: WebSearchService
+    email: EmailNotificationService
     ollama: OllamaCatalog
 
 
@@ -182,7 +184,11 @@ class ScheduleRequest(BaseModel):
     ends_at: datetime | None = Field(default=None, alias="endsAt")
     notes: str | None = Field(default=None, max_length=10_000)
     project_id: str | None = Field(default=None, alias="projectId")
+    provider: str | None = None
+    model: str | None = None
     prompt: str | None = Field(default=None, max_length=10_000)
+    require_web_source: bool = Field(default=False, alias="requireWebSource")
+    notify_email: bool = Field(default=False, alias="notifyEmail")
     recurrence: Literal["once", "daily", "weekly"] = "once"
     status: Literal["active", "paused", "completed"] = "active"
     next_run_at: datetime | None = Field(default=None, alias="nextRunAt")
@@ -197,7 +203,11 @@ class ScheduleUpdateRequest(BaseModel):
     ends_at: datetime | None = Field(default=None, alias="endsAt")
     notes: str | None = Field(default=None, max_length=10_000)
     project_id: str | None = Field(default=None, alias="projectId")
+    provider: str | None = None
+    model: str | None = None
     prompt: str | None = Field(default=None, max_length=10_000)
+    require_web_source: bool | None = Field(default=None, alias="requireWebSource")
+    notify_email: bool | None = Field(default=None, alias="notifyEmail")
     recurrence: Literal["once", "daily", "weekly"] | None = None
     status: Literal["active", "paused", "completed"] | None = None
     next_run_at: datetime | None = Field(default=None, alias="nextRunAt")
@@ -348,11 +358,11 @@ def project_json(item: Project) -> dict[str, Any]:
 
 
 def schedule_json(item: Schedule) -> dict[str, Any]:
-    return {"id": item.id, "title": item.title, "startsAt": item.starts_at.isoformat(), "endsAt": item.ends_at.isoformat() if item.ends_at else None, "notes": item.notes, "projectId": item.project_id, "chatId": item.chat_id, "prompt": item.prompt, "recurrence": item.recurrence, "status": item.status, "nextRunAt": item.next_run_at.isoformat() if item.next_run_at else None, "lastRunAt": item.last_run_at.isoformat() if item.last_run_at else None, "timezone": item.timezone, "createdAt": item.created_at.isoformat(), "updatedAt": item.updated_at.isoformat()}
+    return {"id": item.id, "title": item.title, "startsAt": item.starts_at.isoformat(), "endsAt": item.ends_at.isoformat() if item.ends_at else None, "notes": item.notes, "projectId": item.project_id, "chatId": item.chat_id, "provider": item.provider, "model": item.model, "prompt": item.prompt, "requireWebSource": item.require_web_source, "notifyEmail": item.notify_email, "recurrence": item.recurrence, "status": item.status, "nextRunAt": item.next_run_at.isoformat() if item.next_run_at else None, "lastRunAt": item.last_run_at.isoformat() if item.last_run_at else None, "timezone": item.timezone, "createdAt": item.created_at.isoformat(), "updatedAt": item.updated_at.isoformat()}
 
 
 def schedule_run_json(item: ScheduleRun) -> dict[str, Any]:
-    return {"id": item.id, "scheduleId": item.schedule_id, "scheduledFor": item.scheduled_for.isoformat(), "status": item.status, "summary": item.summary, "error": item.error, "startedAt": item.started_at.isoformat(), "finishedAt": item.finished_at.isoformat() if item.finished_at else None}
+    return {"id": item.id, "scheduleId": item.schedule_id, "scheduledFor": item.scheduled_for.isoformat(), "status": item.status, "retryCount": item.retry_count, "retryAt": item.retry_at.isoformat() if item.retry_at else None, "summary": item.summary, "error": item.error, "emailStatus": item.email_status, "emailSentAt": item.email_sent_at.isoformat() if item.email_sent_at else None, "emailError": item.email_error, "startedAt": item.started_at.isoformat(), "finishedAt": item.finished_at.isoformat() if item.finished_at else None}
 
 
 def library_asset_json(item: LibraryAsset) -> dict[str, Any]:
@@ -521,6 +531,7 @@ async def lifespan(app: FastAPI):
         credentials=UserCredentialService(auth_repository, settings),
         personalization=PersonalizationService(database),
         web_search=WebSearchService(settings.tavily_api_key),
+        email=EmailNotificationService(settings),
         ollama=OllamaCatalog(settings.ollama_base_url),
     )
     queue_pending_artifacts(app.state.services)
@@ -623,6 +634,19 @@ def available_provider_models(user_id: str | None, ollama_models: tuple[str, ...
     if models:
         providers["ollama"] = list(models)
     return providers
+
+
+def resolve_schedule_selection(provider: str | None, model: str | None, user_id: str | None) -> tuple[str, str]:
+    settings = services().settings
+    available = available_provider_models(user_id)
+    resolved_provider = provider or (
+        settings.provider if settings.active_model in available.get(settings.provider, []) else next(iter(available), settings.provider)
+    )
+    resolved_model = model or (
+        settings.active_model if settings.active_model in available.get(resolved_provider, []) else (available.get(resolved_provider) or [settings.active_model])[0]
+    )
+    selected = selected_settings(resolved_provider, resolved_model, user_id)
+    return selected.provider, selected.active_model
 
 
 def ollama_status() -> dict[str, Any]:
@@ -1456,13 +1480,18 @@ def create_schedule(payload: ScheduleRequest) -> dict[str, Any]:
     if payload.project_id and services().workspace.get(Project, payload.project_id) is None:
         raise HTTPException(status_code=422, detail="Dự án được chọn không tồn tại.")
     values = payload.model_dump()
+    try:
+        values["provider"], values["model"] = resolve_schedule_selection(payload.provider, payload.model, current_user_id.get())
+    except (ValueError, CredentialError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     values["next_run_at"] = values["next_run_at"] or values["starts_at"]
     return schedule_json(services().workspace.create(Schedule, **values))
 
 
 def mutate_schedule_proposal(chat_id: str, proposal_id: str, action: Literal["confirm", "dismiss"]) -> dict[str, Any]:
     """Confirm/dismiss exactly one content block, atomically with Schedule creation."""
-    if services().chats.get(chat_id) is None:
+    source_chat = services().chats.get(chat_id)
+    if source_chat is None:
         raise HTTPException(status_code=404, detail="Không tìm thấy chat.")
     with services().chats.database.session() as session:
         messages = session.scalars(
@@ -1499,6 +1528,8 @@ def mutate_schedule_proposal(chat_id: str, proposal_id: str, action: Literal["co
                     recurrence=proposal.recurrence,
                     timezone=proposal.timezone,
                     project_id=config.get("projectId"),
+                    provider=source_chat.provider,
+                    model=source_chat.model,
                     status="active",
                     next_run_at=proposal.starts_at,
                 )
@@ -1535,11 +1566,20 @@ def update_schedule(schedule_id: str, payload: ScheduleUpdateRequest) -> dict[st
     project_id = values.get("project_id", current.project_id)
     if project_id and services().workspace.get(Project, project_id) is None:
         raise HTTPException(status_code=422, detail="Dự án được chọn không tồn tại.")
+    if {"provider", "model"}.intersection(values):
+        requested_provider = values.get("provider", current.provider)
+        requested_model = values.get("model") if "model" in values else (current.model if "provider" not in values else None)
+        try:
+            values["provider"], values["model"] = resolve_schedule_selection(requested_provider, requested_model, current_user_id.get())
+        except (ValueError, CredentialError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     if {"starts_at", "recurrence"}.intersection(values) and "next_run_at" not in values:
         values["next_run_at"] = values.get("starts_at", current.starts_at)
     if values.get("status") == "active" and current.status == "completed" and current.recurrence == "once":
         raise HTTPException(status_code=422, detail="Lịch một lần đã hoàn tất; hãy tạo lịch mới để chạy lại.")
     item = services().workspace.update(Schedule, schedule_id, **values)
+    if item and {"provider", "model"}.intersection(values) and item.chat_id:
+        services().chats.update(item.chat_id, provider=item.provider, model=item.model)
     return schedule_json(item)
 
 
@@ -1554,6 +1594,38 @@ def list_schedule_runs(schedule_id: str, limit: int = Query(default=30, ge=1, le
     if services().workspace.get(Schedule, schedule_id) is None:
         raise HTTPException(status_code=404, detail="Không tìm thấy lịch trình.")
     return [schedule_run_json(item) for item in ScheduleRepository(services().chats.database).list_runs(schedule_id, limit)]
+
+
+@app.post("/api/schedules/{schedule_id}/runs/{run_id}/resend-email", tags=["Schedules"])
+def resend_schedule_run_email(schedule_id: str, run_id: str) -> dict[str, Any]:
+    """Retry only the notification of a finished run, never the AI work itself."""
+    schedule = services().workspace.get(Schedule, schedule_id)
+    if schedule is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy lịch trình.")
+    runs = ScheduleRepository(services().chats.database)
+    run = runs.get_run(schedule_id, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy lần chạy.")
+    if run.status != "succeeded":
+        raise HTTPException(status_code=409, detail="Chỉ gửi lại email cho lần chạy đã hoàn tất.")
+    if run.email_status == "sent":
+        raise HTTPException(status_code=409, detail="Email của lần chạy này đã được gửi.")
+    user = services().auth.repository.get_user(current_user_id.get())
+    email = services().email
+    if not email.enabled or user is None or not user.email:
+        raise HTTPException(status_code=422, detail="Chưa cấu hình SMTP hoặc tài khoản không có email.")
+    subject, body = schedule_run_email(
+        schedule.title,
+        run.finished_at or run.started_at,
+        run.summary,
+        public_chat_url(services().settings.app_web_url, schedule.chat_id) if schedule.chat_id else None,
+    )
+    try:
+        email.send(user.email, subject, body)
+    except Exception as exc:  # noqa: BLE001
+        runs.record_email(run_id, status="failed", error=str(exc))
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return schedule_run_json(runs.record_email(run_id, status="sent"))
 
 
 @app.post("/api/schedules/{schedule_id}/run-now", status_code=202, tags=["Schedules"])

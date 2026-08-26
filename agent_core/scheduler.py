@@ -14,12 +14,15 @@ from agent_core.media import MediaService
 from agent_core.memory import MemoryService
 from agent_core.ollama import OllamaCatalog
 from agent_core.personalization import PersonalizationService
-from agent_core.web_search import WebSearchService
+from agent_core.notifications import EmailNotificationService, public_chat_url, schedule_run_email
+from agent_core.web_search import WebSearchService, WebSourceUnavailable
 from agent_core.google_workspace import GoogleWorkspaceService
 from agent_core.auth import AuthService
 from agent_core.credentials import UserCredentialService
 from agent_core.plugin_execution import connected_read_tools
 from agent_core.storage import AuthRepository, BackgroundJobRepository, Chat, ChatRepository, ConnectorRepository, Database, MediaRepository, ModelRegistryRepository, Schedule, ScheduleRepository, WorkspaceRepository, current_user_id
+
+RETRY_DELAYS_MINUTES = (5, 15, 30)
 
 
 class ScheduleWorker:
@@ -30,9 +33,10 @@ class ScheduleWorker:
     def run_due(self, now: datetime | None = None) -> int:
         current_time = now or datetime.now(UTC)
         self.runs.recover_stale_runs(current_time)
-        claimed = self.runs.claim_due(current_time)
-        for schedule, run in claimed:
-            self.execute(schedule, run.id)
+        claimed = [(schedule, run, False) for schedule, run in self.runs.claim_due(current_time)]
+        claimed.extend((schedule, run, True) for schedule, run in self.runs.claim_due_retries(current_time))
+        for schedule, run, prompt_persisted in claimed:
+            self.execute(schedule, run.id, prompt_persisted=prompt_persisted)
         return len(claimed)
 
     def run_now(self, schedule_id: str, now: datetime | None = None) -> bool:
@@ -55,8 +59,12 @@ class ScheduleWorker:
     def ensure_chat(self, schedule: Schedule) -> Chat:
         chat = self.services.chats.get(schedule.chat_id) if schedule.chat_id else None
         if chat is not None:
+            if schedule.provider and schedule.model and (chat.provider != schedule.provider or chat.model != schedule.model):
+                return self.services.chats.update(chat.id, provider=schedule.provider, model=schedule.model) or chat
             return chat
-        chat = self.services.chats.create(self.services.settings.provider, self.services.settings.active_model)
+        provider = schedule.provider or self.services.settings.provider
+        model = schedule.model or self.services.settings.active_model
+        chat = self.services.chats.create(provider, model)
         chat = self.services.chats.update(chat.id, title=f"Lịch: {schedule.title}") or chat
         self.runs.attach_chat(schedule.id, chat.id)
         return chat
@@ -75,8 +83,64 @@ class ScheduleWorker:
 
     @staticmethod
     def _is_transient_error(error: Exception) -> bool:
+        # Missing web sources are never retried: a Tavily error text can contain
+        # "timeout" and would otherwise be mistaken for a provider outage.
+        if isinstance(error, WebSourceUnavailable):
+            return False
         message = str(error).lower()
         return any(marker in message for marker in ("503", "unavailable", "timeout", "timed out", "temporarily", "connection reset"))
+
+    @staticmethod
+    def _final_failure_message(chat: Chat, transient: bool, error: Exception | None = None) -> str:
+        if isinstance(error, WebSourceUnavailable):
+            return (
+                f"Lịch trình chưa hoàn tất vì không lấy được nguồn web mới: {error}. "
+                "Bản tin không được tạo để tránh nội dung thiếu nguồn. Hãy kiểm tra cấu hình tìm web rồi bấm Chạy ngay."
+            )
+        if transient:
+            return (
+                f"Lịch trình chưa hoàn tất vì {chat.provider} / {chat.model} vẫn tạm thời không khả dụng "
+                f"sau {len(RETRY_DELAYS_MINUTES)} lần thử lại. Bạn có thể bấm Chạy ngay hoặc đổi model rồi thử lại."
+            )
+        return "Lịch trình chưa hoàn tất do lỗi không thể tự thử lại. Xem Lần chạy gần đây để kiểm tra và bấm Chạy ngay sau khi đã xử lý."
+
+    @staticmethod
+    def _grounded_prompt(prompt: str, context: str) -> str:
+        return (
+            f"{prompt}\n\n---\nNGUỒN WEB MỚI (bắt buộc dùng, chỉ trích dẫn các URL dưới đây):\n{context}\n---\n"
+            "Chỉ tổng hợp từ các nguồn trên; không bổ sung thông tin từ kiến thức sẵn có."
+        )
+
+    @classmethod
+    def _grounded_history(cls, history: list[dict], prompt: str, web_sources: dict) -> list[dict]:
+        """Copy the history with sources folded into the pending user message."""
+        if not history or history[-1].get("role") != "user":
+            return history
+        grounded = {**history[-1], "content": cls._grounded_prompt(prompt, web_sources["context"])}
+        return [*history[:-1], grounded]
+
+    def notify(self, schedule: Schedule, run_id: str, chat: Chat, summary: str | None) -> None:
+        """Send the completion email after the run is already durably finished."""
+        if not schedule.notify_email:
+            return
+        try:
+            email = self.services.email
+            recipient = getattr(self.services.auth.repository.get_user(schedule.user_id), "email", None) if schedule.user_id else None
+            if not email.enabled or not recipient:
+                reason = "SMTP chưa được cấu hình." if not email.enabled else "Tài khoản chủ lịch trình không có email."
+                self.runs.record_email(run_id, status="skipped", error=reason)
+                return
+            subject, body = schedule_run_email(
+                schedule.title,
+                datetime.now(UTC),
+                summary,
+                public_chat_url(self.services.settings.app_web_url, chat.id),
+            )
+            email.send(recipient, subject, body)
+        except Exception as exc:  # noqa: BLE001 - delivery must never fail a finished run
+            self.runs.record_email(run_id, status="failed", error=str(exc))
+            return
+        self.runs.record_email(run_id, status="sent")
 
     def execute(self, schedule: Schedule, run_id: str, prompt_persisted: bool = False) -> None:
         user_token = current_user_id.set(schedule.user_id)
@@ -94,51 +158,70 @@ class ScheduleWorker:
             plugin_tools = connected_read_tools(self.services.workspace.list_plugins())
             full_history = self.services.chats.history(chat.id)
             prompt = schedule.prompt or schedule.title
-            last_error: Exception | None = None
-            for attempt in range(3):
-                try:
-                    agent = make_agent(
-                        self.services,
-                        chat,
-                        memory_context=memory_context,
-                        plugin_tools=plugin_tools,
-                        history=full_history,
-                        allow_schedule_proposals=False,
-                    )
-                    initial_history_length = len(agent.history)
-                    result = agent.run(prompt, append_user_message=False)
-                    break
-                except Exception as exc:  # noqa: BLE001 - retry only transient provider failures
-                    last_error = exc
-                    if attempt == 2 or not self._is_transient_error(exc):
-                        raise
-                    time.sleep(2 ** (attempt + 1))
-            else:  # pragma: no cover - loop either breaks or raises
-                raise last_error or RuntimeError("Không thể chạy lịch trình.")
+            # Grounding runs before the provider call so a sourceless digest is
+            # never generated, and no model quota is spent when Tavily is down.
+            web_sources = self.services.web_search.require_sources(prompt) if schedule.require_web_source else None
+            agent = make_agent(
+                self.services,
+                chat,
+                memory_context=memory_context,
+                plugin_tools=plugin_tools,
+                # `agent.run(append_user_message=False)` ignores its prompt argument and
+                # reads the last history message, so grounding must be injected here.
+                # `make_agent` copies this list, keeping the persisted prompt clean.
+                history=self._grounded_history(full_history, prompt, web_sources) if web_sources else full_history,
+                allow_schedule_proposals=False,
+            )
+            initial_history_length = len(agent.history)
+            result = agent.run(prompt, append_user_message=False)
             if result.content_blocks:
                 agent.history[-1]["content_blocks"] = result.content_blocks
             saved_history = persisted_history(full_history, agent.history, initial_history_length)
             turn_created_at = datetime.now(UTC).isoformat()
             for item in saved_history[len(full_history):]:
                 item.setdefault("created_at", turn_created_at)
+            if web_sources and saved_history:
+                saved_history[-1]["sources"] = web_sources["sources"]
             self.services.chats.replace_history(chat.id, saved_history)
             self.services.chats.set_unread(chat.id, True)
             BackgroundJobRepository(self.services.chats.database).enqueue("memory_index", {"chat_id": chat.id})
-            self.runs.finish(run_id, summary=result.text[:500])
+            summary = result.text[:500]
+            self.runs.finish(run_id, summary=summary)
+            try:
+                self.notify(schedule, run_id, chat, summary)
+            except Exception:  # noqa: BLE001 - the run is already finished; never reopen it
+                pass
         except Exception as exc:  # noqa: BLE001
+            transient = self._is_transient_error(exc)
             try:
                 chat = self.ensure_chat(schedule)
+                if transient:
+                    retry = self.runs.schedule_retry(
+                        run_id,
+                        "Provider tạm thời không khả dụng; đang chờ tự thử lại.",
+                        RETRY_DELAYS_MINUTES,
+                    )
+                    if retry is not None:
+                        # The retry itself owns the status/error shown in the run log;
+                        # leave chat untouched so its user prompt is never duplicated.
+                        return
                 history = self.services.chats.history(chat.id)
                 history.append({
                     "role": "assistant",
-                    "content": "Lịch trình chưa hoàn tất do provider đang tạm thời không khả dụng. Bạn có thể xem chi tiết trong Lần chạy gần đây và bấm Chạy ngay để thử lại.",
+                    "content": self._final_failure_message(chat, transient, exc),
                     "created_at": datetime.now(UTC).isoformat(),
                 })
                 self.services.chats.replace_history(chat.id, history)
                 self.services.chats.set_unread(chat.id, True)
             except Exception:
                 pass
-            self.runs.finish(run_id, error=str(exc))
+            if isinstance(exc, WebSourceUnavailable):
+                run_error = f"Không lấy được nguồn web mới: {exc}"
+            elif transient:
+                run_error = "Provider tạm thời không khả dụng; đã hết số lần tự thử lại."
+            else:
+                run_error = "Lỗi không thể tự thử lại; xem cấu hình provider và thử lại."
+            self.runs.finish(run_id, error=run_error)
         finally:
             current_user_id.reset(user_token)
 
@@ -165,6 +248,7 @@ def build_worker() -> ScheduleWorker:
         credentials=UserCredentialService(auth_repository, settings),
         personalization=PersonalizationService(database),
         web_search=WebSearchService(settings.tavily_api_key),
+        email=EmailNotificationService(settings),
         ollama=OllamaCatalog(settings.ollama_base_url),
     )
     queue_pending_artifacts(services)

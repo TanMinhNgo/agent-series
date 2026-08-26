@@ -101,7 +101,7 @@ Ollama ở bản hiện tại nhận chat văn bản và chỉ được gọi `s
 
 Sau migration `0018`, API private yêu cầu session Google. Trong Google Cloud Console, thêm `http://localhost:8000/api/auth/google/callback` vào **Authorized redirect URIs** của OAuth Web application. Có thể dùng cùng Client ID/Secret với Google Workspace connector; backend tự fallback về `GOOGLE_OAUTH_CLIENT_ID` và `GOOGLE_OAUTH_CLIENT_SECRET` nếu các biến `GOOGLE_AUTH_*` để trống. User Google đầu tiên sẽ claim dữ liệu local đã có và nhận role owner.
 
-SMTP được giữ lại cho email thông báo trong tương lai, không dùng để đăng nhập.
+SMTP không dùng để đăng nhập. Nó phục vụ email thông báo khi một lịch trình chạy xong: bật `SMTP_HOST` và `SMTP_FROM` rồi tick "Gửi email khi hoàn tất" trong lịch trình, email sẽ tới địa chỉ của tài khoản sở hữu lịch. Liên kết mở chat chỉ được chèn khi `APP_WEB_URL` trỏ tới địa chỉ công khai.
 
 Không dùng phiên ChatGPT, Gemini web hay Claude.ai làm API credential: Gemini API dùng API key; OpenAI/Anthropic API dùng credential platform riêng. API key không được đặt ở frontend.
 
