@@ -110,7 +110,7 @@ class KnowledgeService:
             document = session.get(Document, document_id)
             if document is None or document.storage_provider != "local":
                 return document
-            stored = self.storage.migrate_local(document.stored_name, document.original_name, f"users/{current_user_id.get() or 'local'}/knowledge/{document.project_id or 'global'}")
+            stored = self.storage.migrate_local(document.stored_name, document.original_name, "knowledge")
             if stored is None:
                 return document
             document.storage_provider, document.stored_name, document.storage_file_id = stored.provider, stored.stored_name, stored.file_id
@@ -179,7 +179,7 @@ class KnowledgeService:
             existing = session.scalar(select(Document).where(Document.sha256 == digest, Document.scope_key == scope_key))
             if existing:
                 return existing, False
-            stored = self.storage.upload(data, original_name, f"users/{current_user_id.get() or 'local'}/knowledge/{project_id or 'global'}")
+            stored = self.storage.upload(data, original_name, "knowledge")
             document = Document(
                 original_name=Path(original_name).name,
                 stored_name=stored.stored_name,

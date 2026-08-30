@@ -17,6 +17,11 @@ class StoredFile:
 
 
 class FileStorageService:
+    _IMAGEKIT_FOLDERS = {
+        "chat": "/chat",
+        "library": "/library",
+        "knowledge": "/knowledge",
+    }
     def __init__(self, directory: Path, private_key: str = "", url_endpoint: str = ""):
         self.directory = directory
         self.private_key = private_key
@@ -47,7 +52,7 @@ class FileStorageService:
             self._client = ImageKit(private_key=self.private_key)
         return self._client
 
-    def upload(self, data: bytes, original_name: str, folder: str) -> StoredFile:
+    def upload(self, data: bytes, original_name: str, storage_area: str) -> StoredFile:
         suffix_match = re.search(r"\.[a-zA-Z0-9]{1,16}$", original_name)
         suffix = suffix_match.group(0).lower() if suffix_match else ".bin"
         generated_name = f"{uuid4().hex}{suffix}"
@@ -56,21 +61,27 @@ class FileStorageService:
             return StoredFile("local", generated_name)
         try:
             response = self._imagekit().files.upload(
-                file=data, file_name=generated_name, folder=f"/{folder.strip('/')}",
+                file=data, file_name=generated_name, folder=self._imagekit_folder(storage_area),
                 is_private_file=True, use_unique_file_name=False,
             )
             return StoredFile("imagekit", str(response.file_path), str(response.file_id))
         except Exception as exc:  # noqa: BLE001 - SDK normalizes provider-specific errors poorly.
             raise RuntimeError("Không thể upload file lên ImageKit.") from exc
 
-    def migrate_local(self, stored_name: str, original_name: str, folder: str) -> StoredFile | None:
+    def migrate_local(self, stored_name: str, original_name: str, storage_area: str) -> StoredFile | None:
         """Copy an old local object on first access; callers persist returned metadata."""
         if not self.imagekit_enabled:
             return None
         path = self._local_path(stored_name)
         if not path.is_file():
             return None
-        return self.upload(path.read_bytes(), original_name, folder)
+        return self.upload(path.read_bytes(), original_name, storage_area)
+
+    def _imagekit_folder(self, storage_area: str) -> str:
+        try:
+            return self._IMAGEKIT_FOLDERS[storage_area]
+        except KeyError as exc:
+            raise ValueError("Khu vực lưu trữ không hợp lệ.") from exc
 
     def read(self, provider: str | None, stored_name: str, file_id: str | None) -> bytes:
         if provider != "imagekit" or not file_id:

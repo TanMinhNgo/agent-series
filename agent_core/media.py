@@ -25,7 +25,7 @@ class MediaService:
             raise ValueError("Chỉ hỗ trợ ảnh JPEG, PNG, WebP hoặc GIF.")
         if not content or len(content) > MAX_IMAGE_BYTES:
             raise ValueError("Ảnh phải có dung lượng từ 1 byte đến 10 MB.")
-        stored = self.storage.upload(content, name, f"users/{current_user_id.get() or 'local'}/chat")
+        stored = self.storage.upload(content, name, "chat")
         return self.repository.create(
             original_name=name[:255], stored_name=stored.stored_name, storage_provider=stored.provider,
             storage_file_id=stored.file_id, mime_type=mime_type, size_bytes=len(content)
@@ -56,7 +56,7 @@ class MediaService:
 
     def url_for(self, media: MediaAttachment) -> str:
         if media.storage_provider == "local":
-            migrated = self.storage.migrate_local(media.stored_name, media.original_name, f"users/{current_user_id.get() or 'local'}/chat")
+            migrated = self.storage.migrate_local(media.stored_name, media.original_name, "chat")
             if migrated:
                 media = self.repository.replace_storage(media.id, migrated.provider, migrated.stored_name, migrated.file_id) or media
         if media.storage_provider != "imagekit":
