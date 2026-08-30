@@ -98,7 +98,7 @@ def test_google_executor_is_read_only_and_audits_drive_results(monkeypatch):
     monkeypatch.setattr(service, "_access_token", lambda: ("access", repo.connection))
     monkeypatch.setattr(service, "_http_json", lambda *_args, **_kwargs: {"files": [{"id": "file-1", "name": "Roadmap", "mimeType": "application/pdf", "modifiedTime": "2026-08-18T00:00:00Z"}]})
 
-    tools = GoogleWorkspaceExecutor(service).tools(Plugin(id="p", slug=GOOGLE_WORKSPACE_SLUG, name="Google Workspace", enabled=True, connection_status="connected", capabilities=["search"]))
+    tools = GoogleWorkspaceExecutor(service).tools()
     drive = next(tool for tool in tools if tool.name == "search_google_drive_files")
 
     assert {tool.name for tool in tools} == {
