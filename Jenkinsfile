@@ -1,5 +1,5 @@
 pipeline {
-  agent any
+  agent { label 'agent-series-ci' }
   parameters {
     string(name: 'GIT_URL', defaultValue: '', description: 'Repository URL sent by GitHub Actions')
     string(name: 'GIT_SHA', defaultValue: '', description: 'Immutable commit SHA sent by GitHub Actions')
