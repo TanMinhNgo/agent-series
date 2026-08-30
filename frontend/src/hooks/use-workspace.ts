@@ -93,7 +93,8 @@ export const useWorkspace = () => {
     onSuccess: () => void client.invalidateQueries({ queryKey: ['workspace-invitations'] }),
   });
   const createWorkspace = useMutation({
-    mutationFn: (data: { name: string }) => request<AppWorkspace>({ url: '/workspaces', method: 'POST', data }),
+    mutationFn: (data: { name: string }) =>
+      request<AppWorkspace>({ url: '/workspaces', method: 'POST', data }),
     onSuccess: () => void client.invalidateQueries({ queryKey: queryKeys.workspaces }),
   });
   const updateWorkspaceMember = useMutation({
@@ -102,11 +103,13 @@ export const useWorkspace = () => {
     onSuccess: () => void client.invalidateQueries({ queryKey: ['workspace-members'] }),
   });
   const removeWorkspaceMember = useMutation({
-    mutationFn: (userId: string) => request<void>({ url: `/workspaces/current/members/${userId}`, method: 'DELETE' }),
+    mutationFn: (userId: string) =>
+      request<void>({ url: `/workspaces/current/members/${userId}`, method: 'DELETE' }),
     onSuccess: () => void client.invalidateQueries({ queryKey: ['workspace-members'] }),
   });
   const cancelWorkspaceInvitation = useMutation({
-    mutationFn: (invitationId: string) => request<void>({ url: `/workspaces/current/invitations/${invitationId}`, method: 'DELETE' }),
+    mutationFn: (invitationId: string) =>
+      request<void>({ url: `/workspaces/current/invitations/${invitationId}`, method: 'DELETE' }),
     onSuccess: () => void client.invalidateQueries({ queryKey: ['workspace-invitations'] }),
   });
   const projects = useQuery({

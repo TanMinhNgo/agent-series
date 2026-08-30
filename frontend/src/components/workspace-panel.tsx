@@ -1911,11 +1911,22 @@ function MembersView() {
               });
             }}
           >
-            <input className="workspace-input flex-1" required maxLength={160} placeholder="Ví dụ: Nhóm sản phẩm" value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} />
-            <Button type="submit" disabled={createWorkspace.isPending}><Plus /> Tạo workspace</Button>
+            <input
+              className="workspace-input flex-1"
+              required
+              maxLength={160}
+              placeholder="Ví dụ: Nhóm sản phẩm"
+              value={workspaceName}
+              onChange={(event) => setWorkspaceName(event.target.value)}
+            />
+            <Button type="submit" disabled={createWorkspace.isPending}>
+              <Plus /> Tạo workspace
+            </Button>
           </form>
           {createWorkspace.error ? <FormError message={createWorkspace.error.message} /> : null}
-          <p className="mt-3 text-xs text-muted-foreground">Bạn hiện có {workspaces.data?.length || 0} workspace. Dùng selector Sidebar để chuyển.</p>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Bạn hiện có {workspaces.data?.length || 0} workspace. Dùng selector Sidebar để chuyển.
+          </p>
         </CardContent>
       </Card>
       <Card className="mb-6">
@@ -2001,8 +2012,14 @@ function MembersView() {
         <CardContent>
           <ul className="space-y-3">
             {(workspaceMembers.data || []).map((member) => (
-              <li key={member.userId} className="flex flex-wrap items-center justify-between gap-2 border-b pb-3 text-sm">
-                <span>{member.displayName || member.email}<span className="ml-2 text-muted-foreground">{member.email}</span></span>
+              <li
+                key={member.userId}
+                className="flex flex-wrap items-center justify-between gap-2 border-b pb-3 text-sm"
+              >
+                <span>
+                  {member.displayName || member.email}
+                  <span className="ml-2 text-muted-foreground">{member.email}</span>
+                </span>
                 {member.userId === session.user?.id ? (
                   <Badge variant="secondary">{member.role}</Badge>
                 ) : (
@@ -2011,13 +2028,25 @@ function MembersView() {
                       className="workspace-input h-8 py-1 text-xs"
                       value={member.role}
                       disabled={updateWorkspaceMember.isPending || removeWorkspaceMember.isPending}
-                      onChange={(event) => void updateWorkspaceMember.mutateAsync({ userId: member.userId, role: event.target.value as WorkspaceRole })}
+                      onChange={(event) =>
+                        void updateWorkspaceMember.mutateAsync({
+                          userId: member.userId,
+                          role: event.target.value as WorkspaceRole,
+                        })
+                      }
                     >
                       <option value="viewer">Viewer</option>
                       <option value="editor">Editor</option>
                       <option value="owner">Owner</option>
                     </select>
-                    <Button size="sm" variant="ghost" disabled={removeWorkspaceMember.isPending} onClick={() => void removeWorkspaceMember.mutateAsync(member.userId)}><Trash2 /> Xóa</Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={removeWorkspaceMember.isPending}
+                      onClick={() => void removeWorkspaceMember.mutateAsync(member.userId)}
+                    >
+                      <Trash2 /> Xóa
+                    </Button>
                   </div>
                 )}
               </li>
@@ -2027,9 +2056,21 @@ function MembersView() {
             <div className="mt-5 space-y-2 text-sm text-muted-foreground">
               <p>Đang chờ lời mời</p>
               {workspaceInvitations.data.map((item) => (
-                <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2">
-                  <span>{item.email} · {item.role} · hết hạn {new Date(item.expiresAt).toLocaleString('vi-VN')}</span>
-                  <Button size="sm" variant="ghost" disabled={cancelWorkspaceInvitation.isPending} onClick={() => void cancelWorkspaceInvitation.mutateAsync(item.id)}><Trash2 /> Hủy lời mời</Button>
+                <div
+                  key={item.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2"
+                >
+                  <span>
+                    {item.email} · {item.role} · hết hạn {new Date(item.expiresAt).toLocaleString('vi-VN')}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={cancelWorkspaceInvitation.isPending}
+                    onClick={() => void cancelWorkspaceInvitation.mutateAsync(item.id)}
+                  >
+                    <Trash2 /> Hủy lời mời
+                  </Button>
                 </div>
               ))}
             </div>
