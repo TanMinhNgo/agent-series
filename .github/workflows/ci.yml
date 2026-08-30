@@ -70,7 +70,7 @@ jobs:
     name: Trigger Jenkins security CI
     if: github.event_name == 'push'
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, jenkins-trigger]
     steps:
       - name: Trigger the exact commit
         env:
@@ -78,14 +78,22 @@ jobs:
           JENKINS_USER: ${{ secrets.JENKINS_USER }}
           JENKINS_API_TOKEN: ${{ secrets.JENKINS_API_TOKEN }}
           JENKINS_JOB_TOKEN: ${{ secrets.JENKINS_JOB_TOKEN }}
+        shell: pwsh
         run: |
-          set -euo pipefail
-          for value in JENKINS_TRIGGER_URL JENKINS_USER JENKINS_API_TOKEN JENKINS_JOB_TOKEN; do
-            test -n "${!value}" || { echo "Missing required GitHub secret: $value"; exit 1; }
-          done
-          curl --fail --show-error --silent --user "$JENKINS_USER:$JENKINS_API_TOKEN" \
-            --request POST "$JENKINS_TRIGGER_URL" \
-            --data-urlencode "token=$JENKINS_JOB_TOKEN" \
-            --data-urlencode "GIT_URL=${{ github.server_url }}/${{ github.repository }}.git" \
-            --data-urlencode "GIT_SHA=${{ github.sha }}" \
-            --data-urlencode "GIT_REF=${{ github.ref_name }}"
+          $requiredSecrets = 'JENKINS_TRIGGER_URL', 'JENKINS_USER', 'JENKINS_API_TOKEN', 'JENKINS_JOB_TOKEN'
+          foreach ($name in $requiredSecrets) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Missing required GitHub secret: $name"
+            }
+          }
+
+          $basicAuth = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("$env:JENKINS_USER`:$env:JENKINS_API_TOKEN"))
+          $headers = @{ Authorization = "Basic $basicAuth" }
+          $body = @{
+            token = $env:JENKINS_JOB_TOKEN
+            GIT_URL = '${{ github.server_url }}/${{ github.repository }}.git'
+            GIT_SHA = '${{ github.sha }}'
+            GIT_REF = '${{ github.ref_name }}'
+          }
+
+          Invoke-WebRequest -Method Post -Uri $env:JENKINS_TRIGGER_URL -Headers $headers -Body $body | Out-Null
