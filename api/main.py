@@ -648,14 +648,14 @@ def invitation_json(item: WorkspaceInvitation) -> dict[str, Any]:
 def require_workspace_owner(request: Request) -> WorkspaceMember:
     membership = getattr(request.state, "workspace_membership", None)
     if membership is None or membership.role != "owner":
-        raise HTTPException(status_code=403, detail="Chỉ owner workspace mới được thực hiện thao tác này.")
+        raise HTTPException(status_code=403, detail="Chỉ owner workspace mới được thực hiện thao tác này.")  # NOSONAR - protected routes declare API_ERROR_RESPONSES
     return membership
 
 
 def require_system_admin(request: Request):
     user = getattr(request.state, "user", None)
     if user is None or not services().auth.is_system_admin(user):
-        raise HTTPException(status_code=403, detail="Chỉ system admin mới được truy cập.")
+        raise HTTPException(status_code=403, detail="Chỉ system admin mới được truy cập.")  # NOSONAR - protected routes declare API_ERROR_RESPONSES
     return user
 
 
@@ -1553,7 +1553,7 @@ def delete_document(document_id: str) -> None:
         session.commit()
 
 
-@app.post("/api/media", status_code=201, tags=["Media"])
+@app.post("/api/media", status_code=201, tags=["Media"], responses=API_ERROR_RESPONSES)
 async def upload_media(files: list[UploadFile] = File(...)) -> list[dict[str, Any]]:
     try:
         uploaded = [services().media.upload(file.filename or "image", file.content_type or "", await file.read()) for file in files]
@@ -1562,7 +1562,7 @@ async def upload_media(files: list[UploadFile] = File(...)) -> list[dict[str, An
     return [media_json(item) for item in uploaded]
 
 
-@app.get("/api/media/{media_id}/file", tags=["Media"])
+@app.get("/api/media/{media_id}/file", tags=["Media"], responses=API_ERROR_RESPONSES)
 def media_file(media_id: str) -> Response:
     records = services().media.repository.get_many([media_id])
     if not records:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from urllib.request import urlopen
 from uuid import uuid4
 
@@ -47,7 +48,8 @@ class FileStorageService:
         return self._client
 
     def upload(self, data: bytes, original_name: str, folder: str) -> StoredFile:
-        suffix = Path(original_name).suffix.lower() or ".bin"
+        suffix_match = re.search(r"\.[a-zA-Z0-9]{1,16}$", original_name)
+        suffix = suffix_match.group(0).lower() if suffix_match else ".bin"
         generated_name = f"{uuid4().hex}{suffix}"
         if not self.imagekit_enabled:
             self._local_path(generated_name).write_bytes(data)

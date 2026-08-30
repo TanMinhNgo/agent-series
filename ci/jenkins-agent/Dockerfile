@@ -15,7 +15,7 @@ RUN apt-get update \
     && mkdir -p /home/jenkins/agent /opt/jenkins-agent \
     && chown -R jenkins:root /home/jenkins /opt/jenkins-agent
 
-COPY --chown=jenkins:root ci/jenkins-agent/entrypoint.sh /usr/local/bin/jenkins-agent-entrypoint
+COPY --chown=root:root ci/jenkins-agent/entrypoint.sh /usr/local/bin/jenkins-agent-entrypoint
 RUN chmod 0555 /usr/local/bin/jenkins-agent-entrypoint
 
 ENV JENKINS_AGENT_WORKDIR=/home/jenkins/agent

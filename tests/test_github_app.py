@@ -77,7 +77,7 @@ def test_github_executor_exposes_read_only_tools(monkeypatch):
     repo.connection = SimpleNamespace(id="connection-1", status="connected", encrypted_token="unused")
     monkeypatch.setattr(service, "_installation_headers", lambda: ({"Authorization": "Bearer installation"}, repo.connection))
     monkeypatch.setattr(service, "_github_json", lambda *_args, **_kwargs: {"repositories": [{"full_name": "octo/repo", "description": "Test"}]})
-    tools = GitHubAppExecutor(service).tools(Plugin(id="p", slug=GITHUB_SLUG, name="GitHub", enabled=True, connection_status="connected", capabilities=["search"]))
+    tools = GitHubAppExecutor(service).tools()
     assert {tool.name for tool in tools} == {"list_github_repositories", "read_github_repository_file", "search_github_issues"}
     assert "octo/repo" in next(tool for tool in tools if tool.name == "list_github_repositories").func()
 

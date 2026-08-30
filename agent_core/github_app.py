@@ -190,7 +190,7 @@ class GitHubAppExecutor:
     def __init__(self, connector: GitHubAppService):
         self.connector = connector
 
-    def tools(self, plugin: Plugin) -> list[ToolSpec]:
+    def tools(self) -> list[ToolSpec]:
         return [
             ToolSpec(name="list_github_repositories", description="Liệt kê repository GitHub mà GitHub App đã được cấp quyền đọc.", parameters={"type": "object", "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 30}}}, func=self.connector.list_repositories),
             ToolSpec(name="read_github_repository_file", description="Đọc nội dung file văn bản trong repository GitHub đã cấp quyền. Chỉ đọc.", parameters={"type": "object", "properties": {"repository": {"type": "string", "description": "owner/repository"}, "path": {"type": "string"}, "ref": {"type": "string"}}, "required": ["repository", "path"]}, func=self.connector.read_repository_file),

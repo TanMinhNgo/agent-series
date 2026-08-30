@@ -16,7 +16,7 @@ from .tools.base import ToolSpec
 class PluginExecutor(Protocol):
     slug: str
 
-    def tools(self, plugin: Plugin) -> list[ToolSpec]: ...
+    def tools(self) -> list[ToolSpec]: ...
 
 
 EXECUTORS: dict[str, PluginExecutor] = {}
@@ -33,5 +33,5 @@ def connected_read_tools(plugins: Iterable[Plugin]) -> list[ToolSpec]:
             continue
         executor = EXECUTORS.get(plugin.slug)
         if executor is not None:
-            tools.extend(executor.tools(plugin))
+            tools.extend(executor.tools())
     return tools

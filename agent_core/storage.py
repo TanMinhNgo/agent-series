@@ -14,6 +14,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, rela
 
 GLOBAL_DOCUMENT_SCOPE = "__library__"
 WORKSPACE_ID_FOREIGN_KEY = "workspaces.id"
+CHAT_ID_FOREIGN_KEY = "chats.id"
 SET_NULL = "SET NULL"
 
 def utc_now() -> datetime:
@@ -191,9 +192,9 @@ class Chat(UserOwned, Base):
     pinned: Mapped[bool] = mapped_column(Boolean, default=False)
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
     is_unread: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    context_source_chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id", ondelete=SET_NULL), nullable=True)
+    context_source_chat_id: Mapped[str | None] = mapped_column(ForeignKey(CHAT_ID_FOREIGN_KEY, ondelete=SET_NULL), nullable=True)
     project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
-    parent_chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id", ondelete=SET_NULL), nullable=True, index=True)
+    parent_chat_id: Mapped[str | None] = mapped_column(ForeignKey(CHAT_ID_FOREIGN_KEY, ondelete=SET_NULL), nullable=True, index=True)
     branch_from_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
     collection_id: Mapped[str | None] = mapped_column(ForeignKey("knowledge_collections.id", ondelete=SET_NULL), nullable=True, index=True)
 
@@ -203,7 +204,7 @@ class ChatMemoryChunk(UserOwned, Base):
     __table_args__ = (UniqueConstraint("chat_id", "fingerprint", "chunk_index", name="uq_chat_memory_chunk"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), index=True)
+    chat_id: Mapped[str] = mapped_column(ForeignKey(CHAT_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
     role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text)
     fingerprint: Mapped[str] = mapped_column(String(64), index=True)
@@ -217,7 +218,7 @@ class ChatShare(UserOwned, Base):
     __tablename__ = "chat_shares"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), unique=True, index=True)
+    chat_id: Mapped[str] = mapped_column(ForeignKey(CHAT_ID_FOREIGN_KEY, ondelete="CASCADE"), unique=True, index=True)
     token: Mapped[str] = mapped_column(String(64), unique=True, index=True, default=lambda: token_urlsafe(24))
     title: Mapped[str] = mapped_column(String(160))
     provider: Mapped[str] = mapped_column(String(32))
@@ -232,7 +233,7 @@ class ChatMessage(UserOwned, Base):
     __tablename__ = "chat_messages"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), index=True)
+    chat_id: Mapped[str] = mapped_column(ForeignKey(CHAT_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
     position: Mapped[int] = mapped_column(Integer)
     role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text, default="")
@@ -348,7 +349,7 @@ class Schedule(UserOwned, Base):
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
-    chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id", ondelete=SET_NULL), nullable=True)
+    chat_id: Mapped[str | None] = mapped_column(ForeignKey(CHAT_ID_FOREIGN_KEY, ondelete=SET_NULL), nullable=True)
     provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     model: Mapped[str | None] = mapped_column(String(160), nullable=True)
     prompt: Mapped[str | None] = mapped_column(Text, nullable=True)

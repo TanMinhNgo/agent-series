@@ -356,7 +356,7 @@ class GoogleWorkspaceExecutor:
     def __init__(self, connector: GoogleWorkspaceService):
         self.connector = connector
 
-    def tools(self, plugin: Plugin) -> list[ToolSpec]:
+    def tools(self) -> list[ToolSpec]:
         return [
             ToolSpec(
                 name="search_google_drive_files",
