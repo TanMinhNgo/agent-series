@@ -3,6 +3,7 @@
 uploads/
 .env.local
 .env.*.local
+.ci.env
 
 # ===== Môi trường ảo =====
 .venv/
