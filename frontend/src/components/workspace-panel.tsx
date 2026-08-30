@@ -1739,24 +1739,112 @@ function MembersView() {
   }, [search]);
   return (
     <section className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-8 lg:px-12">
-      <div className="mb-6 flex items-center gap-2"><UserRound size={18} /><h1 className="text-2xl font-semibold">Thành viên workspace</h1></div>
-      <Card className="mb-6"><CardHeader><CardTitle>Mời thành viên</CardTitle><CardDescription>Người nhận đăng nhập Google bằng đúng email rồi mở link trong email để tham gia.</CardDescription></CardHeader><CardContent>
-        <form className="flex flex-col gap-3 sm:flex-row" onSubmit={(event) => { event.preventDefault(); if (email.trim()) void inviteWorkspaceMember.mutateAsync({ email: email.trim(), role }).then(() => { setEmail(''); setSearch(''); }); }}>
-          <div className="relative flex-1">
-            <input className="workspace-input w-full" type="email" required placeholder="name@example.com" value={email} onFocus={() => setShowSuggestions(true)} onChange={(event) => { setEmail(event.target.value); setSearch(event.target.value); setShowSuggestions(true); }} />
-            {showSuggestions && search.trim().length >= 2 && suggestions.data?.length ? <ul className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border bg-popover p-1 shadow-lg">{suggestions.data.map((user) => <li key={user.id}><button type="button" className="w-full rounded px-3 py-2 text-left text-sm hover:bg-accent" onMouseDown={(event) => event.preventDefault()} onClick={() => { setEmail(user.email); setSearch(user.email); setShowSuggestions(false); }}>{user.displayName ? <span className="font-medium">{user.displayName} <span className="font-normal text-muted-foreground">{user.email}</span></span> : user.email}</button></li>)}</ul> : null}
-          </div>
-          <select className="workspace-input" value={role} onChange={(event) => setRole(event.target.value as 'editor' | 'viewer')}><option value="viewer">Viewer</option><option value="editor">Editor</option></select>
-          <Button type="submit" disabled={inviteWorkspaceMember.isPending}>Mời</Button>
-        </form>
-        {inviteWorkspaceMember.error ? <FormError message={inviteWorkspaceMember.error.message} /> : null}
-      </CardContent></Card>
-      <Card><CardHeader><CardTitle>Thành viên</CardTitle></CardHeader><CardContent><ul className="space-y-3">
-        {(workspaceMembers.data || []).map((member) => <li key={member.userId} className="flex items-center justify-between border-b pb-3 text-sm"><span>{member.displayName || member.email}<span className="ml-2 text-muted-foreground">{member.email}</span></span><Badge variant="secondary">{member.role}</Badge></li>)}
-      </ul>
-      {workspaceInvitations.data?.length ? <div className="mt-5 text-sm text-muted-foreground">Đang chờ: {workspaceInvitations.data.map((item) => item.email).join(', ')}</div> : null}
-      {workspaceMembers.error ? <WorkspaceError message="Bạn cần quyền owner để quản lý thành viên." /> : null}
-      </CardContent></Card>
+      <div className="mb-6 flex items-center gap-2">
+        <UserRound size={18} />
+        <h1 className="text-2xl font-semibold">Thành viên workspace</h1>
+      </div>
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>Mời thành viên</CardTitle>
+          <CardDescription>
+            Người nhận đăng nhập Google bằng đúng email rồi mở link trong email để tham gia.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form
+            className="flex flex-col gap-3 sm:flex-row"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (email.trim())
+                void inviteWorkspaceMember.mutateAsync({ email: email.trim(), role }).then(() => {
+                  setEmail('');
+                  setSearch('');
+                });
+            }}
+          >
+            <div className="relative flex-1">
+              <input
+                className="workspace-input w-full"
+                type="email"
+                required
+                placeholder="name@example.com"
+                value={email}
+                onFocus={() => setShowSuggestions(true)}
+                onChange={(event) => {
+                  setEmail(event.target.value);
+                  setSearch(event.target.value);
+                  setShowSuggestions(true);
+                }}
+              />
+              {showSuggestions && search.trim().length >= 2 && suggestions.data?.length ? (
+                <ul className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border bg-popover p-1 shadow-lg">
+                  {suggestions.data.map((user) => (
+                    <li key={user.id}>
+                      <button
+                        type="button"
+                        className="w-full rounded px-3 py-2 text-left text-sm hover:bg-accent"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => {
+                          setEmail(user.email);
+                          setSearch(user.email);
+                          setShowSuggestions(false);
+                        }}
+                      >
+                        {user.displayName ? (
+                          <span className="font-medium">
+                            {user.displayName}{' '}
+                            <span className="font-normal text-muted-foreground">{user.email}</span>
+                          </span>
+                        ) : (
+                          user.email
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+            <select
+              className="workspace-input"
+              value={role}
+              onChange={(event) => setRole(event.target.value as 'editor' | 'viewer')}
+            >
+              <option value="viewer">Viewer</option>
+              <option value="editor">Editor</option>
+            </select>
+            <Button type="submit" disabled={inviteWorkspaceMember.isPending}>
+              Mời
+            </Button>
+          </form>
+          {inviteWorkspaceMember.error ? <FormError message={inviteWorkspaceMember.error.message} /> : null}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Thành viên</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ul className="space-y-3">
+            {(workspaceMembers.data || []).map((member) => (
+              <li key={member.userId} className="flex items-center justify-between border-b pb-3 text-sm">
+                <span>
+                  {member.displayName || member.email}
+                  <span className="ml-2 text-muted-foreground">{member.email}</span>
+                </span>
+                <Badge variant="secondary">{member.role}</Badge>
+              </li>
+            ))}
+          </ul>
+          {workspaceInvitations.data?.length ? (
+            <div className="mt-5 text-sm text-muted-foreground">
+              Đang chờ: {workspaceInvitations.data.map((item) => item.email).join(', ')}
+            </div>
+          ) : null}
+          {workspaceMembers.error ? (
+            <WorkspaceError message="Bạn cần quyền owner để quản lý thành viên." />
+          ) : null}
+        </CardContent>
+      </Card>
     </section>
   );
 }
@@ -1785,7 +1873,15 @@ function WorkspaceError({ message }: { message: string }) {
 export function WorkspacePanel({ view }: { view: WorkspaceView }) {
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-8 lg:px-12">
-      {view === 'projects' ? <ProjectsView /> : view === 'schedules' ? <SchedulesView /> : view === 'members' ? <MembersView /> : <PluginsView />}
+      {view === 'projects' ? (
+        <ProjectsView />
+      ) : view === 'schedules' ? (
+        <SchedulesView />
+      ) : view === 'members' ? (
+        <MembersView />
+      ) : (
+        <PluginsView />
+      )}
     </div>
   );
 }

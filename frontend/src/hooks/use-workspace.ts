@@ -61,15 +61,32 @@ const useResourceActions = <T>(kind: keyof typeof endpoints) => {
 
 export const useWorkspace = () => {
   const client = useQueryClient();
-  const workspaces = useQuery({ queryKey: queryKeys.workspaces, queryFn: () => request<AppWorkspace[]>({ url: '/workspaces' }) });
-  const workspaceMembers = useQuery({ queryKey: ['workspace-members'], queryFn: () => request<{ userId: string; email: string; displayName: string | null; role: string }[]>({ url: '/workspaces/current/members' }) });
-  const workspaceInvitations = useQuery({ queryKey: ['workspace-invitations'], queryFn: () => request<{ id: string; email: string; role: string; expiresAt: string }[]>({ url: '/workspaces/current/invitations' }), retry: false });
+  const workspaces = useQuery({
+    queryKey: queryKeys.workspaces,
+    queryFn: () => request<AppWorkspace[]>({ url: '/workspaces' }),
+  });
+  const workspaceMembers = useQuery({
+    queryKey: ['workspace-members'],
+    queryFn: () =>
+      request<{ userId: string; email: string; displayName: string | null; role: string }[]>({
+        url: '/workspaces/current/members',
+      }),
+  });
+  const workspaceInvitations = useQuery({
+    queryKey: ['workspace-invitations'],
+    queryFn: () =>
+      request<{ id: string; email: string; role: string; expiresAt: string }[]>({
+        url: '/workspaces/current/invitations',
+      }),
+    retry: false,
+  });
   const selectWorkspace = (workspaceId: string) => {
     setActiveWorkspaceId(workspaceId);
     client.clear();
   };
   const inviteWorkspaceMember = useMutation({
-    mutationFn: (data: { email: string; role: 'editor' | 'viewer' }) => request({ url: '/workspaces/current/invitations', method: 'POST', data }),
+    mutationFn: (data: { email: string; role: 'editor' | 'viewer' }) =>
+      request({ url: '/workspaces/current/invitations', method: 'POST', data }),
     onSuccess: () => void client.invalidateQueries({ queryKey: ['workspace-invitations'] }),
   });
   const projects = useQuery({

@@ -142,12 +142,17 @@ export function ChatWorkspace({
     const invitationId = new URLSearchParams(window.location.search).get('invite');
     if (!invitationId || invitationHandled.current) return;
     invitationHandled.current = true;
-    void request<{ workspaceId: string }>({ url: `/workspaces/invitations/${invitationId}/accept`, method: 'POST' })
+    void request<{ workspaceId: string }>({
+      url: `/workspaces/invitations/${invitationId}/accept`,
+      method: 'POST',
+    })
       .then(({ workspaceId }) => {
         selectWorkspace(workspaceId);
         window.location.assign('/');
       })
-      .catch(() => setUiError('Không thể chấp nhận lời mời workspace. Hãy đảm bảo bạn đăng nhập đúng email.'));
+      .catch(() =>
+        setUiError('Không thể chấp nhận lời mời workspace. Hãy đảm bảo bạn đăng nhập đúng email.'),
+      );
   }, [selectWorkspace]);
   const {
     collections,
@@ -427,7 +432,10 @@ export function ChatWorkspace({
             onLogout={logoutToLogin}
             workspaces={workspaces.data || []}
             activeWorkspaceId={activeWorkspaceId}
-            onWorkspaceChange={(workspaceId) => { selectWorkspace(workspaceId); window.location.assign('/'); }}
+            onWorkspaceChange={(workspaceId) => {
+              selectWorkspace(workspaceId);
+              window.location.assign('/');
+            }}
           />
         </div>
         {sidebarOpen ? (
@@ -484,7 +492,10 @@ export function ChatWorkspace({
                 onLogout={logoutToLogin}
                 workspaces={workspaces.data || []}
                 activeWorkspaceId={activeWorkspaceId}
-                onWorkspaceChange={(workspaceId) => { selectWorkspace(workspaceId); window.location.assign('/'); }}
+                onWorkspaceChange={(workspaceId) => {
+                  selectWorkspace(workspaceId);
+                  window.location.assign('/');
+                }}
               />
             </div>
           </div>

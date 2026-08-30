@@ -178,7 +178,11 @@ Jenkins chạy lần lượt: test/coverage, OWASP Dependency-Check, SonarQube Q
 
 GitHub repository secrets bắt buộc: `JENKINS_TRIGGER_URL` (endpoint `buildWithParameters`), `JENKINS_USER`, `JENKINS_API_TOKEN`, `JENKINS_JOB_TOKEN`.
 
+Job trigger Jenkins chạy trên GitHub Actions self-hosted runner mang label `jenkins-trigger`, đặt cùng máy/mạng với Jenkins. Vì vậy `JENKINS_TRIGGER_URL` có thể dùng URL nội bộ, ví dụ `http://localhost:8080/job/Agent-Series-CI/buildWithParameters`; không cần public Jenkins chỉ để GitHub-hosted runner gọi vào.
+
 Jenkins cần Docker daemon, Git credential ID `github-read-token`, secret text `nvd-api-key`, username/password credential `dockerhub-credentials`, SonarQube server name `SonarQube`, và scanner tool name `SonarScanner`. Sonar token/URL được quản lý trong Jenkins SonarQube configuration, không commit vào repo.
+
+Jenkins controller không chạy build trực tiếp. Tạo node inbound mang label `agent-series-ci`, rồi build `ci/jenkins-agent/Dockerfile`; agent này có Docker CLI, Python 3.12 và Node 22. Mount Docker socket của Docker Desktop vào agent để các stage build/scan tạo được container.
 
 Tạo ba Docker Hub repository `<dockerhub-user>/agent-series-api`, `<dockerhub-user>/agent-series-worker`, `<dockerhub-user>/agent-series-frontend`. Chỉ build Jenkins được trigger từ nhánh `main` mới push image: mỗi image có tag bất biến `sha-<full-git-sha>` và `latest`. CD sau này phải pin vào tag `sha-...`, không deploy theo `latest`.
 
