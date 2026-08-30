@@ -9,6 +9,8 @@ const limit = (value: number, minimum: number, maximum: number) =>
 
 type ProposalAction = (proposalId: string, action: 'confirm' | 'dismiss') => void;
 
+const blockKey = (block: ResponseBlock) => `${block.type}:${JSON.stringify(block.config)}`;
+
 export function ResponseBlocks({
   blocks,
   onScheduleProposalAction,
@@ -18,11 +20,12 @@ export function ResponseBlocks({
 }) {
   return (
     <div className="mt-5 space-y-4">
-      {blocks.map((block, index) => {
-        if (block.type === 'trig-circle') return <TrigCircle key={index} config={block.config} />;
-        if (block.type === 'chart') return <Chart key={index} config={block.config} />;
-        if (block.type === 'data-table') return <DataTable key={index} config={block.config} />;
-        return <ScheduleProposal key={index} config={block.config} onAction={onScheduleProposalAction} />;
+      {blocks.map((block) => {
+        const key = blockKey(block);
+        if (block.type === 'trig-circle') return <TrigCircle key={key} config={block.config} />;
+        if (block.type === 'chart') return <Chart key={key} config={block.config} />;
+        if (block.type === 'data-table') return <DataTable key={key} config={block.config} />;
+        return <ScheduleProposal key={key} config={block.config} onAction={onScheduleProposalAction} />;
       })}
     </div>
   );

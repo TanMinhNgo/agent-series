@@ -1741,7 +1741,9 @@ def _resolve_schedule_update_model(current: Schedule, values: dict[str, Any]) ->
     if not {"provider", "model"}.intersection(values):
         return
     provider = values.get("provider", current.provider)
-    model = values.get("model") if "model" in values else (current.model if "provider" not in values else None)
+    model = values.get("model")
+    if "model" not in values:
+        model = current.model if "provider" not in values else None
     try:
         values["provider"], values["model"] = resolve_schedule_selection(provider, model, current_user_id.get())
     except (ValueError, CredentialError) as exc:

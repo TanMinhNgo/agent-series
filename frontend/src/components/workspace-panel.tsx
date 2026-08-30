@@ -497,6 +497,17 @@ const scheduleStatusLabels: Record<Schedule['status'], string> = {
   completed: 'Đã hoàn tất',
 };
 
+const scheduleFilterLabels = {
+  active: 'Đang hoạt động',
+  paused: 'Tạm dừng',
+  all: 'Tất cả',
+};
+
+const connectorStatusLabel = (connected: boolean, configured: boolean) => {
+  if (connected) return 'Đã kết nối';
+  return configured ? 'Chưa kết nối' : 'Chưa cấu hình';
+};
+
 function ScheduleCard({
   item,
   running,
@@ -588,7 +599,7 @@ function SchedulesView() {
                 variant={filter === value ? 'secondary' : 'ghost'}
                 onClick={() => setFilter(value)}
               >
-                {value === 'active' ? 'Đang hoạt động' : value === 'paused' ? 'Tạm dừng' : 'Tất cả'}
+                {scheduleFilterLabels[value]}
               </Button>
             ))}
           </div>
@@ -1403,7 +1414,7 @@ function GoogleWorkspaceCard({
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="font-semibold">Google Workspace</h2>
               <Badge variant={connected ? 'default' : 'secondary'}>
-                {connected ? 'Đã kết nối' : configured ? 'Chưa kết nối' : 'Chưa cấu hình'}
+                {connectorStatusLabel(connected, configured)}
               </Badge>
               {connected && plugin?.enabled ? <Badge variant="outline">Đang bật cho chat</Badge> : null}
             </div>
@@ -1538,7 +1549,7 @@ function GitHubCard({
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="font-semibold">GitHub</h2>
               <Badge variant={connected ? 'default' : 'secondary'}>
-                {connected ? 'Đã kết nối' : configured ? 'Chưa kết nối' : 'Chưa cấu hình'}
+                {connectorStatusLabel(connected, configured)}
               </Badge>
               {connected && plugin?.enabled ? <Badge variant="outline">Đang bật cho chat</Badge> : null}
             </div>
