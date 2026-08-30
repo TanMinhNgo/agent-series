@@ -7,6 +7,7 @@ import { ChatComposer } from '@/src/components/chat-composer';
 import { ChatHeader } from '@/src/components/chat-header';
 import { MessageList } from '@/src/components/message-list';
 import { Button } from '@/components/ui/button';
+import { ArtifactPanel } from '@/src/components/artifact-panel';
 import type { WorkspaceView } from '@/src/components/workspace-panel';
 import type { AdminTab } from '@/src/features/admin/types/admin';
 import { useChatActions } from '@/src/hooks/use-chat-actions';
@@ -25,6 +26,7 @@ import { useChatWorkspaceData } from '@/src/hooks/use-chat-workspace-data';
 import { request } from '@/src/hooks/client';
 import type { Chat, Message, Theme } from '@/src/types';
 import { SettingsApiKeysPage } from '@/src/pages/settings-api-keys-page';
+import { useQueryClient } from '@tanstack/react-query';
 
 const WorkspacePanel = lazy(() =>
   import('@/src/components/workspace-panel').then(({ WorkspacePanel: Component }) => ({
@@ -57,6 +59,8 @@ type ChatWorkspaceProps = {
 };
 
 const NEW_CHAT_SELECTION_KEY = 'agent-series.new-chat-selection';
+const ARTIFACT_PANEL_OPEN_KEY = 'agent-series.artifact-panel.open';
+const SELECTED_ARTIFACT_KEY = 'agent-series.artifact-panel.selected-artifact';
 
 type DraftSelection = { provider: string; model: string };
 type TemplateDraft = {
@@ -85,6 +89,17 @@ function savedNewChatSelection(): DraftSelection {
   return { provider: '', model: '' };
 }
 
+function savedArtifactPanelState() {
+  try {
+    return {
+      open: sessionStorage.getItem(ARTIFACT_PANEL_OPEN_KEY) === 'true',
+      selectedArtifactId: sessionStorage.getItem(SELECTED_ARTIFACT_KEY),
+    };
+  } catch {
+    return { open: false, selectedArtifactId: null };
+  }
+}
+
 export function ChatWorkspace({
   chatId,
   libraryPage,
@@ -108,6 +123,7 @@ export function ChatWorkspace({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [shareChat, setShareChat] = useState<Chat | null>(null);
   const [templateDraft, setTemplateDraft] = useState<TemplateDraft | null>(null);
+  const [artifactPanel, setArtifactPanel] = useState(savedArtifactPanelState);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const invitationHandled = useRef(false);
   // React state updates asynchronously, so `streamChat.isPending` alone cannot
@@ -137,6 +153,7 @@ export function ChatWorkspace({
   const uploadDocuments = useUploadDocuments();
   const uploadMedia = useUploadMedia();
   const streamChat = useStreamChat();
+  const queryClient = useQueryClient();
   const { projects, workspaces, activeWorkspaceId, selectWorkspace } = useWorkspace();
   useEffect(() => {
     const invitationId = new URLSearchParams(window.location.search).get('invite');
@@ -186,6 +203,51 @@ export function ChatWorkspace({
     );
     localStorage.setItem('agent-series.theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(ARTIFACT_PANEL_OPEN_KEY, String(artifactPanel.open));
+      if (artifactPanel.selectedArtifactId) {
+        sessionStorage.setItem(SELECTED_ARTIFACT_KEY, artifactPanel.selectedArtifactId);
+      } else {
+        sessionStorage.removeItem(SELECTED_ARTIFACT_KEY);
+      }
+    } catch {
+      // Storage can be unavailable in private browser contexts; the panel still works in-memory.
+    }
+  }, [artifactPanel]);
+
+  const setArtifactPanelOpen = (open: boolean) => setArtifactPanel((panel) => ({ ...panel, open }));
+  const selectArtifact = (selectedArtifactId: string | null) =>
+    setArtifactPanel((panel) => ({ ...panel, selectedArtifactId }));
+  const handleStreamEvent = (name: string, data: Record<string, unknown>) => {
+    if (name === 'status') setStatus(String(data.message));
+    if (name === 'tool_call') setStatus(`Đang dùng ${String(data.name)}...`);
+    if (name === 'tool_result') {
+      setStatus(`Đã nhận kết quả từ ${String(data.name)}.`);
+      if (data.name === 'create_file') {
+        try {
+          const result = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
+          if (
+            typeof result === 'object' &&
+            result !== null &&
+            typeof (result as { id?: unknown }).id === 'string'
+          ) {
+            const selectedArtifactId = (result as { id: string }).id;
+            setArtifactPanel({ open: true, selectedArtifactId });
+            void queryClient.invalidateQueries({ queryKey: ['generated-artifacts'] });
+          }
+        } catch {
+          // A non-JSON tool result is not an artifact; keep the normal tool status visible.
+        }
+      }
+    }
+    if (name === 'message') setStatus(null);
+    if (name === 'error') {
+      setStatus(null);
+      setUiError(String(data.message));
+    }
+  };
 
   const error =
     uiError ||
@@ -316,16 +378,7 @@ export function ChatWorkspace({
         content,
         skipOptimisticUser: true,
         replaceAssistantMessageId: message.messageId,
-        onEvent: (name, data) => {
-          if (name === 'status') setStatus(String(data.message));
-          if (name === 'tool_call') setStatus(`Đang dùng ${String(data.name)}...`);
-          if (name === 'tool_result') setStatus(`Đã nhận kết quả từ ${String(data.name)}.`);
-          if (name === 'message') setStatus(null);
-          if (name === 'error') {
-            setStatus(null);
-            setUiError(String(data.message));
-          }
-        },
+        onEvent: handleStreamEvent,
       });
     } catch (reason) {
       setStatus(null);
@@ -369,16 +422,7 @@ export function ChatWorkspace({
         chatId: chat.id,
         content,
         attachments: uploadedImages,
-        onEvent: (name, data) => {
-          if (name === 'status') setStatus(String(data.message));
-          if (name === 'tool_call') setStatus(`Đang dùng ${String(data.name)}...`);
-          if (name === 'tool_result') setStatus(`Đã nhận kết quả từ ${String(data.name)}.`);
-          if (name === 'message') setStatus(null);
-          if (name === 'error') {
-            setStatus(null);
-            setUiError(String(data.message));
-          }
-        },
+        onEvent: handleStreamEvent,
         onUserMessageQueued: () => {
           setRunwayChatId(chat.id);
           setUserScrollRequest((request) => request + 1);
@@ -542,70 +586,78 @@ export function ChatWorkspace({
           ) : settingsPage ? (
             <SettingsApiKeysPage />
           ) : (
-            <div className="flex min-h-0 flex-1 flex-col">
-              <div ref={transcriptRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-                <div className="mx-auto min-h-full w-full max-w-5xl px-4 sm:px-8 lg:px-12">
-                  {pins.data?.length ? (
-                    <div className="sticky top-0 z-10 flex gap-2 overflow-x-auto border-b bg-background/95 py-3 backdrop-blur">
-                      <span className="shrink-0 text-xs text-muted-foreground">Đã ghim:</span>
-                      {pins.data.map((item) => (
-                        <button
-                          key={item.messageId}
-                          className="shrink-0 rounded-full border px-2 py-1 text-xs hover:bg-muted"
-                          onClick={() =>
-                            document
-                              .getElementById(`message-${item.messageId}`)
-                              ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                          }
-                        >
-                          {item.content.slice(0, 48)}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                  <MessageList
+            <div className="flex min-h-0 flex-1">
+              <div className="flex min-w-0 flex-1 flex-col">
+                <div ref={transcriptRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+                  <div className="mx-auto min-h-full w-full max-w-5xl px-4 sm:px-8 lg:px-12">
+                    {pins.data?.length ? (
+                      <div className="sticky top-0 z-10 flex gap-2 overflow-x-auto border-b bg-background/95 py-3 backdrop-blur">
+                        <span className="shrink-0 text-xs text-muted-foreground">Đã ghim:</span>
+                        {pins.data.map((item) => (
+                          <button
+                            key={item.messageId}
+                            className="shrink-0 rounded-full border px-2 py-1 text-xs hover:bg-muted"
+                            onClick={() =>
+                              document
+                                .getElementById(`message-${item.messageId}`)
+                                ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                            }
+                          >
+                            {item.content.slice(0, 48)}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                    <MessageList
+                      key={activeChat?.id || 'new-chat'}
+                      chatId={activeChat?.id}
+                      messages={messages.data || []}
+                      status={status}
+                      error={error}
+                      userScrollRequest={userScrollRequest}
+                      isRunwayRequested={runwayChatId === activeChat?.id}
+                      scrollContainerRef={transcriptRef}
+                      onRunwayRelease={() => setRunwayChatId(null)}
+                      onPin={(message) =>
+                        message.messageId &&
+                        pin.mutate({ messageId: message.messageId, pinned: !message.pinned })
+                      }
+                      onScheduleProposalAction={(proposalId, action) =>
+                        scheduleProposal.mutate({ proposalId, action })
+                      }
+                      onBranch={branchFromMessage}
+                      onRegenerate={regenerateMessage}
+                    />
+                  </div>
+                </div>
+                <div className="mx-auto w-full max-w-5xl px-4 sm:px-8 lg:px-12">
+                  <ChatComposer
                     key={activeChat?.id || 'new-chat'}
-                    chatId={activeChat?.id}
-                    messages={messages.data || []}
-                    status={status}
-                    error={error}
-                    userScrollRequest={userScrollRequest}
-                    isRunwayRequested={runwayChatId === activeChat?.id}
-                    scrollContainerRef={transcriptRef}
-                    onRunwayRelease={() => setRunwayChatId(null)}
-                    onPin={(message) =>
-                      message.messageId &&
-                      pin.mutate({ messageId: message.messageId, pinned: !message.pinned })
+                    prompt={prompt}
+                    busy={
+                      chatActions.update.isPending ||
+                      streamChat.isPending ||
+                      uploadDocuments.isPending ||
+                      uploadMedia.isPending
                     }
-                    onScheduleProposalAction={(proposalId, action) =>
-                      scheduleProposal.mutate({ proposalId, action })
+                    onPromptChange={setPrompt}
+                    onSubmit={(content, attachments) => void send(content, attachments)}
+                    templates={templates.data || []}
+                    onSelectTemplate={(content) => setPrompt(content)}
+                    onSaveTemplate={(content) =>
+                      openTemplateEditor({ name: '', content, projectId: activeChat?.projectId || null })
                     }
-                    onBranch={branchFromMessage}
-                    onRegenerate={regenerateMessage}
+                    onEditTemplate={(template) => openTemplateEditor(template)}
+                    onDeleteTemplate={(id) => deleteTemplate.mutate(id)}
                   />
                 </div>
               </div>
-              <div className="mx-auto w-full max-w-5xl px-4 sm:px-8 lg:px-12">
-                <ChatComposer
-                  key={activeChat?.id || 'new-chat'}
-                  prompt={prompt}
-                  busy={
-                    chatActions.update.isPending ||
-                    streamChat.isPending ||
-                    uploadDocuments.isPending ||
-                    uploadMedia.isPending
-                  }
-                  onPromptChange={setPrompt}
-                  onSubmit={(content, attachments) => void send(content, attachments)}
-                  templates={templates.data || []}
-                  onSelectTemplate={(content) => setPrompt(content)}
-                  onSaveTemplate={(content) =>
-                    openTemplateEditor({ name: '', content, projectId: activeChat?.projectId || null })
-                  }
-                  onEditTemplate={(template) => openTemplateEditor(template)}
-                  onDeleteTemplate={(id) => deleteTemplate.mutate(id)}
-                />
-              </div>
+              <ArtifactPanel
+                open={artifactPanel.open}
+                onOpenChange={setArtifactPanelOpen}
+                selectedArtifactId={artifactPanel.selectedArtifactId}
+                onSelectedArtifactChange={selectArtifact}
+              />
             </div>
           )}
         </section>
