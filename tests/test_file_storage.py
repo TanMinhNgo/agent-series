@@ -1,6 +1,8 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from agent_core.file_storage import FileStorageService
 
 
@@ -45,3 +47,11 @@ def test_local_file_is_migrated_only_after_imagekit_is_enabled(tmp_path: Path) -
     (tmp_path / "old.pdf").write_bytes(b"old")
     storage = FileStorageService(tmp_path)
     assert storage.migrate_local("old.pdf", "document.pdf", "knowledge/global") is None
+
+
+@pytest.mark.parametrize("stored_name", ("../secret.txt", "nested/file.txt", "nested\\file.txt", ""))
+def test_local_storage_rejects_user_controlled_paths(tmp_path: Path, stored_name: str) -> None:
+    storage = FileStorageService(tmp_path)
+
+    with pytest.raises(ValueError):
+        storage.read("local", stored_name, None)

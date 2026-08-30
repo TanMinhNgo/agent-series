@@ -8,7 +8,7 @@ WORKDIR /app
 
 RUN useradd --create-home --uid 10001 appuser
 COPY requirements-ci.lock ./
-RUN python -m pip install --upgrade pip && python -m pip install --require-hashes --requirement requirements-ci.lock
+RUN python -m pip install --require-hashes --requirement requirements-ci.lock
 
 COPY alembic.ini ./
 COPY api ./api

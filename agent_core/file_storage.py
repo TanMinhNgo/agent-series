@@ -27,6 +27,16 @@ class FileStorageService:
     def imagekit_enabled(self) -> bool:
         return bool(self.private_key and self.url_endpoint)
 
+    def _local_path(self, stored_name: str) -> Path:
+        """Return a local storage object path, never a caller-selected path."""
+        if not stored_name or "/" in stored_name or "\\" in stored_name or Path(stored_name).name != stored_name:
+            raise ValueError("Tên file local không hợp lệ.")
+        root = self.directory.resolve()
+        path = (root / stored_name).resolve()
+        if path.parent != root:
+            raise ValueError("Đường dẫn file local không hợp lệ.")
+        return path
+
     def _imagekit(self):
         if self._client is None:
             try:
@@ -40,7 +50,7 @@ class FileStorageService:
         suffix = Path(original_name).suffix.lower() or ".bin"
         generated_name = f"{uuid4().hex}{suffix}"
         if not self.imagekit_enabled:
-            (self.directory / generated_name).write_bytes(data)
+            self._local_path(generated_name).write_bytes(data)
             return StoredFile("local", generated_name)
         try:
             response = self._imagekit().files.upload(
@@ -55,14 +65,14 @@ class FileStorageService:
         """Copy an old local object on first access; callers persist returned metadata."""
         if not self.imagekit_enabled:
             return None
-        path = self.directory / stored_name
+        path = self._local_path(stored_name)
         if not path.is_file():
             return None
         return self.upload(path.read_bytes(), original_name, folder)
 
     def read(self, provider: str | None, stored_name: str, file_id: str | None) -> bytes:
         if provider != "imagekit" or not file_id:
-            return (self.directory / stored_name).read_bytes()
+            return self._local_path(stored_name).read_bytes()
         url = self.signed_url(provider, stored_name, file_id)
         try:
             with urlopen(url, timeout=20) as response:  # noqa: S310 - signed ImageKit URL generated locally.
@@ -82,9 +92,7 @@ class FileStorageService:
 
     def delete(self, provider: str | None, stored_name: str, file_id: str | None) -> None:
         if provider != "imagekit" or not file_id:
-            path = (self.directory / stored_name).resolve()
-            if self.directory.resolve() not in path.parents:
-                raise ValueError("Đường dẫn dọn dẹp file không hợp lệ.")
+            path = self._local_path(stored_name)
             if path.exists():
                 path.unlink()
             return

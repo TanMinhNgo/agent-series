@@ -16,7 +16,13 @@ pipeline {
   }
   stages {
     stage('Validate trigger') {
-      steps { script { if (!params.GIT_URL?.trim() || !params.GIT_SHA?.trim()) error('GIT_URL and GIT_SHA are required.') } }
+      steps {
+        script {
+          if (!params.GIT_URL?.trim() || !params.GIT_SHA?.trim()) {
+            error('GIT_URL and GIT_SHA are required.')
+          }
+        }
+      }
     }
     stage('Checkout exact commit') {
       steps {

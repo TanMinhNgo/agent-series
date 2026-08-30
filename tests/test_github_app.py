@@ -80,3 +80,12 @@ def test_github_executor_exposes_read_only_tools(monkeypatch):
     tools = GitHubAppExecutor(service).tools(Plugin(id="p", slug=GITHUB_SLUG, name="GitHub", enabled=True, connection_status="connected", capabilities=["search"]))
     assert {tool.name for tool in tools} == {"list_github_repositories", "read_github_repository_file", "search_github_issues"}
     assert "octo/repo" in next(tool for tool in tools if tool.name == "list_github_repositories").func()
+
+
+@pytest.mark.parametrize(("repository", "path"), (("octo/../repo", "README.md"), ("octo/repo", "../secrets.txt")))
+def test_github_file_reader_rejects_unsafe_paths(monkeypatch, repository, path):
+    service = github()
+    monkeypatch.setattr(service, "_installation_headers", lambda: ({"Authorization": "Bearer installation"}, SimpleNamespace(id="connection-1")))
+
+    with pytest.raises(GitHubConnectorError):
+        service.read_repository_file(repository, path)

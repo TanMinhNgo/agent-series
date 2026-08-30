@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from secrets import token_urlsafe
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -71,6 +71,8 @@ class GitHubAppService:
         consumed = self.repository.consume_oauth_state(state, datetime.now(UTC))
         if consumed is None or consumed.connector_slug != GITHUB_SLUG:
             raise GitHubConnectorError("Phiên kết nối GitHub đã hết hạn hoặc không hợp lệ. Hãy bắt đầu lại từ trang Plugin.")
+        if not installation_id.isdigit():
+            raise GitHubConnectorError("GitHub installation ID không hợp lệ.")
         try:
             installation = self._github_json(f"/app/installations/{installation_id}", self._app_headers())
             account = installation.get("account") or {}
@@ -128,7 +130,9 @@ class GitHubAppService:
     def read_repository_file(self, repository: str, path: str, ref: str | None = None) -> str:
         headers, connection = self._installation_headers()
         suffix = f"?{urlencode({'ref': ref})}" if ref else ""
-        item = self._github_json(f"/repos/{repository}/contents/{path.lstrip('/')}{suffix}", headers)
+        repository_path = self._repository_path(repository)
+        file_path = self._repository_file_path(path)
+        item = self._github_json(f"/repos/{repository_path}/contents/{file_path}{suffix}", headers)
         if item.get("type") != "file" or not item.get("content"):
             return "Đường dẫn này không phải file văn bản có thể đọc trực tiếp."
         content = base64.b64decode(item["content"]).decode("utf-8", errors="replace")[:20_000]
@@ -148,8 +152,27 @@ class GitHubAppService:
         return str(error).replace("\n", " ")[:500]
 
     @staticmethod
+    def _repository_path(repository: str) -> str:
+        parts = repository.split("/")
+        if len(parts) != 2 or not all(part and all(char.isalnum() or char in ".-_" for char in part) for part in parts):
+            raise GitHubConnectorError("Repository phải có dạng owner/repository hợp lệ.")
+        return "/".join(quote(part, safe="-._~") for part in parts)
+
+    @staticmethod
+    def _repository_file_path(path: str) -> str:
+        parts = [part for part in path.replace("\\", "/").split("/") if part]
+        if not parts or any(part in {".", ".."} for part in parts):
+            raise GitHubConnectorError("Đường dẫn file GitHub không hợp lệ.")
+        return "/".join(quote(part, safe="-._~") for part in parts)
+
+    @staticmethod
     def _github_json(path: str, headers: dict[str, str], method: str = "GET") -> Any:
-        request = Request(f"{GITHUB_API_URL}{path}", method=method, headers=headers)
+        parsed = urlsplit(path)
+        if parsed.scheme or parsed.netloc or parsed.fragment or not parsed.path.startswith("/"):
+            raise GitHubConnectorError("Đường dẫn GitHub API không hợp lệ.")
+        api = urlsplit(GITHUB_API_URL)
+        request_url = urlunsplit((api.scheme, api.netloc, parsed.path, parsed.query, ""))
+        request = Request(request_url, method=method, headers=headers)
         try:
             with urlopen(request, timeout=15) as response:  # noqa: S310 - fixed GitHub API endpoint.
                 return json.loads(response.read().decode())

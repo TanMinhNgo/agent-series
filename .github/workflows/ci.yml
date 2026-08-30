@@ -4,8 +4,7 @@ on:
   pull_request:
   push:
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -20,6 +19,8 @@ jobs:
   verify:
     name: GitHub Actions verify
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -71,6 +72,7 @@ jobs:
     if: github.event_name == 'push'
     needs: verify
     runs-on: [self-hosted, jenkins-trigger]
+    permissions: {}
     steps:
       - name: Trigger the exact commit
         env:
