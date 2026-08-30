@@ -31,7 +31,7 @@ def _plugin(
 
 CATALOG: tuple[CatalogPlugin, ...] = (
     # Năng suất
-    _plugin("google-workspace", "Google Workspace", "Tìm dữ liệu trong Drive, Gmail và Calendar.", "productivity", ("search", "sync", "actions"), True, "oauth"),
+    _plugin("google-workspace", "Google Workspace", "Đọc dữ liệu Drive, Gmail và Calendar.", "productivity", ("search", "sync"), True, "oauth"),
     _plugin("notion", "Notion", "Tìm kiếm wiki, tài liệu và ghi chú workspace.", "productivity", featured=True),
     _plugin("asana", "Asana", "Theo dõi task, project và tiến độ công việc.", "productivity"),
     _plugin("clickup", "ClickUp", "Tra cứu task, docs và kế hoạch trong ClickUp.", "productivity"),
@@ -43,7 +43,7 @@ CATALOG: tuple[CatalogPlugin, ...] = (
     _plugin("behance", "Behance", "Khám phá portfolio và cảm hứng thiết kế.", "creative", ("search",)),
     _plugin("dribbble", "Dribbble", "Tìm tham khảo giao diện và sản phẩm sáng tạo.", "creative", ("search",)),
     # Công cụ cho nhà phát triển
-    _plugin("github", "GitHub", "Đọc repository, pull request, issue và tài liệu.", "developer", featured=True),
+    _plugin("github", "GitHub", "Đọc repository, pull request, issue và tài liệu đã cấp quyền.", "developer", featured=True, connection_mode="oauth"),
     _plugin("gitlab", "GitLab", "Tra cứu source code, issue và pipeline CI/CD.", "developer"),
     _plugin("linear", "Linear", "Tổng hợp issue, sprint và kế hoạch sản phẩm.", "developer"),
     _plugin("vercel", "Vercel", "Theo dõi deployment, project và log build.", "developer"),

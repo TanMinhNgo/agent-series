@@ -98,6 +98,7 @@ function ProtectedRoutes() {
       <Route path="projects" element={<WorkspacePage {...props} view="projects" />} />
       <Route path="schedules" element={<WorkspacePage {...props} view="schedules" />} />
       <Route path="plugins" element={<WorkspacePage {...props} view="plugins" />} />
+      <Route path="members" element={<WorkspacePage {...props} view="members" />} />
       <Route path="settings/api-keys" element={<SettingsPage {...props} />} />
       <Route path="admin" element={<Navigate to="/admin/overview" replace />} />
       <Route

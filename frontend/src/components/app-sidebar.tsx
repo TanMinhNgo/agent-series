@@ -40,7 +40,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Separator } from '@/components/ui/separator';
-import type { Chat, Project, Theme } from '@/src/types';
+import type { AppWorkspace, Chat, Project, Theme } from '@/src/types';
 import type { WorkspaceView } from '@/src/components/workspace-panel';
 import type { AuthUser } from '@/src/hooks/use-auth';
 
@@ -69,6 +69,9 @@ type Props = {
   user?: AuthUser | null;
   onOpenApiKeys?: () => void;
   onLogout?: () => void;
+  workspaces?: AppWorkspace[];
+  activeWorkspaceId?: string | null;
+  onWorkspaceChange?: (workspaceId: string) => void;
 };
 
 const themeOptions = [
@@ -100,6 +103,9 @@ export function AppSidebar({
   user,
   onOpenApiKeys,
   onLogout,
+  workspaces = [],
+  activeWorkspaceId,
+  onWorkspaceChange,
 }: Props) {
   // The backend already sorts pinned first, so every pinned chat is on the
   // first page and this split never hides one behind lazy-loaded history.
@@ -136,6 +142,22 @@ export function AppSidebar({
           Local Agent
         </div>
       </div>
+      {workspaces.length ? (
+        <label className="mb-4 block text-xs text-muted-foreground">
+          Workspace
+          <select
+            className="mt-1 w-full rounded-lg border bg-background px-2 py-1.5 text-sm text-foreground"
+            value={activeWorkspaceId || workspaces[0]?.id}
+            onChange={(event) => onWorkspaceChange?.(event.target.value)}
+          >
+            {workspaces.map((workspace) => (
+              <option key={workspace.id} value={workspace.id}>
+                {workspace.name} · {workspace.role}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
       <nav className="mb-5 grid gap-1">
         <Button
           variant="ghost"
@@ -186,6 +208,15 @@ export function AppSidebar({
         >
           <Plug size={16} />
           Plugin
+        </Button>
+        <Button
+          variant="ghost"
+          data-active={activeNavigation === 'members'}
+          className="sidebar-nav-item justify-start"
+          onClick={() => onOpenWorkspace('members')}
+        >
+          <UserRound size={16} />
+          Thành viên
         </Button>
         {isSystemAdmin ? (
           <Button

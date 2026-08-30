@@ -1,4 +1,5 @@
 export const queryKeys = {
+  workspaces: ['workspaces'] as const,
   config: ['config'] as const,
   chats: ['chats'] as const,
   chat: (chatId: string) => ['chats', chatId] as const,
@@ -8,6 +9,8 @@ export const queryKeys = {
   plugins: ['plugins'] as const,
   googleConnector: ['connectors', 'google'] as const,
   googleConnectorAudit: ['connectors', 'google', 'audit'] as const,
+  githubConnector: ['connectors', 'github'] as const,
+  githubConnectorAudit: ['connectors', 'github', 'audit'] as const,
   messages: (chatId: string) => ['chats', chatId, 'messages'] as const,
   templates: (projectId?: string | null) => ['templates', projectId || 'global'] as const,
   chatPins: (chatId?: string) => ['chats', chatId || 'none', 'pins'] as const,

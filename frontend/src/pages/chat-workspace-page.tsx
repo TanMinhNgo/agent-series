@@ -109,6 +109,7 @@ export function ChatWorkspace({
   const [shareChat, setShareChat] = useState<Chat | null>(null);
   const [templateDraft, setTemplateDraft] = useState<TemplateDraft | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const invitationHandled = useRef(false);
   // React state updates asynchronously, so `streamChat.isPending` alone cannot
   // stop an Enter key and a click (or two rapid clicks) from starting two turns.
   const sendLock = useRef(false);
@@ -136,7 +137,18 @@ export function ChatWorkspace({
   const uploadDocuments = useUploadDocuments();
   const uploadMedia = useUploadMedia();
   const streamChat = useStreamChat();
-  const { projects } = useWorkspace();
+  const { projects, workspaces, activeWorkspaceId, selectWorkspace } = useWorkspace();
+  useEffect(() => {
+    const invitationId = new URLSearchParams(window.location.search).get('invite');
+    if (!invitationId || invitationHandled.current) return;
+    invitationHandled.current = true;
+    void request<{ workspaceId: string }>({ url: `/workspaces/invitations/${invitationId}/accept`, method: 'POST' })
+      .then(({ workspaceId }) => {
+        selectWorkspace(workspaceId);
+        window.location.assign('/');
+      })
+      .catch(() => setUiError('Không thể chấp nhận lời mời workspace. Hãy đảm bảo bạn đăng nhập đúng email.'));
+  }, [selectWorkspace]);
   const {
     collections,
     templates,
@@ -413,6 +425,9 @@ export function ChatWorkspace({
             user={auth.session.user}
             onOpenApiKeys={() => navigate('/settings/api-keys')}
             onLogout={logoutToLogin}
+            workspaces={workspaces.data || []}
+            activeWorkspaceId={activeWorkspaceId}
+            onWorkspaceChange={(workspaceId) => { selectWorkspace(workspaceId); window.location.assign('/'); }}
           />
         </div>
         {sidebarOpen ? (
@@ -467,6 +482,9 @@ export function ChatWorkspace({
                   navigate('/settings/api-keys');
                 }}
                 onLogout={logoutToLogin}
+                workspaces={workspaces.data || []}
+                activeWorkspaceId={activeWorkspaceId}
+                onWorkspaceChange={(workspaceId) => { selectWorkspace(workspaceId); window.location.assign('/'); }}
               />
             </div>
           </div>

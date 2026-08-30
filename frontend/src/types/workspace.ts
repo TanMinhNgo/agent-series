@@ -69,18 +69,27 @@ export type PluginCatalogItem = {
   featured: boolean;
   installedPluginId: string | null;
 };
-export type GoogleConnectorStatus = {
-  connectorSlug: 'google-workspace';
+export type ConnectorStatus = {
+  connectorSlug: 'google-workspace' | 'github';
   configured: boolean;
   status: 'not_connected' | 'connected' | 'reauth_required';
   accountEmail: string | null;
   scopes: string[];
   expiresAt: string | null;
 };
+export type GoogleConnectorStatus = ConnectorStatus & { connectorSlug: 'google-workspace' };
+export type GitHubConnectorStatus = ConnectorStatus & { connectorSlug: 'github' };
 export type ConnectorAuditLog = {
   id: string;
   eventType: string;
   toolName: string | null;
   summary: string | null;
   createdAt: string;
+};
+
+export type AppWorkspace = {
+  id: string;
+  name: string;
+  isPersonal: boolean;
+  role: 'owner' | 'editor' | 'viewer';
 };

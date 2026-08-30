@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -16,6 +16,7 @@ import {
   Plus,
   Search,
   Trash2,
+  UserRound,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -24,10 +25,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { PluginBrandIcon } from '@/src/components/plugin-brand-icon';
 import { useGetConfig } from '@/src/hooks/use-get-config';
-import { useScheduleRuns, useWorkspace } from '@/src/hooks/use-workspace';
+import { useInvitableWorkspaceUsers, useScheduleRuns, useWorkspace } from '@/src/hooks/use-workspace';
 import { useProjectDeletePreview } from '@/src/hooks/use-project-delete-preview';
 import type {
   ConnectorAuditLog,
+  GitHubConnectorStatus,
   GoogleConnectorStatus,
   Plugin,
   PluginCatalogItem,
@@ -35,7 +37,7 @@ import type {
   Schedule,
 } from '@/src/types';
 
-export type WorkspaceView = 'projects' | 'schedules' | 'plugins';
+export type WorkspaceView = 'projects' | 'schedules' | 'plugins' | 'members';
 
 const statusMeta = {
   active: { label: 'Đang hoạt động', Icon: CirclePlay, variant: 'default' as const },
@@ -1055,9 +1057,14 @@ function PluginsView() {
     googleConnectorAudit,
     authorizeGoogle,
     disconnectGoogle,
+    githubConnector,
+    githubConnectorAudit,
+    authorizeGitHub,
+    disconnectGitHub,
   } = useWorkspace();
   const [editing, setEditing] = useState<Plugin | null | undefined>();
   const [disconnectingGoogle, setDisconnectingGoogle] = useState(false);
+  const [disconnectingGitHub, setDisconnectingGitHub] = useState(false);
   const [deletingPlugin, setDeletingPlugin] = useState<Plugin | null>(null);
   const [query, setQuery] = useState('');
   const save = async (data: Pick<Plugin, 'slug' | 'name' | 'description' | 'enabled' | 'config'>) => {
@@ -1154,6 +1161,34 @@ function PluginsView() {
             await pluginActions.update.mutateAsync({
               id: googlePlugin.id,
               data: { enabled: !googlePlugin.enabled },
+            });
+        }}
+      />
+      <GitHubCard
+        plugin={installed.find((item) => item.catalogSlug === 'github')}
+        status={githubConnector.data}
+        audit={githubConnectorAudit.data || []}
+        busy={
+          installCatalogPlugin.isPending ||
+          authorizeGitHub.isPending ||
+          disconnectGitHub.isPending ||
+          pluginActions.update.isPending
+        }
+        error={
+          authorizeGitHub.error?.message || disconnectGitHub.error?.message || githubConnector.error?.message
+        }
+        onInstall={() => void installCatalogPlugin.mutateAsync('github')}
+        onConnect={async () => {
+          const result = await authorizeGitHub.mutateAsync();
+          window.location.assign(result.authorizationUrl);
+        }}
+        onDisconnect={() => setDisconnectingGitHub(true)}
+        onToggle={async () => {
+          const githubPlugin = installed.find((item) => item.catalogSlug === 'github');
+          if (githubPlugin)
+            await pluginActions.update.mutateAsync({
+              id: githubPlugin.id,
+              data: { enabled: !githubPlugin.enabled },
             });
         }}
       />
@@ -1256,11 +1291,20 @@ function PluginsView() {
       <ConfirmDialog
         open={disconnectingGoogle}
         title="Ngắt Google Workspace?"
-        description="Token đã lưu cục bộ sẽ bị xóa và chat sẽ không còn đọc Drive hoặc Calendar."
+        description="Token đã lưu cục bộ sẽ bị xóa và chat sẽ không còn đọc Drive, Gmail hoặc Calendar."
         confirmLabel="Ngắt kết nối"
         destructive
         onOpenChange={setDisconnectingGoogle}
         onConfirm={() => disconnectGoogle.mutateAsync()}
+      />
+      <ConfirmDialog
+        open={disconnectingGitHub}
+        title="Ngắt GitHub App?"
+        description="Liên kết GitHub App cục bộ sẽ bị xóa và chat không còn đọc repository đã cấp quyền."
+        confirmLabel="Ngắt kết nối"
+        destructive
+        onOpenChange={setDisconnectingGitHub}
+        onConfirm={() => disconnectGitHub.mutateAsync()}
       />
       <ConfirmDialog
         open={Boolean(deletingPlugin)}
@@ -1318,7 +1362,8 @@ function GoogleWorkspaceCard({
               {connected && plugin?.enabled ? <Badge variant="outline">Đang bật cho chat</Badge> : null}
             </div>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              Chỉ đọc metadata Drive và sự kiện Calendar. Không tạo, sửa, gửi hoặc import dữ liệu vào RAG.
+              Chỉ đọc nội dung Drive, Gmail và sự kiện Calendar. Không tạo, sửa, gửi hoặc import dữ liệu vào
+              RAG.
             </p>
             {connected && status?.accountEmail ? (
               <p className="mt-2 text-xs text-muted-foreground">Tài khoản: {status.accountEmail}</p>
@@ -1359,6 +1404,108 @@ function GoogleWorkspaceCard({
         <p className="mt-4 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
           Thêm GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET và CONNECTOR_ENCRYPTION_KEY vào `.env`, rồi
           restart backend.
+        </p>
+      ) : null}
+      {error ? <FormError message={error} /> : null}
+      {audit.length ? (
+        <div className="mt-4 border-t border-border/60 pt-3">
+          <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Hoạt động gần đây
+          </h3>
+          <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+            {audit.slice(0, 4).map((item) => (
+              <li key={item.id} className="flex flex-wrap gap-x-2">
+                <span>{new Date(item.createdAt).toLocaleString('vi-VN')}</span>
+                <span>{item.toolName || item.eventType}</span>
+                {item.summary ? <span>— {item.summary}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function GitHubCard({
+  plugin,
+  status,
+  audit,
+  busy,
+  error,
+  onInstall,
+  onConnect,
+  onDisconnect,
+  onToggle,
+}: {
+  plugin?: Plugin;
+  status?: GitHubConnectorStatus;
+  audit: ConnectorAuditLog[];
+  busy: boolean;
+  error?: string;
+  onInstall: () => void;
+  onConnect: () => Promise<void>;
+  onDisconnect: () => void;
+  onToggle: () => Promise<void>;
+}) {
+  const connected = status?.status === 'connected';
+  const configured = status?.configured ?? false;
+  return (
+    <section className="mb-10 rounded-2xl border border-border bg-card p-5 shadow-sm">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex gap-3">
+          <PluginBrandIcon name="GitHub" slug="github" size="md" />
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="font-semibold">GitHub</h2>
+              <Badge variant={connected ? 'default' : 'secondary'}>
+                {connected ? 'Đã kết nối' : configured ? 'Chưa kết nối' : 'Chưa cấu hình'}
+              </Badge>
+              {connected && plugin?.enabled ? <Badge variant="outline">Đang bật cho chat</Badge> : null}
+            </div>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+              GitHub App chỉ đọc repository đã được cấp quyền, file, issue, pull request và workflow. Không
+              tạo issue/PR hay thay đổi source code.
+            </p>
+            {connected && status?.accountEmail ? (
+              <p className="mt-2 text-xs text-muted-foreground">Tài khoản/tổ chức: {status.accountEmail}</p>
+            ) : null}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {!plugin ? (
+            <Button size="sm" onClick={onInstall} disabled={busy}>
+              Thêm GitHub
+            </Button>
+          ) : !configured ? (
+            <Button size="sm" variant="outline" disabled>
+              Thiếu cấu hình .env
+            </Button>
+          ) : !connected ? (
+            <Button size="sm" onClick={() => void onConnect().catch(() => undefined)} disabled={busy}>
+              Kết nối GitHub
+            </Button>
+          ) : (
+            <>
+              <Button
+                size="sm"
+                variant={plugin.enabled ? 'secondary' : 'default'}
+                onClick={() => void onToggle().catch(() => undefined)}
+                disabled={busy}
+              >
+                {plugin.enabled ? 'Tắt trong chat' : 'Bật cho chat'}
+              </Button>
+              <Button size="sm" variant="outline" onClick={onDisconnect} disabled={busy}>
+                Ngắt kết nối
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+      {!configured && plugin ? (
+        <p className="mt-4 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+          Thêm GITHUB_APP_ID, GITHUB_APP_SLUG, GITHUB_APP_PRIVATE_KEY và CONNECTOR_ENCRYPTION_KEY vào `.env`,
+          rồi restart backend.
         </p>
       ) : null}
       {error ? <FormError message={error} /> : null}
@@ -1578,6 +1725,42 @@ function FormActions({ busy, onClose, submit }: { busy: boolean; onClose: () => 
     </div>
   );
 }
+function MembersView() {
+  const { workspaceMembers, workspaceInvitations, inviteWorkspaceMember } = useWorkspace();
+  const [email, setEmail] = useState('');
+  const [search, setSearch] = useState('');
+  const [role, setRole] = useState<'editor' | 'viewer'>('viewer');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const suggestions = useInvitableWorkspaceUsers(debouncedSearch);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search), 250);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+  return (
+    <section className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-8 lg:px-12">
+      <div className="mb-6 flex items-center gap-2"><UserRound size={18} /><h1 className="text-2xl font-semibold">Thành viên workspace</h1></div>
+      <Card className="mb-6"><CardHeader><CardTitle>Mời thành viên</CardTitle><CardDescription>Người nhận đăng nhập Google bằng đúng email rồi mở link trong email để tham gia.</CardDescription></CardHeader><CardContent>
+        <form className="flex flex-col gap-3 sm:flex-row" onSubmit={(event) => { event.preventDefault(); if (email.trim()) void inviteWorkspaceMember.mutateAsync({ email: email.trim(), role }).then(() => { setEmail(''); setSearch(''); }); }}>
+          <div className="relative flex-1">
+            <input className="workspace-input w-full" type="email" required placeholder="name@example.com" value={email} onFocus={() => setShowSuggestions(true)} onChange={(event) => { setEmail(event.target.value); setSearch(event.target.value); setShowSuggestions(true); }} />
+            {showSuggestions && search.trim().length >= 2 && suggestions.data?.length ? <ul className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border bg-popover p-1 shadow-lg">{suggestions.data.map((user) => <li key={user.id}><button type="button" className="w-full rounded px-3 py-2 text-left text-sm hover:bg-accent" onMouseDown={(event) => event.preventDefault()} onClick={() => { setEmail(user.email); setSearch(user.email); setShowSuggestions(false); }}>{user.displayName ? <span className="font-medium">{user.displayName} <span className="font-normal text-muted-foreground">{user.email}</span></span> : user.email}</button></li>)}</ul> : null}
+          </div>
+          <select className="workspace-input" value={role} onChange={(event) => setRole(event.target.value as 'editor' | 'viewer')}><option value="viewer">Viewer</option><option value="editor">Editor</option></select>
+          <Button type="submit" disabled={inviteWorkspaceMember.isPending}>Mời</Button>
+        </form>
+        {inviteWorkspaceMember.error ? <FormError message={inviteWorkspaceMember.error.message} /> : null}
+      </CardContent></Card>
+      <Card><CardHeader><CardTitle>Thành viên</CardTitle></CardHeader><CardContent><ul className="space-y-3">
+        {(workspaceMembers.data || []).map((member) => <li key={member.userId} className="flex items-center justify-between border-b pb-3 text-sm"><span>{member.displayName || member.email}<span className="ml-2 text-muted-foreground">{member.email}</span></span><Badge variant="secondary">{member.role}</Badge></li>)}
+      </ul>
+      {workspaceInvitations.data?.length ? <div className="mt-5 text-sm text-muted-foreground">Đang chờ: {workspaceInvitations.data.map((item) => item.email).join(', ')}</div> : null}
+      {workspaceMembers.error ? <WorkspaceError message="Bạn cần quyền owner để quản lý thành viên." /> : null}
+      </CardContent></Card>
+    </section>
+  );
+}
+
 function WorkspaceSkeleton() {
   return (
     <div className="space-y-5 animate-pulse">
@@ -1602,7 +1785,7 @@ function WorkspaceError({ message }: { message: string }) {
 export function WorkspacePanel({ view }: { view: WorkspaceView }) {
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-8 lg:px-12">
-      {view === 'projects' ? <ProjectsView /> : view === 'schedules' ? <SchedulesView /> : <PluginsView />}
+      {view === 'projects' ? <ProjectsView /> : view === 'schedules' ? <SchedulesView /> : view === 'members' ? <MembersView /> : <PluginsView />}
     </div>
   );
 }

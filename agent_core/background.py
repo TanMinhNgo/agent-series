@@ -9,13 +9,15 @@ from .knowledge import KnowledgeService
 from .artifacts import ArtifactService
 from .memory import MemoryService
 from .storage import BackgroundJobRepository, ChatRepository
+from .file_storage import FileStorageService
 
 
 class BackgroundWorker:
-    def __init__(self, jobs: BackgroundJobRepository, knowledge: KnowledgeService, memory: MemoryService | None = None, chats: ChatRepository | None = None, media_dir: Path | None = None, artifacts: ArtifactService | None = None):
+    def __init__(self, jobs: BackgroundJobRepository, knowledge: KnowledgeService, memory: MemoryService | None = None, chats: ChatRepository | None = None, media_dir: Path | None = None, artifacts: ArtifactService | None = None, media_storage: FileStorageService | None = None):
         self.jobs, self.knowledge, self.memory, self.chats = jobs, knowledge, memory, chats
         self.media_dir = media_dir
         self.artifacts = artifacts
+        self.media_storage = media_storage
 
     @staticmethod
     def _delete_stored_file(directory: Path, stored_name: str) -> None:
@@ -35,7 +37,12 @@ class BackgroundWorker:
                 directory = self.media_dir
             else:
                 raise ValueError("Kho lưu trữ dọn dẹp file không hợp lệ.")
-            self._delete_stored_file(directory, str(file.get("stored_name", "")))
+            provider, file_id = file.get("storage_provider"), file.get("storage_file_id")
+            storage_service = getattr(self.knowledge, "storage", None) if storage == "knowledge" else self.media_storage
+            if provider == "imagekit" and storage_service is not None:
+                storage_service.delete(str(provider), str(file.get("stored_name", "")), str(file_id) if file_id else None)
+            else:
+                self._delete_stored_file(directory, str(file.get("stored_name", "")))
 
     def run_once(self, now: datetime | None = None) -> bool:
         now = now or datetime.now(UTC)

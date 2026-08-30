@@ -86,6 +86,10 @@ class AuthService:
             )
             if first_user:
                 self.repository.claim_legacy_data(user.id)
+        personal_workspace = self.repository.ensure_personal_workspace(user.id, user.display_name)
+        # Rows created before the workspace migration (including previously
+        # claimed local data) become visible in the user's Personal workspace.
+        self.repository.claim_legacy_workspace_data(user.id, personal_workspace.id)
         if user.is_active is False:
             raise AuthError("Tài khoản này đã bị vô hiệu hóa. Hãy liên hệ system admin.")
         raw_session = secrets.token_urlsafe(32)

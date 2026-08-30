@@ -58,6 +58,8 @@ class Settings:
     tavily_api_key: str
     knowledge_dir: Path
     media_dir: Path
+    imagekit_private_key: str
+    imagekit_url_endpoint: str
     provider_models: dict[str, tuple[str, ...]]
     google_oauth_client_id: str
     google_oauth_client_secret: str
@@ -66,6 +68,10 @@ class Settings:
     google_auth_client_secret: str
     google_auth_redirect_uri: str
     connector_encryption_key: str
+    github_app_id: str
+    github_app_slug: str
+    github_app_private_key: str
+    github_app_install_url: str
     user_credential_encryption_key: str
     app_web_url: str
     system_admin_email: str
@@ -175,6 +181,8 @@ def load_settings() -> Settings:
         tavily_api_key=os.getenv("TAVILY_API_KEY", "").strip(),
         knowledge_dir=(PROJECT_ROOT / os.getenv("KNOWLEDGE_DIR", "knowledge").strip()).resolve(),
         media_dir=(PROJECT_ROOT / os.getenv("MEDIA_DIR", "uploads").strip()).resolve(),
+        imagekit_private_key=os.getenv("IMAGEKIT_PRIVATE_KEY", "").strip(),
+        imagekit_url_endpoint=os.getenv("IMAGEKIT_URL_ENDPOINT", "").strip().rstrip("/"),
         provider_models={
             "gemini": _model_list("GEMINI_MODELS", os.getenv("GEMINI_MODEL", "gemini-3.5-flash")),
             "anthropic": _model_list("ANTHROPIC_MODELS", os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")),
@@ -193,6 +201,10 @@ def load_settings() -> Settings:
             "GOOGLE_AUTH_REDIRECT_URI", "http://localhost:8000/api/auth/google/callback"
         ).strip(),
         connector_encryption_key=os.getenv("CONNECTOR_ENCRYPTION_KEY", "").strip(),
+        github_app_id=os.getenv("GITHUB_APP_ID", "").strip(),
+        github_app_slug=os.getenv("GITHUB_APP_SLUG", "").strip(),
+        github_app_private_key=os.getenv("GITHUB_APP_PRIVATE_KEY", "").replace("\\n", "\n").strip(),
+        github_app_install_url=os.getenv("GITHUB_APP_INSTALL_URL", "").strip(),
         user_credential_encryption_key=os.getenv("USER_CREDENTIAL_ENCRYPTION_KEY", "").strip(),
         app_web_url=os.getenv("APP_WEB_URL", "http://localhost:5173").strip().rstrip("/"),
         system_admin_email=os.getenv("SYSTEM_ADMIN_EMAIL", "").strip().lower(),

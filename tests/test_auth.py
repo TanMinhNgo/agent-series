@@ -60,6 +60,12 @@ def test_google_signin_links_existing_user_by_verified_email(monkeypatch) -> Non
         def claim_legacy_data(self, _user_id):
             raise AssertionError("Existing user must not claim data again")
 
+        def ensure_personal_workspace(self, _user_id, _display_name):
+            return SimpleNamespace(id="workspace-1")
+
+        def claim_legacy_workspace_data(self, _user_id, _workspace_id):
+            return None
+
     service = AuthService(Repository(), settings())
     monkeypatch.setattr(service, "_exchange_google_code", lambda _code: {"id_token": "unused"})
     monkeypatch.setattr(service, "_verified_google_profile", lambda _token: {

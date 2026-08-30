@@ -8,6 +8,7 @@ two read-only operations easy to audit.
 from __future__ import annotations
 
 import base64
+from io import BytesIO
 import json
 from datetime import UTC, datetime, timedelta
 from secrets import token_urlsafe
@@ -17,6 +18,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from cryptography.fernet import Fernet, InvalidToken
+from pypdf import PdfReader
 
 from .config import Settings
 from .storage import ConnectorConnection, ConnectorRepository, Plugin
@@ -26,12 +28,15 @@ GOOGLE_WORKSPACE_SLUG = "google-workspace"
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
+DRIVE_DOWNLOAD_URL = "https://www.googleapis.com/drive/v3/files/{file_id}"
 CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
 SCOPES = (
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/drive.metadata.readonly",
+    "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/gmail.readonly",
 )
 
 
@@ -102,7 +107,7 @@ class GoogleWorkspaceService:
         except GoogleConnectorError as exc:
             self.repository.audit(GOOGLE_WORKSPACE_SLUG, "oauth_failed", summary=self._safe_error(exc))
             raise
-        self.repository.audit(GOOGLE_WORKSPACE_SLUG, "oauth_connected", summary="Đã cấp quyền chỉ đọc Drive metadata và Calendar.")
+        self.repository.audit(GOOGLE_WORKSPACE_SLUG, "oauth_connected", summary="Đã cấp quyền chỉ đọc Drive, Gmail và Calendar.")
         return self.status()
 
     def disconnect(self) -> bool:
@@ -219,6 +224,78 @@ class GoogleWorkspaceService:
             for item in events
         )
 
+    def read_drive_file(self, file_id: str) -> str:
+        """Read text from Google-native documents or return metadata for binary files."""
+        file_id = file_id.strip()
+        if not file_id:
+            return "Hãy cung cấp ID file Drive."
+        access_token, connection = self._access_token()
+        headers = {"Authorization": f"Bearer {access_token}"}
+        try:
+            metadata = self._http_json(
+                f"{DRIVE_DOWNLOAD_URL.format(file_id=file_id)}?{urlencode({'fields': 'id,name,mimeType,webViewLink'})}",
+                headers=headers,
+            )
+            mime_type = str(metadata.get("mimeType") or "")
+            export_mime = {
+                "application/vnd.google-apps.document": "text/plain",
+                "application/vnd.google-apps.spreadsheet": "text/csv",
+                "application/vnd.google-apps.presentation": "application/pdf",
+            }.get(mime_type)
+            if export_mime:
+                raw = self._http_bytes(
+                    f"{DRIVE_DOWNLOAD_URL.format(file_id=file_id)}/export?{urlencode({'mimeType': export_mime})}", headers
+                )
+            elif mime_type == "application/pdf":
+                raw = self._http_bytes(f"{DRIVE_DOWNLOAD_URL.format(file_id=file_id)}?alt=media", headers)
+                text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(raw)).pages).strip()
+                self.repository.audit(GOOGLE_WORKSPACE_SLUG, "tool_invoked", connection.id, "read_google_drive_file", f"Đọc nội dung Drive: {metadata.get('name', file_id)}.")
+                return text[:20_000] if text else "PDF không có nội dung văn bản để đọc."
+            elif mime_type.startswith("text/") or mime_type in {"application/json", "application/xml"}:
+                raw = self._http_bytes(f"{DRIVE_DOWNLOAD_URL.format(file_id=file_id)}?alt=media", headers)
+            else:
+                return f"{metadata.get('name', 'File')} là {mime_type or 'file nhị phân'} nên chưa thể đọc trực tiếp. Mở: {metadata.get('webViewLink') or 'https://drive.google.com/open?id=' + file_id}"
+            text = raw.decode("utf-8", errors="replace").strip()
+        except GoogleConnectorError as exc:
+            self.repository.audit(GOOGLE_WORKSPACE_SLUG, "tool_failed", connection.id, "read_google_drive_file", self._safe_error(exc))
+            raise
+        self.repository.audit(GOOGLE_WORKSPACE_SLUG, "tool_invoked", connection.id, "read_google_drive_file", f"Đọc nội dung Drive: {metadata.get('name', file_id)}.")
+        return text[:20_000] if text else "File không có nội dung văn bản để đọc."
+
+    def search_gmail_messages(self, query: str, limit: int = 10) -> str:
+        query = query.strip()
+        if not query:
+            return "Hãy cung cấp truy vấn Gmail, ví dụ: from:team@example.com báo cáo."
+        access_token, connection = self._access_token()
+        try:
+            payload = self._http_json(
+                f"{GMAIL_MESSAGES_URL}?{urlencode({'q': query, 'maxResults': str(max(1, min(limit, 10)))})}",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            messages = payload.get("messages", [])
+            details = [self._http_json(f"{GMAIL_MESSAGES_URL}/{item['id']}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date", headers={"Authorization": f"Bearer {access_token}"}) for item in messages]
+        except GoogleConnectorError as exc:
+            self.repository.audit(GOOGLE_WORKSPACE_SLUG, "tool_failed", connection.id, "search_gmail_messages", self._safe_error(exc))
+            raise
+        self.repository.audit(GOOGLE_WORKSPACE_SLUG, "tool_invoked", connection.id, "search_gmail_messages", f"Tìm Gmail: {len(details)} kết quả.")
+        if not details:
+            return "Không tìm thấy email phù hợp."
+        return "\n".join(f"- {self._gmail_headers(item)} — id: {item.get('id')}" for item in details)
+
+    def read_gmail_message(self, message_id: str) -> str:
+        message_id = message_id.strip()
+        if not message_id:
+            return "Hãy cung cấp ID email Gmail."
+        access_token, connection = self._access_token()
+        try:
+            item = self._http_json(f"{GMAIL_MESSAGES_URL}/{message_id}?format=full", headers={"Authorization": f"Bearer {access_token}"})
+        except GoogleConnectorError as exc:
+            self.repository.audit(GOOGLE_WORKSPACE_SLUG, "tool_failed", connection.id, "read_gmail_message", self._safe_error(exc))
+            raise
+        body = self._gmail_body(item.get("payload") or {})
+        self.repository.audit(GOOGLE_WORKSPACE_SLUG, "tool_invoked", connection.id, "read_gmail_message", f"Đọc email: {message_id}.")
+        return f"{self._gmail_headers(item)}\n\n{body[:20_000] or 'Email không có nội dung văn bản.'}"
+
     @staticmethod
     def _email_from_id_token(id_token: Any) -> str | None:
         if not isinstance(id_token, str) or id_token.count(".") < 2:
@@ -232,6 +309,29 @@ class GoogleWorkspaceService:
     @staticmethod
     def _safe_error(error: Exception) -> str:
         return str(error).replace("\n", " ")[:500]
+
+    @staticmethod
+    def _gmail_headers(item: dict[str, Any]) -> str:
+        values = {header.get("name", "").lower(): header.get("value", "") for header in (item.get("payload") or {}).get("headers", [])}
+        return f"Từ: {values.get('from', 'không rõ')} | Chủ đề: {values.get('subject', '(không có chủ đề)')} | Ngày: {values.get('date', 'không rõ')}"
+
+    @classmethod
+    def _gmail_body(cls, part: dict[str, Any]) -> str:
+        data = (part.get("body") or {}).get("data")
+        if data and str(part.get("mimeType", "")).startswith("text/plain"):
+            return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)).decode("utf-8", errors="replace")
+        return "\n".join(filter(None, (cls._gmail_body(child) for child in part.get("parts") or [])))
+
+    @staticmethod
+    def _http_bytes(url: str, headers: dict[str, str]) -> bytes:
+        request = Request(url, headers=headers)
+        try:
+            with urlopen(request, timeout=15) as response:  # noqa: S310 - fixed Google endpoint.
+                return response.read()
+        except HTTPError as exc:
+            raise GoogleConnectorError("Google từ chối yêu cầu đọc nội dung file.") from exc
+        except (URLError, TimeoutError) as exc:
+            raise GoogleConnectorError("Không thể kết nối Google Workspace lúc này.") from exc
 
     @staticmethod
     def _http_json(url: str, method: str = "GET", data: dict[str, str] | None = None, headers: dict[str, str] | None = None) -> dict[str, Any]:
@@ -263,6 +363,24 @@ class GoogleWorkspaceExecutor:
                 description="Tìm tối đa 10 file theo tên trong Google Drive đã kết nối. Chỉ đọc metadata và link mở file.",
                 parameters={"type": "object", "properties": {"query": {"type": "string", "description": "Từ khóa tên file"}, "limit": {"type": "integer", "minimum": 1, "maximum": 10}}, "required": ["query"]},
                 func=self.connector.search_drive_files,
+            ),
+            ToolSpec(
+                name="read_google_drive_file",
+                description="Đọc nội dung văn bản của Google Docs, Sheets, Slides hoặc file text trong Google Drive. Chỉ đọc.",
+                parameters={"type": "object", "properties": {"file_id": {"type": "string", "description": "ID file lấy từ kết quả tìm Drive"}}, "required": ["file_id"]},
+                func=self.connector.read_drive_file,
+            ),
+            ToolSpec(
+                name="search_gmail_messages",
+                description="Tìm tối đa 10 email Gmail theo cú pháp truy vấn Gmail. Chỉ đọc metadata email.",
+                parameters={"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 10}}, "required": ["query"]},
+                func=self.connector.search_gmail_messages,
+            ),
+            ToolSpec(
+                name="read_gmail_message",
+                description="Đọc nội dung một email Gmail theo ID do tool tìm Gmail trả về. Chỉ đọc.",
+                parameters={"type": "object", "properties": {"message_id": {"type": "string"}}, "required": ["message_id"]},
+                func=self.connector.read_gmail_message,
             ),
             ToolSpec(
                 name="get_upcoming_google_calendar_events",

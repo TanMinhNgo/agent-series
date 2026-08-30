@@ -1005,7 +1005,11 @@ def test_editing_a_schedule_does_not_rewind_next_run_at_when_timing_is_unchanged
 
 def test_plugin_tools_require_an_enabled_connected_read_plugin() -> None:
     plugin = Plugin(id="plugin-1", slug="github", name="GitHub", enabled=True, connection_status="connected", capabilities=["search"])
-    assert connected_read_tools([plugin]) == []  # no executor is registered yet
+    assert {tool.name for tool in connected_read_tools([plugin])} == {
+        "list_github_repositories",
+        "read_github_repository_file",
+        "search_github_issues",
+    }
     plugin.enabled = False
     assert connected_read_tools([plugin]) == []
 

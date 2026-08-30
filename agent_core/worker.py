@@ -26,6 +26,7 @@ def run_cycle(schedule_worker, jobs: BackgroundJobRepository, now: datetime | No
         schedule_worker.services.chats,
         schedule_worker.services.settings.media_dir,
         schedule_worker.services.artifacts,
+        schedule_worker.services.media.storage,
     )
     stop_heartbeat = Event()
 

@@ -12,7 +12,8 @@ from pypdf import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import select
 
-from .storage import Database, Document, DocumentChunk, KnowledgeCollection, KnowledgeCollectionDocument, document_scope_key
+from .storage import Database, Document, DocumentChunk, KnowledgeCollection, KnowledgeCollectionDocument, current_user_id, document_scope_key
+from .file_storage import FileStorageService
 from .tools.base import ToolSpec
 
 CHUNK_SIZE = 800
@@ -59,12 +60,30 @@ def extract_document_parts(path: Path, suffix: str) -> tuple[list[tuple[int, str
     return list(enumerate(chunks, start=1)), len(chunks)
 
 
+def extract_document_parts_bytes(data: bytes, suffix: str) -> tuple[list[tuple[int, str]], int]:
+    """Extract document text from private remote storage without a temp public URL."""
+    suffix = suffix.lower()
+    if suffix == ".pdf":
+        reader = PdfReader(BytesIO(data))
+        return ([(page_number, chunk) for page_number, page in enumerate(reader.pages, start=1) for chunk in _chunks(page.extract_text() or "")], len(reader.pages))
+    if suffix == ".docx":
+        from docx import Document as DocxDocument
+        text = "\n".join(item.text for item in DocxDocument(BytesIO(data)).paragraphs)
+    elif suffix == ".md":
+        text = data.decode("utf-8", errors="replace")
+    else:
+        raise ValueError("Chỉ hỗ trợ file PDF, DOCX hoặc Markdown.")
+    chunks = _chunks(text)
+    return list(enumerate(chunks, start=1)), len(chunks)
+
+
 class KnowledgeService:
-    def __init__(self, database: Database, knowledge_dir: Path, embedding_model: str):
+    def __init__(self, database: Database, knowledge_dir: Path, embedding_model: str, storage: FileStorageService | None = None):
         self.database = database
         self.knowledge_dir = knowledge_dir
         self.embedding_model_name = embedding_model
         self._embedder = None
+        self.storage = storage or FileStorageService(knowledge_dir)
 
     def _embedder_instance(self):
         if self._embedder is None:
@@ -84,6 +103,18 @@ class KnowledgeService:
             if project_id is not None:
                 statement = statement.where(Document.project_id == project_id)
             return list(session.scalars(statement))
+
+    def ensure_remote(self, document_id: str) -> Document | None:
+        with self.database.session() as session:
+            document = session.get(Document, document_id)
+            if document is None or document.storage_provider != "local":
+                return document
+            stored = self.storage.migrate_local(document.stored_name, document.original_name, f"users/{current_user_id.get() or 'local'}/knowledge/{document.project_id or 'global'}")
+            if stored is None:
+                return document
+            document.storage_provider, document.stored_name, document.storage_file_id = stored.provider, stored.stored_name, stored.file_id
+            session.commit()
+            return document
 
     def list_collections(self, project_id: str) -> list[KnowledgeCollection]:
         with self.database.session() as session:
@@ -147,11 +178,12 @@ class KnowledgeService:
             existing = session.scalar(select(Document).where(Document.sha256 == digest, Document.scope_key == scope_key))
             if existing:
                 return existing, False
-            stored_name = f"{uuid4()}_{Path(original_name).name}"
-            (self.knowledge_dir / stored_name).write_bytes(data)
+            stored = self.storage.upload(data, original_name, f"users/{current_user_id.get() or 'local'}/knowledge/{project_id or 'global'}")
             document = Document(
                 original_name=Path(original_name).name,
-                stored_name=stored_name,
+                stored_name=stored.stored_name,
+                storage_provider=stored.provider,
+                storage_file_id=stored.file_id,
                 sha256=digest,
                 scope_key=scope_key,
                 project_id=project_id,
@@ -168,10 +200,11 @@ class KnowledgeService:
             document.status, document.error = "indexing", None
             session.query(DocumentChunk).filter(DocumentChunk.document_id == document_id).delete()
             session.commit()
-            file_path = self.knowledge_dir / document.stored_name
             try:
                 suffix = Path(document.original_name).suffix.lower()
-                parts, unit_count = extract_document_parts(file_path, suffix)
+                parts, unit_count = extract_document_parts_bytes(
+                    self.storage.read(document.storage_provider, document.stored_name, document.storage_file_id), suffix
+                )
                 if not parts:
                     if suffix == ".pdf":
                         document.status, document.error = "needs_ocr", "PDF không có text layer. Hãy OCR trước rồi thử index lại."
@@ -197,9 +230,7 @@ class KnowledgeService:
             document = session.get(Document, document_id)
             if document is None:
                 return False
-            path = self.knowledge_dir / document.stored_name
-            if path.exists():
-                path.unlink()
+            self.storage.delete(document.storage_provider, document.stored_name, document.storage_file_id)
             session.delete(document)
             session.commit()
             return True

@@ -28,12 +28,17 @@ class Base(DeclarativeBase):
 
 
 current_user_id: ContextVar[str | None] = ContextVar("current_user_id", default=None)
+current_workspace_id: ContextVar[str | None] = ContextVar("current_workspace_id", default=None)
 
 
 class UserOwned:
     """Mixin automatically scoped on HTTP requests; internal workers run unscoped."""
 
     user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    # Data remains attributable to its creator, but visibility is controlled by
+    # workspace membership.  Keeping both columns also preserves per-user
+    # credentials and scheduled-job ownership.
+    workspace_id: Mapped[str | None] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True)
 
 
 class User(Base):
@@ -45,6 +50,38 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class Workspace(Base):
+    __tablename__ = "workspaces"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    name: Mapped[str] = mapped_column(String(160))
+    is_personal: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class WorkspaceMember(Base):
+    __tablename__ = "workspace_members"
+    __table_args__ = (UniqueConstraint("workspace_id", "user_id", name="uq_workspace_member"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(16), default="viewer")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class WorkspaceInvitation(Base):
+    __tablename__ = "workspace_invitations"
+    __table_args__ = (UniqueConstraint("workspace_id", "email", name="uq_workspace_invitation_email"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    email: Mapped[str] = mapped_column(String(320), index=True)
+    role: Mapped[str] = mapped_column(String(16), default="viewer")
+    invited_by_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class AuthIdentity(Base):
@@ -116,21 +153,28 @@ class SystemAuditLog(Base):
 
 @event.listens_for(Session, "do_orm_execute")
 def _scope_user_owned_models(execute_state):
+    workspace_id = current_workspace_id.get()
     user_id = current_user_id.get()
-    if user_id and execute_state.is_select and not execute_state.execution_options.get("skip_user_scope"):
+    if (workspace_id or user_id) and execute_state.is_select and not execute_state.execution_options.get("skip_user_scope"):
+        # During the legacy sign-in/claim path there is no workspace yet; retain
+        # the former user filter until the personal workspace is provisioned.
+        criterion = (lambda cls: cls.workspace_id == workspace_id) if workspace_id else (lambda cls: cls.user_id == user_id)
         execute_state.statement = execute_state.statement.options(
-            with_loader_criteria(UserOwned, lambda cls: cls.user_id == user_id, include_aliases=True)
+            with_loader_criteria(UserOwned, criterion, include_aliases=True)
         )
 
 
 @event.listens_for(Session, "before_flush")
 def _assign_current_user(session, _flush_context, _instances):
     user_id = current_user_id.get()
-    if not user_id:
+    workspace_id = current_workspace_id.get()
+    if not user_id and not workspace_id:
         return
     for item in session.new:
         if isinstance(item, UserOwned) and item.user_id is None:
             item.user_id = user_id
+        if isinstance(item, UserOwned) and item.workspace_id is None:
+            item.workspace_id = workspace_id
 
 
 class Chat(UserOwned, Base):
@@ -239,6 +283,8 @@ class MediaAttachment(UserOwned, Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     original_name: Mapped[str] = mapped_column(String(255))
     stored_name: Mapped[str] = mapped_column(String(255), unique=True)
+    storage_provider: Mapped[str] = mapped_column(String(32), default="local")
+    storage_file_id: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
     mime_type: Mapped[str] = mapped_column(String(80))
     size_bytes: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -251,6 +297,8 @@ class LibraryAsset(UserOwned, Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     name: Mapped[str] = mapped_column(String(255))
     stored_name: Mapped[str] = mapped_column(String(255), unique=True)
+    storage_provider: Mapped[str] = mapped_column(String(32), default="local")
+    storage_file_id: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
     mime_type: Mapped[str] = mapped_column(String(120))
     size_bytes: Mapped[int] = mapped_column(Integer)
     source: Mapped[str] = mapped_column(String(24), default="upload")
@@ -397,6 +445,8 @@ class Document(UserOwned, Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     original_name: Mapped[str] = mapped_column(String(255))
     stored_name: Mapped[str] = mapped_column(String(255), unique=True)
+    storage_provider: Mapped[str] = mapped_column(String(32), default="local")
+    storage_file_id: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     scope_key: Mapped[str] = mapped_column(String(36), default=GLOBAL_DOCUMENT_SCOPE)
     status: Mapped[str] = mapped_column(String(16), default="pending")
@@ -831,6 +881,86 @@ class WorkspaceRepository:
             session.commit()
             return True
 
+    def list_for_user(self, user_id: str) -> list[tuple[Workspace, WorkspaceMember]]:
+        with self.database.session() as session:
+            return list(session.execute(
+                select(Workspace, WorkspaceMember)
+                .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
+                .where(WorkspaceMember.user_id == user_id)
+                .order_by(Workspace.is_personal.desc(), Workspace.updated_at.asc())
+                .execution_options(skip_user_scope=True)
+            ).all())
+
+    def membership(self, workspace_id: str, user_id: str) -> WorkspaceMember | None:
+        with self.database.session() as session:
+            return session.scalar(select(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == workspace_id, WorkspaceMember.user_id == user_id
+            ).execution_options(skip_user_scope=True))
+
+    def default_for_user(self, user_id: str) -> WorkspaceMember | None:
+        with self.database.session() as session:
+            return session.scalar(select(WorkspaceMember).join(Workspace).where(
+                WorkspaceMember.user_id == user_id
+            ).order_by(Workspace.is_personal.desc(), Workspace.created_at.asc()).execution_options(skip_user_scope=True))
+
+    def create_workspace(self, user_id: str, name: str, is_personal: bool = False) -> Workspace:
+        with self.database.session() as session:
+            item = Workspace(name=name, is_personal=is_personal, created_by_user_id=user_id)
+            session.add(item); session.flush()
+            session.add(WorkspaceMember(workspace_id=item.id, user_id=user_id, role="owner"))
+            session.commit(); return item
+
+    def ensure_personal_workspace(self, user_id: str, display_name: str | None = None) -> Workspace:
+        with self.database.session() as session:
+            item = session.scalar(select(Workspace).join(WorkspaceMember).where(
+                WorkspaceMember.user_id == user_id, Workspace.is_personal.is_(True)
+            ).execution_options(skip_user_scope=True))
+            if item:
+                return item
+            item = Workspace(name=f"{display_name or 'Không gian cá nhân'}", is_personal=True, created_by_user_id=user_id)
+            session.add(item); session.flush(); session.add(WorkspaceMember(workspace_id=item.id, user_id=user_id, role="owner")); session.commit()
+            return item
+
+    def invite(self, workspace_id: str, email: str, role: str, invited_by_user_id: str, expires_at: datetime) -> WorkspaceInvitation:
+        with self.database.session() as session:
+            item = session.scalar(select(WorkspaceInvitation).where(
+                WorkspaceInvitation.workspace_id == workspace_id, WorkspaceInvitation.email == email
+            ).execution_options(skip_user_scope=True))
+            if item:
+                item.role, item.invited_by_user_id, item.expires_at = role, invited_by_user_id, expires_at
+            else:
+                item = WorkspaceInvitation(workspace_id=workspace_id, email=email, role=role, invited_by_user_id=invited_by_user_id, expires_at=expires_at)
+                session.add(item)
+            session.commit(); return item
+
+    def invitations(self, workspace_id: str) -> list[WorkspaceInvitation]:
+        with self.database.session() as session:
+            return list(session.scalars(select(WorkspaceInvitation).where(WorkspaceInvitation.workspace_id == workspace_id).order_by(WorkspaceInvitation.created_at.desc()).execution_options(skip_user_scope=True)))
+
+    def accept_invitation(self, invitation_id: str, user_id: str, email: str, now: datetime) -> WorkspaceMember | None:
+        with self.database.session() as session:
+            invitation = session.get(WorkspaceInvitation, invitation_id, execution_options={"skip_user_scope": True})
+            if invitation is None or invitation.email != email.lower() or invitation.expires_at <= now:
+                return None
+            member = session.scalar(select(WorkspaceMember).where(WorkspaceMember.workspace_id == invitation.workspace_id, WorkspaceMember.user_id == user_id).execution_options(skip_user_scope=True))
+            if member is None:
+                member = WorkspaceMember(workspace_id=invitation.workspace_id, user_id=user_id, role=invitation.role); session.add(member)
+            session.delete(invitation); session.commit(); return member
+
+    def update_member_role(self, workspace_id: str, user_id: str, role: str) -> WorkspaceMember | None:
+        with self.database.session() as session:
+            member = session.scalar(select(WorkspaceMember).where(WorkspaceMember.workspace_id == workspace_id, WorkspaceMember.user_id == user_id).execution_options(skip_user_scope=True))
+            if member is None:
+                return None
+            member.role = role; session.commit(); return member
+
+    def remove_member(self, workspace_id: str, user_id: str) -> bool:
+        with self.database.session() as session:
+            member = session.scalar(select(WorkspaceMember).where(WorkspaceMember.workspace_id == workspace_id, WorkspaceMember.user_id == user_id).execution_options(skip_user_scope=True))
+            if member is None:
+                return False
+            session.delete(member); session.commit(); return True
+
 
 class ConnectorRepository:
     """Persistence for OAuth connections, short-lived CSRF state, and audit metadata."""
@@ -1102,6 +1232,16 @@ class AuthRepository:
         with self.database.session() as session:
             for entity in entities:
                 session.execute(entity.__table__.update().where(entity.user_id.is_(None)).values(user_id=user_id))
+            session.commit()
+
+    def ensure_personal_workspace(self, user_id: str, display_name: str | None = None) -> Workspace:
+        return WorkspaceRepository(self.database).ensure_personal_workspace(user_id, display_name)
+
+    def claim_legacy_workspace_data(self, user_id: str, workspace_id: str) -> None:
+        entities = (Chat, ChatMemoryChunk, ChatShare, ChatMessage, ResponseFeedback, UserPreference, PromptTemplate, MediaAttachment, LibraryAsset, ArtifactChunk, Project, Schedule, ScheduleRun, Plugin, ConnectorConnection, OAuthState, ConnectorAuditLog, Document, DocumentChunk, KnowledgeCollection, BackgroundJob)
+        with self.database.session() as session:
+            for entity in entities:
+                session.execute(entity.__table__.update().where(entity.user_id == user_id, entity.workspace_id.is_(None)).values(workspace_id=workspace_id))
             session.commit()
 
 
@@ -1453,3 +1593,12 @@ class MediaRepository:
     def get_many(self, ids: list[str]) -> list[MediaAttachment]:
         with self.database.session() as session:
             return list(session.scalars(select(MediaAttachment).where(MediaAttachment.id.in_(ids))))
+
+    def replace_storage(self, media_id: str, provider: str, stored_name: str, file_id: str | None) -> MediaAttachment | None:
+        with self.database.session() as session:
+            item = session.get(MediaAttachment, media_id)
+            if item is None:
+                return None
+            item.storage_provider, item.stored_name, item.storage_file_id = provider, stored_name, file_id
+            session.commit()
+            return item

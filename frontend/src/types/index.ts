@@ -12,8 +12,10 @@ export type {
 export type { Message, ResponseBlock } from './message';
 export type { MediaAttachment } from './media';
 export type {
+  AppWorkspace,
   ConnectorAuditLog,
   GoogleConnectorStatus,
+  GitHubConnectorStatus,
   Plugin,
   PluginCatalogItem,
   Project,

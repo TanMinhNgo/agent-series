@@ -11,16 +11,18 @@ from pypdf import PdfReader
 from sqlalchemy import select
 
 from .knowledge import _chunks
-from .storage import ArtifactChunk, Database, LibraryAsset
+from .storage import ArtifactChunk, Database, LibraryAsset, current_user_id
+from .file_storage import FileStorageService
 from .tools.base import ToolSpec
 
 PREVIEW_LIMIT = 30_000
 
 
-def extract_artifact_text(path: Path, suffix: str) -> str:
+def extract_artifact_text(data: bytes | Path, suffix: str) -> str:
     """Extract safe plain text from the document types the Library can create."""
+    if isinstance(data, Path):
+        data = data.read_bytes()
     suffix = suffix.lower()
-    data = path.read_bytes()
     if suffix in {".md", ".txt", ".csv", ".json"}:
         return data.decode("utf-8", errors="replace")
     if suffix == ".pdf":
@@ -46,8 +48,9 @@ def extract_artifact_text(path: Path, suffix: str) -> str:
 
 
 class ArtifactService:
-    def __init__(self, database: Database, directory: Path, embedding_model: str):
+    def __init__(self, database: Database, directory: Path, embedding_model: str, storage: FileStorageService | None = None):
         self.database, self.directory, self.embedding_model_name = database, directory, embedding_model
+        self.storage = storage or FileStorageService(directory)
         self._embedder = None
 
     def _embed(self, values: list[str], prefix: str) -> list[list[float]]:
@@ -57,6 +60,9 @@ class ArtifactService:
         return self._embedder.encode([f"{prefix}: {value}" for value in values], normalize_embeddings=True).tolist()
 
     def preview(self, asset_id: str) -> dict:
+        asset = self._ensure_remote(asset_id)
+        if asset is None:
+            raise ValueError("Không tìm thấy artifact.")
         with self.database.session() as session:
             asset = session.get(LibraryAsset, asset_id)
             if asset is None:
@@ -67,12 +73,13 @@ class ArtifactService:
             if suffix == ".pdf":
                 return {"kind": "pdf"}
             try:
-                content = extract_artifact_text(self.directory / asset.stored_name, suffix)
+                content = extract_artifact_text(self.storage.read(asset.storage_provider, asset.stored_name, asset.storage_file_id), suffix)
             except ValueError:
                 return {"kind": "download"}
             return {"kind": "text", "content": content[:PREVIEW_LIMIT], "truncated": len(content) > PREVIEW_LIMIT}
 
     def index(self, asset_id: str) -> LibraryAsset:
+        self._ensure_remote(asset_id)
         with self.database.session() as session:
             asset = session.get(LibraryAsset, asset_id)
             if asset is None:
@@ -81,7 +88,7 @@ class ArtifactService:
             session.query(ArtifactChunk).filter(ArtifactChunk.asset_id == asset_id).delete()
             session.commit()
             try:
-                content = extract_artifact_text(self.directory / asset.stored_name, Path(asset.name).suffix)
+                content = extract_artifact_text(self.storage.read(asset.storage_provider, asset.stored_name, asset.storage_file_id), Path(asset.name).suffix)
                 parts = _chunks(content)
                 if not parts:
                     asset.index_status, asset.index_error = "failed", "Artifact không có nội dung văn bản để truy hồi."
@@ -95,6 +102,18 @@ class ArtifactService:
             session.commit()
             if asset.index_status == "failed":
                 raise RuntimeError(asset.index_error or "Không thể index artifact.")
+            return asset
+
+    def _ensure_remote(self, asset_id: str) -> LibraryAsset | None:
+        with self.database.session() as session:
+            asset = session.get(LibraryAsset, asset_id)
+            if asset is None or asset.storage_provider != "local":
+                return asset
+            stored = self.storage.migrate_local(asset.stored_name, asset.name, f"users/{current_user_id.get() or 'local'}/library/{asset.project_id or 'global'}")
+            if stored is None:
+                return asset
+            asset.storage_provider, asset.stored_name, asset.storage_file_id = stored.provider, stored.stored_name, stored.file_id
+            session.commit()
             return asset
 
     def search(self, query: str, project_id: str, top_k: int = 4) -> str:

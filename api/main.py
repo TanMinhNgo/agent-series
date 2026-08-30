@@ -9,7 +9,7 @@ from uuid import uuid4
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Thread
@@ -20,10 +20,9 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from agent_core.agent import Agent
 from agent_core.artifacts import ArtifactService, build_artifact_tool
@@ -31,16 +30,18 @@ from agent_core.config import Settings, load_settings
 from agent_core.credentials import CredentialError, UserCredentialService
 from agent_core.knowledge import NO_DOCUMENTS_RESULT, KnowledgeService, build_knowledge_tool
 from agent_core.media import MediaService
+from agent_core.file_storage import FileStorageService
 from agent_core.library import LibraryService
 from agent_core.memory import MemoryService
 from agent_core.ollama import OllamaCatalog, OllamaError
 from agent_core.personalization import PersonalizationService
 from agent_core.google_workspace import GOOGLE_WORKSPACE_SLUG, GoogleConnectorError, GoogleWorkspaceExecutor, GoogleWorkspaceService
+from agent_core.github_app import GITHUB_SLUG, GitHubAppExecutor, GitHubAppService, GitHubConnectorError
 from agent_core.plugin_catalog import CATALOG, catalog_json, find_catalog_plugin
 from agent_core.plugin_execution import EXECUTORS, connected_read_tools
 from agent_core.prompts import DEFAULT_SYSTEM_PROMPT
 from agent_core.providers import build_client
-from agent_core.storage import ArtifactChunk, AuthRepository, BackgroundJob, BackgroundJobRepository, Chat, ChatMessage, ChatRepository, ChatShare, ConnectorRepository, Database, Document, KnowledgeCollection, LibraryAsset, MediaAttachment, MediaRepository, ModelRegistryRepository, Plugin, Project, PromptTemplate, Schedule, ScheduleRepository, ScheduleRun, WorkspaceRepository, current_user_id
+from agent_core.storage import ArtifactChunk, AuthRepository, BackgroundJob, BackgroundJobRepository, Chat, ChatMessage, ChatRepository, ChatShare, ConnectorRepository, Database, Document, KnowledgeCollection, LibraryAsset, MediaAttachment, MediaRepository, ModelRegistryRepository, Plugin, Project, PromptTemplate, Schedule, ScheduleRepository, ScheduleRun, User, Workspace, WorkspaceInvitation, WorkspaceMember, WorkspaceRepository, current_user_id, current_workspace_id
 from agent_core.auth import AuthError, AuthService, SESSION_COOKIE
 from agent_core.tools import ToolRegistry, ToolSpec, build_default_registry
 from agent_core.notifications import EmailNotificationService, public_chat_url, schedule_run_email
@@ -58,6 +59,7 @@ class Services:
     library: LibraryService
     artifacts: ArtifactService
     google_workspace: GoogleWorkspaceService
+    github: GitHubAppService
     auth: AuthService
     model_registry: ModelRegistryRepository
     credentials: UserCredentialService
@@ -100,6 +102,19 @@ class ShareRequest(BaseModel):
     expires_at: datetime | None = Field(default=None, alias="expiresAt")
 
     model_config = {"populate_by_name": True}
+
+
+class WorkspaceRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+
+
+class WorkspaceInvitationRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    role: Literal["editor", "viewer"] = "viewer"
+
+
+class WorkspaceMemberRoleRequest(BaseModel):
+    role: Literal["owner", "editor", "viewer"]
 
 
 class ProjectRequest(BaseModel):
@@ -298,7 +313,7 @@ def collection_json(item: KnowledgeCollection, documents: list[Document] | None 
 
 
 def media_json(media: MediaAttachment) -> dict[str, Any]:
-    return {"id": media.id, "name": media.original_name, "mimeType": media.mime_type, "url": f"/uploads/{media.stored_name}", "sizeBytes": media.size_bytes}
+    return {"id": media.id, "name": media.original_name, "mimeType": media.mime_type, "url": services().media.url_for(media), "sizeBytes": media.size_bytes}
 
 
 def message_json(message: dict[str, Any]) -> dict[str, Any]:
@@ -510,22 +525,27 @@ def make_agent(
 async def lifespan(app: FastAPI):
     settings = load_settings()
     database = Database(settings.database_url)
-    media = MediaService(MediaRepository(database), settings.media_dir)
+    media_storage = FileStorageService(settings.media_dir, settings.imagekit_private_key, settings.imagekit_url_endpoint)
+    knowledge_storage = FileStorageService(Path(settings.knowledge_dir), settings.imagekit_private_key, settings.imagekit_url_endpoint)
+    media = MediaService(MediaRepository(database), settings.media_dir, media_storage)
     google_workspace = GoogleWorkspaceService(ConnectorRepository(database), settings)
+    github = GitHubAppService(ConnectorRepository(database), settings)
     model_registry = ModelRegistryRepository(database)
     model_registry.seed(settings.provider_models)
     EXECUTORS[GOOGLE_WORKSPACE_SLUG] = GoogleWorkspaceExecutor(google_workspace)
+    EXECUTORS[GITHUB_SLUG] = GitHubAppExecutor(github)
     auth_repository = AuthRepository(database)
     app.state.services = Services(
         settings=settings,
         chats=ChatRepository(database),
-        knowledge=KnowledgeService(database, Path(settings.knowledge_dir), settings.embedding_model),
+        knowledge=KnowledgeService(database, Path(settings.knowledge_dir), settings.embedding_model, knowledge_storage),
         media=media,
-        library=LibraryService(database, settings.media_dir),
-        artifacts=ArtifactService(database, settings.media_dir, settings.embedding_model),
+        library=LibraryService(database, settings.media_dir, media_storage),
+        artifacts=ArtifactService(database, settings.media_dir, settings.embedding_model, media_storage),
         memory=MemoryService(database, settings.embedding_model),
         workspace=WorkspaceRepository(database),
         google_workspace=google_workspace,
+        github=github,
         auth=AuthService(auth_repository, settings),
         model_registry=model_registry,
         credentials=UserCredentialService(auth_repository, settings),
@@ -559,9 +579,6 @@ app = FastAPI(
     ],
     lifespan=lifespan,
 )
-UPLOADS_DIR = Path(__file__).resolve().parents[1] / "uploads"
-UPLOADS_DIR.mkdir(exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -580,11 +597,25 @@ async def require_authenticated_api_user(request: Request, call_next):
     user = services().auth.session_user(request.cookies.get(SESSION_COOKIE))
     if user is None:
         return Response(content=json.dumps({"detail": "Cần đăng nhập để truy cập workspace."}, ensure_ascii=False), status_code=401, media_type="application/json")
+    requested_workspace_id = request.headers.get("X-Workspace-ID")
+    membership = services().workspace.membership(requested_workspace_id, user.id) if requested_workspace_id else services().workspace.default_for_user(user.id)
+    # Workspace bootstrap and invitation acceptance are the only private routes
+    # that can legitimately run before a selected membership exists.
+    bootstrap_paths = ("/api/workspaces",)
+    accepting_invitation = request.url.path.endswith("/accept")
+    if membership is None and not (request.url.path in bootstrap_paths or accepting_invitation):
+        return Response(content=json.dumps({"detail": "Không tìm thấy workspace bạn có quyền truy cập."}, ensure_ascii=False), status_code=403, media_type="application/json")
+    if membership and request.method in {"POST", "PATCH", "PUT", "DELETE"} and membership.role == "viewer" and not accepting_invitation and request.url.path != "/api/workspaces":
+        return Response(content=json.dumps({"detail": "Bạn chỉ có quyền xem trong workspace này."}, ensure_ascii=False), status_code=403, media_type="application/json")
     token = current_user_id.set(user.id)
+    workspace_token = current_workspace_id.set(membership.workspace_id) if membership else None
     request.state.user = user
+    request.state.workspace_membership = membership
     try:
         return await call_next(request)
     finally:
+        if workspace_token is not None:
+            current_workspace_id.reset(workspace_token)
         current_user_id.reset(token)
 
 
@@ -597,11 +628,134 @@ def user_json(user) -> dict[str, Any]:
     return {"id": user.id, "email": user.email, "displayName": user.display_name, "role": role, "isActive": user.is_active}
 
 
+def workspace_json(item: Workspace, membership: WorkspaceMember) -> dict[str, Any]:
+    return {"id": item.id, "name": item.name, "isPersonal": item.is_personal, "role": membership.role}
+
+
+def invitation_json(item: WorkspaceInvitation) -> dict[str, Any]:
+    return {"id": item.id, "email": item.email, "role": item.role, "expiresAt": item.expires_at.isoformat(), "createdAt": item.created_at.isoformat()}
+
+
+def require_workspace_owner(request: Request) -> WorkspaceMember:
+    membership = getattr(request.state, "workspace_membership", None)
+    if membership is None or membership.role != "owner":
+        raise HTTPException(status_code=403, detail="Chỉ owner workspace mới được thực hiện thao tác này.")
+    return membership
+
+
 def require_system_admin(request: Request):
     user = getattr(request.state, "user", None)
     if user is None or not services().auth.is_system_admin(user):
         raise HTTPException(status_code=403, detail="Chỉ system admin mới được truy cập.")
     return user
+
+
+@app.get("/api/workspaces", tags=["Workspaces"])
+def list_workspaces(request: Request) -> list[dict[str, Any]]:
+    user = request.state.user
+    return [workspace_json(item, membership) for item, membership in services().workspace.list_for_user(user.id)]
+
+
+@app.post("/api/workspaces", status_code=201, tags=["Workspaces"])
+def create_workspace(payload: WorkspaceRequest, request: Request) -> dict[str, Any]:
+    item = services().workspace.create_workspace(request.state.user.id, payload.name.strip())
+    membership = services().workspace.membership(item.id, request.state.user.id)
+    return workspace_json(item, membership)
+
+
+@app.get("/api/workspaces/current/members", tags=["Workspaces"])
+def list_workspace_members(request: Request) -> list[dict[str, Any]]:
+    require_workspace_owner(request)
+    workspace_id = current_workspace_id.get()
+    with services().chats.database.session() as session:
+        rows = session.execute(select(WorkspaceMember, User).join(User).where(WorkspaceMember.workspace_id == workspace_id).execution_options(skip_user_scope=True)).all()
+    return [{"userId": member.user_id, "email": user.email, "displayName": user.display_name, "role": member.role} for member, user in rows]
+
+
+@app.get("/api/workspaces/current/invitations", tags=["Workspaces"])
+def list_workspace_invitations(request: Request) -> list[dict[str, Any]]:
+    require_workspace_owner(request)
+    return [invitation_json(item) for item in services().workspace.invitations(current_workspace_id.get())]
+
+
+@app.get("/api/workspaces/current/invitable-users", tags=["Workspaces"])
+def find_invitable_workspace_users(request: Request, q: str = Query(min_length=2, max_length=160)) -> list[dict[str, str | None]]:
+    """Return a deliberately small, owner-only autocomplete result set."""
+    require_workspace_owner(request)
+    workspace_id = current_workspace_id.get()
+    term = q.strip()
+    if len(term) < 2:
+        return []
+    with services().chats.database.session() as session:
+        existing_member_ids = select(WorkspaceMember.user_id).where(WorkspaceMember.workspace_id == workspace_id)
+        pending_emails = select(WorkspaceInvitation.email).where(WorkspaceInvitation.workspace_id == workspace_id)
+        statement = (
+            select(User)
+            .where(
+                User.is_active.is_(True),
+                User.id.not_in(existing_member_ids),
+                User.email.not_in(pending_emails),
+                or_(User.email.ilike(f"%{term}%"), User.display_name.ilike(f"%{term}%")),
+            )
+            .order_by(User.email)
+            .limit(10)
+            .execution_options(skip_user_scope=True)
+        )
+        admin_email = services().settings.system_admin_email.strip().lower() if services().settings.system_admin_email else ""
+        return [
+            {"id": user.id, "email": user.email, "displayName": user.display_name}
+            for user in session.scalars(statement)
+            if user.email.lower() != admin_email
+        ]
+
+
+@app.post("/api/workspaces/current/invitations", status_code=201, tags=["Workspaces"])
+def create_workspace_invitation(payload: WorkspaceInvitationRequest, request: Request) -> dict[str, Any]:
+    require_workspace_owner(request)
+    email = payload.email.strip().lower()
+    if "@" not in email:
+        raise HTTPException(status_code=422, detail="Email lời mời không hợp lệ.")
+    item = services().workspace.invite(current_workspace_id.get(), email, payload.role, request.state.user.id, datetime.now(UTC) + timedelta(days=7))
+    result = invitation_json(item)
+    invite_url = f"{services().settings.app_web_url}/?invite={item.id}"
+    if services().email.enabled:
+        try:
+            services().email.send(email, "Lời mời vào Agent Series workspace", f"Bạn được mời vào workspace Agent Series với quyền {payload.role}.\n\nĐăng nhập Google bằng đúng email này rồi mở lời mời:\n{invite_url}\n\nLời mời hết hạn sau 7 ngày.")
+            result["emailStatus"] = "sent"
+        except Exception:  # Invitation remains valid; owner can share the URL manually.
+            result["emailStatus"] = "pending"
+    else:
+        result["emailStatus"] = "pending"
+    result["inviteUrl"] = invite_url
+    return result
+
+
+@app.patch("/api/workspaces/current/members/{user_id}", tags=["Workspaces"])
+def update_workspace_member(user_id: str, payload: WorkspaceMemberRoleRequest, request: Request) -> dict[str, str]:
+    membership = require_workspace_owner(request)
+    if membership.user_id == user_id and payload.role != "owner":
+        raise HTTPException(status_code=422, detail="Owner hiện tại không thể tự hạ quyền.")
+    item = services().workspace.update_member_role(current_workspace_id.get(), user_id, payload.role)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy thành viên.")
+    return {"userId": item.user_id, "role": item.role}
+
+
+@app.delete("/api/workspaces/current/members/{user_id}", status_code=204, tags=["Workspaces"])
+def remove_workspace_member(user_id: str, request: Request) -> None:
+    membership = require_workspace_owner(request)
+    if membership.user_id == user_id:
+        raise HTTPException(status_code=422, detail="Owner hiện tại không thể tự rời workspace.")
+    if not services().workspace.remove_member(current_workspace_id.get(), user_id):
+        raise HTTPException(status_code=404, detail="Không tìm thấy thành viên.")
+
+
+@app.post("/api/workspaces/invitations/{invitation_id}/accept", tags=["Workspaces"])
+def accept_workspace_invitation(invitation_id: str, request: Request) -> dict[str, str]:
+    member = services().workspace.accept_invitation(invitation_id, request.state.user.id, request.state.user.email, datetime.now(UTC))
+    if member is None:
+        raise HTTPException(status_code=404, detail="Lời mời không tồn tại, đã hết hạn hoặc không dành cho tài khoản này.")
+    return {"workspaceId": member.workspace_id, "role": member.role}
 
 
 def selected_settings(provider: str, model: str, user_id: str | None) -> Settings:
@@ -1068,12 +1222,13 @@ def preview_library_asset(asset_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/library/assets/{asset_id}/file", tags=["Personal library"])
-def library_asset_file(asset_id: str) -> FileResponse:
-    with services().chats.database.session() as session:
-        asset = session.get(LibraryAsset, asset_id)
-        if asset is None:
-            raise HTTPException(status_code=404, detail="Không tìm thấy artifact.")
-        path = Path(services().settings.media_dir) / asset.stored_name
+def library_asset_file(asset_id: str) -> Response:
+    asset = services().library.ensure_remote(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy artifact.")
+    if asset.storage_provider == "imagekit":
+        return RedirectResponse(services().library.storage.signed_url(asset.storage_provider, asset.stored_name, asset.storage_file_id), status_code=307)
+    path = Path(services().settings.media_dir) / asset.stored_name
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Không tìm thấy file artifact.")
     return FileResponse(path, media_type=asset.mime_type, filename=asset.name, content_disposition_type="inline")
@@ -1102,7 +1257,7 @@ def delete_library_asset(asset_id: str) -> None:
         versions = session.scalars(select(LibraryAsset).where(LibraryAsset.artifact_id == asset.artifact_id)).all()
         queue_file_cleanup(
             session,
-            [{"storage": "media", "stored_name": item.stored_name} for item in versions],
+            [{"storage": "media", "stored_name": item.stored_name, "storage_provider": item.storage_provider, "storage_file_id": item.storage_file_id} for item in versions],
             f"artifact-cleanup:{asset.artifact_id}",
         )
         for item in versions:
@@ -1326,12 +1481,13 @@ def delete_collection(collection_id: str) -> None:
 
 
 @app.get("/api/documents/{document_id}/file", tags=["Knowledge base"])
-def document_file(document_id: str) -> FileResponse:
-    with services().chats.database.session() as session:
-        document = session.get(Document, document_id)
-        if document is None:
-            raise HTTPException(status_code=404, detail="Không tìm thấy tài liệu.")
-        path = Path(services().settings.knowledge_dir) / document.stored_name
+def document_file(document_id: str) -> Response:
+    document = services().knowledge.ensure_remote(document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy tài liệu.")
+    if document.storage_provider == "imagekit":
+        return RedirectResponse(services().knowledge.storage.signed_url(document.storage_provider, document.stored_name, document.storage_file_id), status_code=307)
+    path = Path(services().settings.knowledge_dir) / document.stored_name
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Không tìm thấy file tài liệu.")
     return FileResponse(path, media_type="application/pdf", filename=document.original_name, content_disposition_type="inline")
@@ -1383,7 +1539,7 @@ def delete_document(document_id: str) -> None:
         ).all()
         for job in jobs:
             job.status, job.locked_at, job.last_error = "cancelled", None, "Tài liệu đã bị xóa."
-        queue_file_cleanup(session, [{"storage": "knowledge", "stored_name": document.stored_name}], f"document-cleanup:{document.id}")
+        queue_file_cleanup(session, [{"storage": "knowledge", "stored_name": document.stored_name, "storage_provider": document.storage_provider, "storage_file_id": document.storage_file_id}], f"document-cleanup:{document.id}")
         session.delete(document)
         session.commit()
 
@@ -1395,6 +1551,20 @@ async def upload_media(files: list[UploadFile] = File(...)) -> list[dict[str, An
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return [media_json(item) for item in uploaded]
+
+
+@app.get("/api/media/{media_id}/file", tags=["Media"])
+def media_file(media_id: str) -> Response:
+    records = services().media.repository.get_many([media_id])
+    if not records:
+        raise HTTPException(status_code=404, detail="Không tìm thấy ảnh đính kèm.")
+    media = records[0]
+    if media.storage_provider == "imagekit":
+        return RedirectResponse(services().media.storage.signed_url(media.storage_provider, media.stored_name, media.storage_file_id), status_code=307)
+    path = Path(services().settings.media_dir) / media.stored_name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Không tìm thấy ảnh đính kèm.")
+    return FileResponse(path, media_type=media.mime_type, filename=media.original_name, content_disposition_type="inline")
 
 
 @app.get("/api/projects", tags=["Projects"])
@@ -1455,8 +1625,8 @@ def delete_project(project_id: str, payload: DeleteProjectRequest) -> dict[str, 
         queue_file_cleanup(
             session,
             [
-                *[{"storage": "knowledge", "stored_name": item.stored_name} for item in documents],
-                *[{"storage": "media", "stored_name": item.stored_name} for item in assets],
+                *[{"storage": "knowledge", "stored_name": item.stored_name, "storage_provider": item.storage_provider, "storage_file_id": item.storage_file_id} for item in documents],
+                *[{"storage": "media", "stored_name": item.stored_name, "storage_provider": item.storage_provider, "storage_file_id": item.storage_file_id} for item in assets],
             ],
             f"project-cleanup:{project_id}",
         )
@@ -1656,7 +1826,7 @@ def list_plugins() -> list[dict[str, Any]]:
     return [plugin_json(item) for item in services().workspace.list(Plugin)]
 
 
-def google_audit_json(item) -> dict[str, Any]:
+def connector_audit_json(item) -> dict[str, Any]:
     return {
         "id": item.id,
         "eventType": item.event_type,
@@ -1676,6 +1846,16 @@ def set_google_plugin_connection(status: str, enabled: bool | None = None) -> No
     services().workspace.update(Plugin, plugin.id, **values)
 
 
+def set_plugin_connection(catalog_slug: str, status: str, enabled: bool | None = None) -> None:
+    plugin = services().workspace.get_plugin_by_catalog_slug(catalog_slug)
+    if plugin is None:
+        return
+    values: dict[str, Any] = {"connection_status": status}
+    if enabled is not None:
+        values["enabled"] = enabled
+    services().workspace.update(Plugin, plugin.id, **values)
+
+
 @app.get("/api/connectors/google", tags=["Connectors"])
 def google_connector_status() -> dict[str, Any]:
     return services().google_workspace.status()
@@ -1683,7 +1863,7 @@ def google_connector_status() -> dict[str, Any]:
 
 @app.get("/api/connectors/google/audit", tags=["Connectors"])
 def google_connector_audit(limit: int = Query(default=12, ge=1, le=50)) -> list[dict[str, Any]]:
-    return [google_audit_json(item) for item in services().google_workspace.repository.list_audit(GOOGLE_WORKSPACE_SLUG, limit)]
+    return [connector_audit_json(item) for item in services().google_workspace.repository.list_audit(GOOGLE_WORKSPACE_SLUG, limit)]
 
 
 @app.post("/api/connectors/google/authorize", tags=["Connectors"])
@@ -1728,6 +1908,50 @@ def google_disconnect(request: Request) -> None:
         subject_user_id=user.id,
         summary="Đã ngắt Google Workspace.",
     )
+
+
+@app.get("/api/connectors/github", tags=["Connectors"])
+def github_connector_status() -> dict[str, Any]:
+    return services().github.status()
+
+
+@app.get("/api/connectors/github/audit", tags=["Connectors"])
+def github_connector_audit(limit: int = Query(default=12, ge=1, le=50)) -> list[dict[str, Any]]:
+    return [connector_audit_json(item) for item in services().github.repository.list_audit(GITHUB_SLUG, limit)]
+
+
+@app.post("/api/connectors/github/authorize", tags=["Connectors"])
+def github_authorize() -> dict[str, str]:
+    if services().workspace.get_plugin_by_catalog_slug(GITHUB_SLUG) is None:
+        raise HTTPException(status_code=422, detail="Hãy thêm GitHub từ catalog trước khi kết nối.")
+    try:
+        return {"authorizationUrl": services().github.authorization_url()}
+    except GitHubConnectorError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/connectors/github/callback", include_in_schema=False)
+def github_callback(request: Request, installation_id: str | None = None, state: str | None = None, setup_action: str | None = None) -> RedirectResponse:
+    base_url = services().settings.app_web_url
+    if setup_action == "update" or not installation_id or not state:
+        return RedirectResponse(f"{base_url}/plugins?{urlencode({'github': 'cancelled'})}", status_code=303)
+    try:
+        services().github.complete_installation(installation_id, state)
+        set_plugin_connection(GITHUB_SLUG, "connected")
+        user = request.state.user
+        services().auth.repository.add_system_audit("plugin_connected", actor_user_id=user.id, subject_user_id=user.id, summary="Đã kết nối GitHub App (chỉ đọc).")
+        result = "connected"
+    except GitHubConnectorError:
+        result = "failed"
+    return RedirectResponse(f"{base_url}/plugins?{urlencode({'github': result})}", status_code=303)
+
+
+@app.delete("/api/connectors/github", status_code=204, tags=["Connectors"])
+def github_disconnect(request: Request) -> None:
+    services().github.disconnect()
+    set_plugin_connection(GITHUB_SLUG, "not_connected", enabled=False)
+    user = request.state.user
+    services().auth.repository.add_system_audit("plugin_disconnected", actor_user_id=user.id, subject_user_id=user.id, summary="Đã ngắt GitHub App.")
 
 
 @app.get("/api/plugin-catalog", tags=["Plugin catalog"])
@@ -1808,6 +2032,7 @@ def stream_chat(chat_id: str, content: str, attachments: list[dict]) -> Iterator
         # otherwise user-scoped repositories see no user and return no chat,
         # history or credentials.
         user_token = current_user_id.set(chat.user_id)
+        workspace_token = current_workspace_id.set(chat.workspace_id)
         try:
             events.put(("status", {"message": "Agent đang suy nghĩ..."}))
             full_history = app_services.chats.history(chat_id)
@@ -1882,6 +2107,7 @@ def stream_chat(chat_id: str, content: str, attachments: list[dict]) -> Iterator
         except Exception as exc:  # noqa: BLE001
             events.put(("error", {"message": model_error_message(chat, exc)}))
         finally:
+            current_workspace_id.reset(workspace_token)
             current_user_id.reset(user_token)
             events.put(("close", {}))
 

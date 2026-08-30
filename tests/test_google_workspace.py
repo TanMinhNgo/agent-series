@@ -67,8 +67,9 @@ def test_google_authorization_url_has_minimum_read_only_scopes_and_saved_state()
 
     assert parsed.netloc == "accounts.google.com"
     assert query["access_type"] == ["offline"]
-    assert "drive.metadata.readonly" in query["scope"][0]
+    assert "drive.readonly" in query["scope"][0]
     assert "calendar.readonly" in query["scope"][0]
+    assert "gmail.readonly" in query["scope"][0]
     assert query["state"][0] in repo.states
 
 
@@ -100,7 +101,13 @@ def test_google_executor_is_read_only_and_audits_drive_results(monkeypatch):
     tools = GoogleWorkspaceExecutor(service).tools(Plugin(id="p", slug=GOOGLE_WORKSPACE_SLUG, name="Google Workspace", enabled=True, connection_status="connected", capabilities=["search"]))
     drive = next(tool for tool in tools if tool.name == "search_google_drive_files")
 
-    assert {tool.name for tool in tools} == {"search_google_drive_files", "get_upcoming_google_calendar_events"}
+    assert {tool.name for tool in tools} == {
+        "search_google_drive_files",
+        "read_google_drive_file",
+        "search_gmail_messages",
+        "read_gmail_message",
+        "get_upcoming_google_calendar_events",
+    }
     assert "Roadmap" in drive.func("road", 50)
     assert any(event[0][1] == "tool_invoked" for event in repo.events)
 

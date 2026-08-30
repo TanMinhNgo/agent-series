@@ -10,16 +10,18 @@ from uuid import uuid4
 
 from sqlalchemy import func, select
 
-from .storage import Database, LibraryAsset
+from .storage import Database, LibraryAsset, current_user_id
+from .file_storage import FileStorageService
 
 ALLOWED_SUFFIXES = {".pdf", ".docx", ".xlsx", ".pptx", ".md", ".csv", ".json", ".txt", ".png", ".jpg", ".jpeg", ".webp", ".gif"}
 MAX_FILE_BYTES = 25 * 1024 * 1024
 
 
 class LibraryService:
-    def __init__(self, database: Database, directory: Path):
+    def __init__(self, database: Database, directory: Path, storage: FileStorageService | None = None):
         self.database, self.directory = database, directory
         self.directory.mkdir(parents=True, exist_ok=True)
+        self.storage = storage or FileStorageService(directory)
 
     def list(self, query: str = "", project_id: str | None = None, scope: str = "all") -> list[LibraryAsset]:
         with self.database.session() as session:
@@ -44,12 +46,13 @@ class LibraryService:
         suffix = Path(name).suffix.lower()
         if suffix not in ALLOWED_SUFFIXES: raise ValueError("Định dạng file chưa được hỗ trợ trong Thư viện.")
         if not data or len(data) > MAX_FILE_BYTES: raise ValueError("File phải có dung lượng từ 1 byte đến 25 MB.")
-        stored_name = f"library_{uuid4().hex}{suffix}"
-        (self.directory / stored_name).write_bytes(data)
+        stored = self.storage.upload(data, name, f"users/{current_user_id.get() or 'local'}/library/{project_id or 'global'}")
         with self.database.session() as session:
             asset = LibraryAsset(
                 name=Path(name).name[:255],
-                stored_name=stored_name,
+                stored_name=stored.stored_name,
+                storage_provider=stored.provider,
+                storage_file_id=stored.file_id,
                 mime_type=content_type or "application/octet-stream",
                 size_bytes=len(data),
                 source=source,
@@ -65,6 +68,18 @@ class LibraryService:
             if asset is None:
                 return []
             return list(session.scalars(select(LibraryAsset).where(LibraryAsset.artifact_id == asset.artifact_id).order_by(LibraryAsset.version.desc())))
+
+    def ensure_remote(self, asset_id: str) -> LibraryAsset | None:
+        with self.database.session() as session:
+            asset = session.get(LibraryAsset, asset_id)
+            if asset is None or asset.storage_provider != "local":
+                return asset
+            stored = self.storage.migrate_local(asset.stored_name, asset.name, f"users/{current_user_id.get() or 'local'}/library/{asset.project_id or 'global'}")
+            if stored is None:
+                return asset
+            asset.storage_provider, asset.stored_name, asset.storage_file_id = stored.provider, stored.stored_name, stored.file_id
+            session.commit()
+            return asset
 
     def update(self, asset_id: str, *, name: str | None = None, project_id: str | None = None, is_project_source: bool | None = None) -> LibraryAsset | None:
         with self.database.session() as session:
@@ -105,11 +120,12 @@ class LibraryService:
             if asset is None:
                 raise ValueError("Không tìm thấy artifact.")
             version = (session.scalar(select(func.max(LibraryAsset.version)).where(LibraryAsset.artifact_id == asset.artifact_id)) or 0) + 1
-            stored_name = f"library_{uuid4().hex}{suffix}"
-            (self.directory / stored_name).write_bytes(data)
+            stored = self.storage.upload(data, name, f"users/{current_user_id.get() or 'local'}/library/{asset.project_id or 'global'}")
             item = LibraryAsset(
                 name=asset.name,
-                stored_name=stored_name,
+                stored_name=stored.stored_name,
+                storage_provider=stored.provider,
+                storage_file_id=stored.file_id,
                 mime_type=content_type or "application/octet-stream",
                 size_bytes=len(data),
                 source="version",
@@ -127,8 +143,7 @@ class LibraryService:
         with self.database.session() as session:
             asset = session.get(LibraryAsset, asset_id)
             if asset is None: return False
-            path = self.directory / asset.stored_name
-            if path.exists(): path.unlink()
+            self.storage.delete(asset.storage_provider, asset.stored_name, asset.storage_file_id)
             session.delete(asset); session.commit(); return True
 
     def create_export(self, name: str, format: str, content: str, project_id: str | None = None) -> LibraryAsset:

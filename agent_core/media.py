@@ -6,28 +6,29 @@ import base64
 from pathlib import Path
 from uuid import uuid4
 
-from .storage import MediaAttachment, MediaRepository
+from .storage import MediaAttachment, MediaRepository, current_user_id
+from .file_storage import FileStorageService
 
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 
 class MediaService:
-    def __init__(self, repository: MediaRepository, media_dir: Path):
+    def __init__(self, repository: MediaRepository, media_dir: Path, storage: FileStorageService | None = None):
         self.repository = repository
         self.media_dir = media_dir
         self.media_dir.mkdir(parents=True, exist_ok=True)
+        self.storage = storage or FileStorageService(media_dir)
 
     def upload(self, name: str, mime_type: str, content: bytes) -> MediaAttachment:
         if mime_type not in ALLOWED_TYPES:
             raise ValueError("Chỉ hỗ trợ ảnh JPEG, PNG, WebP hoặc GIF.")
         if not content or len(content) > MAX_IMAGE_BYTES:
             raise ValueError("Ảnh phải có dung lượng từ 1 byte đến 10 MB.")
-        suffix = Path(name).suffix.lower() or ".bin"
-        stored_name = f"{uuid4().hex}{suffix}"
-        (self.media_dir / stored_name).write_bytes(content)
+        stored = self.storage.upload(content, name, f"users/{current_user_id.get() or 'local'}/chat")
         return self.repository.create(
-            original_name=name[:255], stored_name=stored_name, mime_type=mime_type, size_bytes=len(content)
+            original_name=name[:255], stored_name=stored.stored_name, storage_provider=stored.provider,
+            storage_file_id=stored.file_id, mime_type=mime_type, size_bytes=len(content)
         )
 
     def for_prompt(self, attachment_ids: list[str]) -> list[dict]:
@@ -53,9 +54,22 @@ class MediaService:
             hydrated.append(copy)
         return hydrated
 
+    def url_for(self, media: MediaAttachment) -> str:
+        if media.storage_provider == "local":
+            migrated = self.storage.migrate_local(media.stored_name, media.original_name, f"users/{current_user_id.get() or 'local'}/chat")
+            if migrated:
+                media = self.repository.replace_storage(media.id, migrated.provider, migrated.stored_name, migrated.file_id) or media
+        if media.storage_provider != "imagekit":
+            return f"/api/media/{media.id}/file"
+        return self.storage.signed_url(media.storage_provider, media.stored_name, media.storage_file_id)
+
     def _payload(self, media: MediaAttachment) -> dict:
-        content = (self.media_dir / media.stored_name).read_bytes()
+        if media.storage_provider == "local":
+            migrated = self.storage.migrate_local(media.stored_name, media.original_name, "chat")
+            if migrated:
+                media = self.repository.replace_storage(media.id, migrated.provider, migrated.stored_name, migrated.file_id) or media
+        content = self.storage.read(media.storage_provider, media.stored_name, media.storage_file_id)
         return {
             "id": media.id, "name": media.original_name, "mimeType": media.mime_type,
-            "url": f"/uploads/{media.stored_name}", "data": base64.b64encode(content).decode("ascii"),
+            "url": self.url_for(media), "data": base64.b64encode(content).decode("ascii"),
         }

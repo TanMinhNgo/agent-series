@@ -3,14 +3,17 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { request } from '@/src/hooks/client';
 import { queryKeys } from '@/src/hooks/query-keys';
 import type {
+  AppWorkspace,
   ConnectorAuditLog,
   GoogleConnectorStatus,
+  GitHubConnectorStatus,
   Plugin,
   PluginCatalogItem,
   Project,
   Schedule,
   ScheduleRun,
 } from '@/src/types';
+import { activeWorkspaceId, setActiveWorkspaceId } from '@/src/hooks/client';
 
 type ProjectInput = Pick<Project, 'name' | 'description' | 'status' | 'instructions' | 'memoryMode'>;
 type ScheduleInput = Pick<
@@ -58,6 +61,17 @@ const useResourceActions = <T>(kind: keyof typeof endpoints) => {
 
 export const useWorkspace = () => {
   const client = useQueryClient();
+  const workspaces = useQuery({ queryKey: queryKeys.workspaces, queryFn: () => request<AppWorkspace[]>({ url: '/workspaces' }) });
+  const workspaceMembers = useQuery({ queryKey: ['workspace-members'], queryFn: () => request<{ userId: string; email: string; displayName: string | null; role: string }[]>({ url: '/workspaces/current/members' }) });
+  const workspaceInvitations = useQuery({ queryKey: ['workspace-invitations'], queryFn: () => request<{ id: string; email: string; role: string; expiresAt: string }[]>({ url: '/workspaces/current/invitations' }), retry: false });
+  const selectWorkspace = (workspaceId: string) => {
+    setActiveWorkspaceId(workspaceId);
+    client.clear();
+  };
+  const inviteWorkspaceMember = useMutation({
+    mutationFn: (data: { email: string; role: 'editor' | 'viewer' }) => request({ url: '/workspaces/current/invitations', method: 'POST', data }),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ['workspace-invitations'] }),
+  });
   const projects = useQuery({
     queryKey: queryKeys.projects,
     queryFn: () => request<Project[]>({ url: endpoints.project.url }),
@@ -82,6 +96,14 @@ export const useWorkspace = () => {
   const googleConnectorAudit = useQuery({
     queryKey: queryKeys.googleConnectorAudit,
     queryFn: () => request<ConnectorAuditLog[]>({ url: '/connectors/google/audit' }),
+  });
+  const githubConnector = useQuery({
+    queryKey: queryKeys.githubConnector,
+    queryFn: () => request<GitHubConnectorStatus>({ url: '/connectors/github' }),
+  });
+  const githubConnectorAudit = useQuery({
+    queryKey: queryKeys.githubConnectorAudit,
+    queryFn: () => request<ConnectorAuditLog[]>({ url: '/connectors/github/audit' }),
   });
   const projectActions = useResourceActions<ProjectInput>('project');
   const deleteProject = useMutation({
@@ -141,14 +163,34 @@ export const useWorkspace = () => {
       void client.invalidateQueries({ queryKey: queryKeys.googleConnectorAudit });
     },
   });
+  const authorizeGitHub = useMutation({
+    mutationFn: () =>
+      request<{ authorizationUrl: string }>({ url: '/connectors/github/authorize', method: 'POST' }),
+  });
+  const disconnectGitHub = useMutation({
+    mutationFn: () => request<void>({ url: '/connectors/github', method: 'DELETE' }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.plugins });
+      void client.invalidateQueries({ queryKey: queryKeys.githubConnector });
+      void client.invalidateQueries({ queryKey: queryKeys.githubConnectorAudit });
+    },
+  });
 
   return {
+    workspaces,
+    workspaceMembers,
+    workspaceInvitations,
+    inviteWorkspaceMember,
+    activeWorkspaceId: activeWorkspaceId(),
+    selectWorkspace,
     projects,
     schedules,
     plugins,
     pluginCatalog,
     googleConnector,
     googleConnectorAudit,
+    githubConnector,
+    githubConnectorAudit,
     projectActions,
     deleteProject,
     scheduleActions,
@@ -158,7 +200,23 @@ export const useWorkspace = () => {
     installCatalogPlugin,
     authorizeGoogle,
     disconnectGoogle,
+    authorizeGitHub,
+    disconnectGitHub,
   };
+};
+
+export const useInvitableWorkspaceUsers = (query: string) => {
+  const normalized = query.trim();
+  return useQuery({
+    queryKey: ['workspace-invitable-users', normalized],
+    queryFn: () =>
+      request<{ id: string; email: string; displayName: string | null }[]>({
+        url: '/workspaces/current/invitable-users',
+        params: { q: normalized },
+      }),
+    enabled: normalized.length >= 2,
+    staleTime: 15_000,
+  });
 };
 
 export const useScheduleRuns = (scheduleId?: string) =>

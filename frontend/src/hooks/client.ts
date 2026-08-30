@@ -12,6 +12,14 @@ export const apiClient = axios.create({
   withCredentials: true,
 });
 
+const WORKSPACE_STORAGE_KEY = 'agent-series.workspace-id';
+
+export const activeWorkspaceId = () => localStorage.getItem(WORKSPACE_STORAGE_KEY);
+export const setActiveWorkspaceId = (workspaceId: string | null) => {
+  if (workspaceId) localStorage.setItem(WORKSPACE_STORAGE_KEY, workspaceId);
+  else localStorage.removeItem(WORKSPACE_STORAGE_KEY);
+};
+
 export const request = async <T>(config: AxiosRequestConfig): Promise<T> => {
   try {
     const isFormData = typeof FormData !== 'undefined' && config.data instanceof FormData;
@@ -20,6 +28,7 @@ export const request = async <T>(config: AxiosRequestConfig): Promise<T> => {
       headers: {
         Accept: 'application/json',
         ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+        ...(activeWorkspaceId() ? { 'X-Workspace-ID': activeWorkspaceId()! } : {}),
         ...config.headers,
       },
     });
