@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from urllib.request import urlopen
 from uuid import uuid4
 
@@ -51,12 +52,17 @@ class FileStorageService:
             self._client = ImageKit(private_key=self.private_key)
         return self._client
 
+    def _store_local(self, data: bytes) -> str:
+        """Write an opaque object created by the OS inside the configured directory."""
+        with NamedTemporaryFile(mode="wb", dir=self.directory, prefix="upload-", delete=False) as output:
+            output.write(data)
+            return Path(output.name).name
+
     def upload(self, data: bytes, original_name: str, storage_area: str) -> StoredFile:
         # The stored object name is never derived from a client-supplied file name.
-        generated_name = uuid4().hex
         if not self.imagekit_enabled:
-            self._local_path(generated_name).write_bytes(data)
-            return StoredFile("local", generated_name)
+            return StoredFile("local", self._store_local(data))
+        generated_name = uuid4().hex
         try:
             response = self._imagekit().files.upload(
                 file=data, file_name=generated_name, folder=self._imagekit_folder(storage_area),
