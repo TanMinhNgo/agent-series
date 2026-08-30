@@ -144,7 +144,7 @@ export function AppSidebar({
       </div>
       {workspaces.length ? (
         <label className="mb-4 block text-xs text-muted-foreground">
-          Workspace
+          <span>Workspace</span>
           <select
             className="mt-1 w-full rounded-lg border bg-background px-2 py-1.5 text-sm text-foreground"
             value={activeWorkspaceId || workspaces[0]?.id}
