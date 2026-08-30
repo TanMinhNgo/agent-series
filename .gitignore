@@ -42,3 +42,5 @@ docs/
 # ===== Frontend runtime =====
 frontend/node_modules/
 frontend/dist/
+
+/actions-runner/
