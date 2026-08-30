@@ -537,7 +537,8 @@ function ScheduleCard({
           {recurrenceLabels[item.recurrence]} {' · '} {nextRunLabel}
         </p>
         <p className="mt-1 text-xs text-muted-foreground">
-          {providerLabel}Đã thiết lập: {new Date(item.startsAt).toLocaleString('vi-VN')} {' · '} {lastRunLabel} {' · '}
+          {providerLabel}Đã thiết lập: {new Date(item.startsAt).toLocaleString('vi-VN')} {' · '}{' '}
+          {lastRunLabel} {' · '}
           {recurrenceLabels[item.recurrence] === 'Một lần' ? 'Một lần' : scheduleStatusLabels[item.status]}
         </p>
       </button>
@@ -793,14 +794,26 @@ function ScheduleNotifications({
   return (
     <div className="space-y-2">
       <label className="flex items-center gap-3 rounded-lg border bg-muted/30 px-3 py-2 text-sm">
-        <input type="checkbox" checked={requireWebSource} onChange={(event) => onRequireWebSourceChange(event.target.checked)} />
+        <input
+          type="checkbox"
+          checked={requireWebSource}
+          onChange={(event) => onRequireWebSourceChange(event.target.checked)}
+        />
         <span>Bắt buộc lấy nguồn web mới trước khi trả lời</span>
       </label>
       <label className="flex items-center gap-3 rounded-lg border bg-muted/30 px-3 py-2 text-sm">
-        <input type="checkbox" checked={notifyEmail} onChange={(event) => onNotifyEmailChange(event.target.checked)} />
+        <input
+          type="checkbox"
+          checked={notifyEmail}
+          onChange={(event) => onNotifyEmailChange(event.target.checked)}
+        />
         <span>Gửi email tới địa chỉ của tài khoản khi hoàn tất</span>
       </label>
-      {requireWebSource ? <p className="text-xs text-muted-foreground">Nếu không tìm được nguồn web hợp lệ, lần chạy sẽ thất bại thay vì tạo nội dung thiếu nguồn.</p> : null}
+      {requireWebSource ? (
+        <p className="text-xs text-muted-foreground">
+          Nếu không tìm được nguồn web hợp lệ, lần chạy sẽ thất bại thay vì tạo nội dung thiếu nguồn.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -825,7 +838,9 @@ function ScheduleFormValidation({
   return (
     <>
       {invalidDates ? <FormError message="Thời điểm kết thúc phải sau thời điểm bắt đầu." /> : null}
-      {missingModel ? <FormError message="Cần chọn provider và model khả dụng trước khi lưu lịch trình." /> : null}
+      {missingModel ? (
+        <FormError message="Cần chọn provider và model khả dụng trước khi lưu lịch trình." />
+      ) : null}
       {error ? <FormError message={error} /> : null}
     </>
   );
@@ -872,19 +887,25 @@ function ScheduleForm({
     <FormDialog title={schedule ? 'Sửa lịch trình' : 'Tạo lịch trình'} onClose={onClose}>
       <form
         className="space-y-4"
-        onSubmit={(event) => submitScheduleForm(event, {
-          title,
-          startsAt: new Date(startsAt).toISOString(),
-          endsAt: endsAt ? new Date(endsAt).toISOString() : null,
-          notes: notes || null,
-          projectId: projectId || null,
-          provider: selectedProvider,
-          model: selectedModel,
-          prompt,
-          recurrence,
-          requireWebSource,
-          notifyEmail,
-        }, onSave)}
+        onSubmit={(event) =>
+          submitScheduleForm(
+            event,
+            {
+              title,
+              startsAt: new Date(startsAt).toISOString(),
+              endsAt: endsAt ? new Date(endsAt).toISOString() : null,
+              notes: notes || null,
+              projectId: projectId || null,
+              provider: selectedProvider,
+              model: selectedModel,
+              prompt,
+              recurrence,
+              requireWebSource,
+              notifyEmail,
+            },
+            onSave,
+          )
+        }
       >
         <Field label="Tiêu đề">
           <input
@@ -1002,7 +1023,9 @@ function ScheduleForm({
             onChange={(event) => setNotes(event.target.value)}
           />
         </Field>
-        <ScheduleFormValidation {...{ endsAt, startsAt, configLoading: config.isLoading, selectedProvider, selectedModel, error }} />
+        <ScheduleFormValidation
+          {...{ endsAt, startsAt, configLoading: config.isLoading, selectedProvider, selectedModel, error }}
+        />
         {schedule ? (
           <ScheduleRunHistory runs={runs.data || []} loading={runs.isLoading} scheduleId={schedule.id} />
         ) : null}
@@ -1046,26 +1069,49 @@ function ScheduleRunItem({
   resendPending: boolean;
   onResend: () => void;
 }) {
-  const statusLabel = run.status === 'retrying' ? `Sẽ tự thử lại (${run.retryCount}/3)` : scheduleRunStatus[run.status] || 'Đang chạy';
-  const completionLabel = run.finishedAt ? ` · Kết thúc ${new Date(run.finishedAt).toLocaleString('vi-VN')}` : '';
-  const detail = run.status === 'retrying' ? 'Giữ nguyên chat và prompt, không tạo lượt trùng.' : run.error || run.summary || 'Đang chờ kết quả...';
+  const statusLabel =
+    run.status === 'retrying'
+      ? `Sẽ tự thử lại (${run.retryCount}/3)`
+      : scheduleRunStatus[run.status] || 'Đang chạy';
+  const completionLabel = run.finishedAt
+    ? ` · Kết thúc ${new Date(run.finishedAt).toLocaleString('vi-VN')}`
+    : '';
+  const detail =
+    run.status === 'retrying'
+      ? 'Giữ nguyên chat và prompt, không tạo lượt trùng.'
+      : run.error || run.summary || 'Đang chờ kết quả...';
   const canResend = run.status === 'succeeded' && run.emailStatus === 'failed';
   const emailSentAt = run.emailStatus === 'sent' ? run.emailSentAt : null;
   return (
     <div className="rounded-lg bg-background p-2 text-xs">
-      <p className="font-medium">{statusLabel} · Dự kiến {new Date(run.scheduledFor).toLocaleString('vi-VN')}</p>
-      <p className="mt-1 text-muted-foreground">Bắt đầu {new Date(run.startedAt).toLocaleString('vi-VN')}{completionLabel}</p>
+      <p className="font-medium">
+        {statusLabel} · Dự kiến {new Date(run.scheduledFor).toLocaleString('vi-VN')}
+      </p>
+      <p className="mt-1 text-muted-foreground">
+        Bắt đầu {new Date(run.startedAt).toLocaleString('vi-VN')}
+        {completionLabel}
+      </p>
       {run.status === 'retrying' && run.retryAt ? (
-        <p className="mt-1 text-amber-700 dark:text-amber-400">Provider đang tạm quá tải; sẽ thử lại lúc {new Date(run.retryAt).toLocaleString('vi-VN')}.</p>
+        <p className="mt-1 text-amber-700 dark:text-amber-400">
+          Provider đang tạm quá tải; sẽ thử lại lúc {new Date(run.retryAt).toLocaleString('vi-VN')}.
+        </p>
       ) : null}
       <p className="mt-1 text-muted-foreground">{detail}</p>
       {canResend ? (
         <div className="mt-1 flex flex-wrap items-center gap-2 text-amber-700 dark:text-amber-400">
           <span>Bản tin đã tạo, gửi email thất bại{run.emailError ? `: ${run.emailError}` : '.'}</span>
-          {scheduleId ? <Button type="button" size="sm" variant="secondary" disabled={resendPending} onClick={onResend}>Gửi lại email</Button> : null}
+          {scheduleId ? (
+            <Button type="button" size="sm" variant="secondary" disabled={resendPending} onClick={onResend}>
+              Gửi lại email
+            </Button>
+          ) : null}
         </div>
       ) : null}
-      {emailSentAt ? <p className="mt-1 text-muted-foreground">Đã gửi email lúc {new Date(emailSentAt).toLocaleString('vi-VN')}.</p> : null}
+      {emailSentAt ? (
+        <p className="mt-1 text-muted-foreground">
+          Đã gửi email lúc {new Date(emailSentAt).toLocaleString('vi-VN')}.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -1095,7 +1141,9 @@ function ScheduleRunHistory({
               run={run}
               scheduleId={scheduleId}
               resendPending={resendScheduleRunEmail.isPending}
-              onResend={() => void resendScheduleRunEmail.mutateAsync({ scheduleId: scheduleId!, runId: run.id })}
+              onResend={() =>
+                void resendScheduleRunEmail.mutateAsync({ scheduleId: scheduleId!, runId: run.id })
+              }
             />
           ))}
         </div>
@@ -1503,16 +1551,38 @@ function GitHubActions({
   onDisconnect: () => void;
   onToggle: () => Promise<void>;
 }) {
-  if (!plugin) return <Button size="sm" onClick={onInstall} disabled={busy}>Thêm GitHub</Button>;
-  if (!configured) return <Button size="sm" variant="outline" disabled>Thiếu cấu hình .env</Button>;
-  if (!connected) return <Button size="sm" onClick={() => void onConnect().catch(() => undefined)} disabled={busy}>Kết nối GitHub</Button>;
+  if (!plugin)
+    return (
+      <Button size="sm" onClick={onInstall} disabled={busy}>
+        Thêm GitHub
+      </Button>
+    );
+  if (!configured)
+    return (
+      <Button size="sm" variant="outline" disabled>
+        Thiếu cấu hình .env
+      </Button>
+    );
+  if (!connected)
+    return (
+      <Button size="sm" onClick={() => void onConnect().catch(() => undefined)} disabled={busy}>
+        Kết nối GitHub
+      </Button>
+    );
   const toggleLabel = plugin.enabled ? 'Tắt trong chat' : 'Bật cho chat';
   return (
     <>
-      <Button size="sm" variant={plugin.enabled ? 'secondary' : 'default'} onClick={() => void onToggle().catch(() => undefined)} disabled={busy}>
+      <Button
+        size="sm"
+        variant={plugin.enabled ? 'secondary' : 'default'}
+        onClick={() => void onToggle().catch(() => undefined)}
+        disabled={busy}
+      >
         {toggleLabel}
       </Button>
-      <Button size="sm" variant="outline" onClick={onDisconnect} disabled={busy}>Ngắt kết nối</Button>
+      <Button size="sm" variant="outline" onClick={onDisconnect} disabled={busy}>
+        Ngắt kết nối
+      </Button>
     </>
   );
 }
@@ -1563,7 +1633,9 @@ function GitHubCard({
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <GitHubActions {...{ plugin, configured, connected, busy, onInstall, onConnect, onDisconnect, onToggle }} />
+          <GitHubActions
+            {...{ plugin, configured, connected, busy, onInstall, onConnect, onDisconnect, onToggle }}
+          />
         </div>
       </div>
       {!configured && plugin ? (
