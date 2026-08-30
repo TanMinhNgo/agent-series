@@ -739,6 +739,13 @@ def create_workspace_invitation(payload: WorkspaceInvitationRequest, request: Re
     return result
 
 
+@app.delete("/api/workspaces/current/invitations/{invitation_id}", status_code=204, tags=["Workspaces"], responses=API_ERROR_RESPONSES)
+def cancel_workspace_invitation(invitation_id: str, request: Request) -> None:
+    require_workspace_owner(request)
+    if not services().workspace.cancel_invitation(current_workspace_id.get(), invitation_id):
+        raise HTTPException(status_code=404, detail="Không tìm thấy lời mời.")
+
+
 @app.patch("/api/workspaces/current/members/{user_id}", tags=["Workspaces"], responses=API_ERROR_RESPONSES)
 def update_workspace_member(user_id: str, payload: WorkspaceMemberRoleRequest, request: Request) -> dict[str, str]:
     membership = require_workspace_owner(request)

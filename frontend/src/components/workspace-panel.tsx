@@ -26,6 +26,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { PluginBrandIcon } from '@/src/components/plugin-brand-icon';
 import { useGetConfig } from '@/src/hooks/use-get-config';
 import { useInvitableWorkspaceUsers, useScheduleRuns, useWorkspace } from '@/src/hooks/use-workspace';
+import { useAuth } from '@/src/hooks/use-auth';
 import { useProjectDeletePreview } from '@/src/hooks/use-project-delete-preview';
 import type {
   ConnectorAuditLog,
@@ -35,6 +36,7 @@ import type {
   PluginCatalogItem,
   Project,
   Schedule,
+  WorkspaceRole,
 } from '@/src/types';
 
 export type WorkspaceView = 'projects' | 'schedules' | 'plugins' | 'members';
@@ -1862,7 +1864,19 @@ function FormActions({ busy, onClose, submit }: { busy: boolean; onClose: () => 
   );
 }
 function MembersView() {
-  const { workspaceMembers, workspaceInvitations, inviteWorkspaceMember } = useWorkspace();
+  const {
+    workspaces,
+    workspaceMembers,
+    workspaceInvitations,
+    inviteWorkspaceMember,
+    createWorkspace,
+    updateWorkspaceMember,
+    removeWorkspaceMember,
+    cancelWorkspaceInvitation,
+    selectWorkspace,
+  } = useWorkspace();
+  const { session } = useAuth();
+  const [workspaceName, setWorkspaceName] = useState('');
   const [email, setEmail] = useState('');
   const [search, setSearch] = useState('');
   const [role, setRole] = useState<'editor' | 'viewer'>('viewer');
@@ -1879,6 +1893,31 @@ function MembersView() {
         <UserRound size={18} />
         <h1 className="text-2xl font-semibold">Thành viên workspace</h1>
       </div>
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>Tạo workspace cộng tác</CardTitle>
+          <CardDescription>Workspace mới sẽ tự chọn sau khi tạo. Bạn là owner mặc định.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form
+            className="flex flex-col gap-3 sm:flex-row"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const name = workspaceName.trim();
+              if (!name) return;
+              void createWorkspace.mutateAsync({ name }).then((workspace) => {
+                setWorkspaceName('');
+                selectWorkspace(workspace.id);
+              });
+            }}
+          >
+            <input className="workspace-input flex-1" required maxLength={160} placeholder="Ví dụ: Nhóm sản phẩm" value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} />
+            <Button type="submit" disabled={createWorkspace.isPending}><Plus /> Tạo workspace</Button>
+          </form>
+          {createWorkspace.error ? <FormError message={createWorkspace.error.message} /> : null}
+          <p className="mt-3 text-xs text-muted-foreground">Bạn hiện có {workspaces.data?.length || 0} workspace. Dùng selector Sidebar để chuyển.</p>
+        </CardContent>
+      </Card>
       <Card className="mb-6">
         <CardHeader>
           <CardTitle>Mời thành viên</CardTitle>
@@ -1962,18 +2001,37 @@ function MembersView() {
         <CardContent>
           <ul className="space-y-3">
             {(workspaceMembers.data || []).map((member) => (
-              <li key={member.userId} className="flex items-center justify-between border-b pb-3 text-sm">
-                <span>
-                  {member.displayName || member.email}
-                  <span className="ml-2 text-muted-foreground">{member.email}</span>
-                </span>
-                <Badge variant="secondary">{member.role}</Badge>
+              <li key={member.userId} className="flex flex-wrap items-center justify-between gap-2 border-b pb-3 text-sm">
+                <span>{member.displayName || member.email}<span className="ml-2 text-muted-foreground">{member.email}</span></span>
+                {member.userId === session.user?.id ? (
+                  <Badge variant="secondary">{member.role}</Badge>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <select
+                      className="workspace-input h-8 py-1 text-xs"
+                      value={member.role}
+                      disabled={updateWorkspaceMember.isPending || removeWorkspaceMember.isPending}
+                      onChange={(event) => void updateWorkspaceMember.mutateAsync({ userId: member.userId, role: event.target.value as WorkspaceRole })}
+                    >
+                      <option value="viewer">Viewer</option>
+                      <option value="editor">Editor</option>
+                      <option value="owner">Owner</option>
+                    </select>
+                    <Button size="sm" variant="ghost" disabled={removeWorkspaceMember.isPending} onClick={() => void removeWorkspaceMember.mutateAsync(member.userId)}><Trash2 /> Xóa</Button>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
           {workspaceInvitations.data?.length ? (
-            <div className="mt-5 text-sm text-muted-foreground">
-              Đang chờ: {workspaceInvitations.data.map((item) => item.email).join(', ')}
+            <div className="mt-5 space-y-2 text-sm text-muted-foreground">
+              <p>Đang chờ lời mời</p>
+              {workspaceInvitations.data.map((item) => (
+                <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2">
+                  <span>{item.email} · {item.role} · hết hạn {new Date(item.expiresAt).toLocaleString('vi-VN')}</span>
+                  <Button size="sm" variant="ghost" disabled={cancelWorkspaceInvitation.isPending} onClick={() => void cancelWorkspaceInvitation.mutateAsync(item.id)}><Trash2 /> Hủy lời mời</Button>
+                </div>
+              ))}
             </div>
           ) : null}
           {workspaceMembers.error ? (

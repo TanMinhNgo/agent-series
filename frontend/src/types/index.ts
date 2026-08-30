@@ -21,6 +21,9 @@ export type {
   Project,
   Schedule,
   ScheduleRun,
+  WorkspaceInvitation,
+  WorkspaceMember,
+  WorkspaceRole,
 } from './workspace';
 export type { Theme } from './theme';
 export type { PublicShare } from './share';

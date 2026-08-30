@@ -93,3 +93,19 @@ export type AppWorkspace = {
   isPersonal: boolean;
   role: 'owner' | 'editor' | 'viewer';
 };
+
+export type WorkspaceRole = AppWorkspace['role'];
+export type WorkspaceMember = {
+  userId: string;
+  email: string;
+  displayName: string | null;
+  role: WorkspaceRole;
+};
+export type WorkspaceInvitation = {
+  id: string;
+  email: string;
+  role: Exclude<WorkspaceRole, 'owner'>;
+  expiresAt: string;
+  inviteUrl?: string;
+  emailStatus?: 'sent' | 'pending';
+};

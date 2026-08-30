@@ -940,6 +940,19 @@ class WorkspaceRepository:
         with self.database.session() as session:
             return list(session.scalars(select(WorkspaceInvitation).where(WorkspaceInvitation.workspace_id == workspace_id).order_by(WorkspaceInvitation.created_at.desc()).execution_options(skip_user_scope=True)))
 
+    def cancel_invitation(self, workspace_id: str, invitation_id: str) -> bool:
+        with self.database.session() as session:
+            invitation = session.scalar(
+                select(WorkspaceInvitation)
+                .where(WorkspaceInvitation.id == invitation_id, WorkspaceInvitation.workspace_id == workspace_id)
+                .execution_options(skip_user_scope=True)
+            )
+            if invitation is None:
+                return False
+            session.delete(invitation)
+            session.commit()
+            return True
+
     def accept_invitation(self, invitation_id: str, user_id: str, email: str, now: datetime) -> WorkspaceMember | None:
         with self.database.session() as session:
             invitation = session.get(WorkspaceInvitation, invitation_id, execution_options={"skip_user_scope": True})

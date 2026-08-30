@@ -12,6 +12,9 @@ import type {
   Project,
   Schedule,
   ScheduleRun,
+  WorkspaceInvitation,
+  WorkspaceMember,
+  WorkspaceRole,
 } from '@/src/types';
 import { activeWorkspaceId, setActiveWorkspaceId } from '@/src/hooks/client';
 
@@ -68,14 +71,14 @@ export const useWorkspace = () => {
   const workspaceMembers = useQuery({
     queryKey: ['workspace-members'],
     queryFn: () =>
-      request<{ userId: string; email: string; displayName: string | null; role: string }[]>({
+      request<WorkspaceMember[]>({
         url: '/workspaces/current/members',
       }),
   });
   const workspaceInvitations = useQuery({
     queryKey: ['workspace-invitations'],
     queryFn: () =>
-      request<{ id: string; email: string; role: string; expiresAt: string }[]>({
+      request<WorkspaceInvitation[]>({
         url: '/workspaces/current/invitations',
       }),
     retry: false,
@@ -87,6 +90,23 @@ export const useWorkspace = () => {
   const inviteWorkspaceMember = useMutation({
     mutationFn: (data: { email: string; role: 'editor' | 'viewer' }) =>
       request({ url: '/workspaces/current/invitations', method: 'POST', data }),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ['workspace-invitations'] }),
+  });
+  const createWorkspace = useMutation({
+    mutationFn: (data: { name: string }) => request<AppWorkspace>({ url: '/workspaces', method: 'POST', data }),
+    onSuccess: () => void client.invalidateQueries({ queryKey: queryKeys.workspaces }),
+  });
+  const updateWorkspaceMember = useMutation({
+    mutationFn: ({ userId, role }: { userId: string; role: WorkspaceRole }) =>
+      request({ url: `/workspaces/current/members/${userId}`, method: 'PATCH', data: { role } }),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ['workspace-members'] }),
+  });
+  const removeWorkspaceMember = useMutation({
+    mutationFn: (userId: string) => request<void>({ url: `/workspaces/current/members/${userId}`, method: 'DELETE' }),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ['workspace-members'] }),
+  });
+  const cancelWorkspaceInvitation = useMutation({
+    mutationFn: (invitationId: string) => request<void>({ url: `/workspaces/current/invitations/${invitationId}`, method: 'DELETE' }),
     onSuccess: () => void client.invalidateQueries({ queryKey: ['workspace-invitations'] }),
   });
   const projects = useQuery({
@@ -198,6 +218,10 @@ export const useWorkspace = () => {
     workspaceMembers,
     workspaceInvitations,
     inviteWorkspaceMember,
+    createWorkspace,
+    updateWorkspaceMember,
+    removeWorkspaceMember,
+    cancelWorkspaceInvitation,
     activeWorkspaceId: activeWorkspaceId(),
     selectWorkspace,
     projects,
