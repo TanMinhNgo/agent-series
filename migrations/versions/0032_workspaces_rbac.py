@@ -23,6 +23,8 @@ OWNED_TABLES = (
     "connector_connections", "oauth_states", "connector_audit_logs", "documents",
     "document_chunks", "knowledge_collections", "background_jobs",
 )
+USERS_ID_FOREIGN_KEY = "users.id"
+SET_NULL = "SET NULL"
 
 
 def upgrade() -> None:
@@ -31,7 +33,7 @@ def upgrade() -> None:
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("name", sa.String(160), nullable=False),
         sa.Column("is_personal", sa.Boolean(), nullable=False, server_default=sa.false()),
-        sa.Column("created_by_user_id", sa.String(36), sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True),
+        sa.Column("created_by_user_id", sa.String(36), sa.ForeignKey(USERS_ID_FOREIGN_KEY, ondelete=SET_NULL), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     )
@@ -40,7 +42,7 @@ def upgrade() -> None:
         "workspace_members",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("workspace_id", sa.String(36), sa.ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("user_id", sa.String(36), sa.ForeignKey(USERS_ID_FOREIGN_KEY, ondelete="CASCADE"), nullable=False),
         sa.Column("role", sa.String(16), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint("workspace_id", "user_id", name="uq_workspace_member"),
@@ -53,7 +55,7 @@ def upgrade() -> None:
         sa.Column("workspace_id", sa.String(36), sa.ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False),
         sa.Column("email", sa.String(320), nullable=False),
         sa.Column("role", sa.String(16), nullable=False),
-        sa.Column("invited_by_user_id", sa.String(36), sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True),
+        sa.Column("invited_by_user_id", sa.String(36), sa.ForeignKey(USERS_ID_FOREIGN_KEY, ondelete=SET_NULL), nullable=True),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint("workspace_id", "email", name="uq_workspace_invitation_email"),

@@ -13,6 +13,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker, with_loader_criteria
 
 GLOBAL_DOCUMENT_SCOPE = "__library__"
+WORKSPACE_ID_FOREIGN_KEY = "workspaces.id"
+SET_NULL = "SET NULL"
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
@@ -38,7 +40,7 @@ class UserOwned:
     # Data remains attributable to its creator, but visibility is controlled by
     # workspace membership.  Keeping both columns also preserves per-user
     # credentials and scheduled-job ownership.
-    workspace_id: Mapped[str | None] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True)
+    workspace_id: Mapped[str | None] = mapped_column(ForeignKey(WORKSPACE_ID_FOREIGN_KEY, ondelete="CASCADE"), nullable=True, index=True)
 
 
 class User(Base):
@@ -57,7 +59,7 @@ class Workspace(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     name: Mapped[str] = mapped_column(String(160))
     is_personal: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete=SET_NULL), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
@@ -66,7 +68,7 @@ class WorkspaceMember(Base):
     __tablename__ = "workspace_members"
     __table_args__ = (UniqueConstraint("workspace_id", "user_id", name="uq_workspace_member"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey(WORKSPACE_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     role: Mapped[str] = mapped_column(String(16), default="viewer")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -76,10 +78,10 @@ class WorkspaceInvitation(Base):
     __tablename__ = "workspace_invitations"
     __table_args__ = (UniqueConstraint("workspace_id", "email", name="uq_workspace_invitation_email"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey(WORKSPACE_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
     email: Mapped[str] = mapped_column(String(320), index=True)
     role: Mapped[str] = mapped_column(String(16), default="viewer")
-    invited_by_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    invited_by_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete=SET_NULL), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
@@ -143,8 +145,8 @@ class SystemAuditLog(Base):
     __tablename__ = "system_audit_logs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    actor_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
-    subject_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    actor_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete=SET_NULL), nullable=True, index=True)
+    subject_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete=SET_NULL), nullable=True, index=True)
     event_type: Mapped[str] = mapped_column(String(64), index=True)
     summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -189,11 +191,11 @@ class Chat(UserOwned, Base):
     pinned: Mapped[bool] = mapped_column(Boolean, default=False)
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
     is_unread: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    context_source_chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id", ondelete="SET NULL"), nullable=True)
+    context_source_chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id", ondelete=SET_NULL), nullable=True)
     project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
-    parent_chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id", ondelete="SET NULL"), nullable=True, index=True)
+    parent_chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id", ondelete=SET_NULL), nullable=True, index=True)
     branch_from_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    collection_id: Mapped[str | None] = mapped_column(ForeignKey("knowledge_collections.id", ondelete="SET NULL"), nullable=True, index=True)
+    collection_id: Mapped[str | None] = mapped_column(ForeignKey("knowledge_collections.id", ondelete=SET_NULL), nullable=True, index=True)
 
 
 class ChatMemoryChunk(UserOwned, Base):
@@ -346,7 +348,7 @@ class Schedule(UserOwned, Base):
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
-    chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id", ondelete="SET NULL"), nullable=True)
+    chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id", ondelete=SET_NULL), nullable=True)
     provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     model: Mapped[str | None] = mapped_column(String(160), nullable=True)
     prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -431,7 +433,7 @@ class ConnectorAuditLog(UserOwned, Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     connector_slug: Mapped[str] = mapped_column(String(80), index=True)
-    connection_id: Mapped[str | None] = mapped_column(ForeignKey("connector_connections.id", ondelete="SET NULL"), nullable=True, index=True)
+    connection_id: Mapped[str | None] = mapped_column(ForeignKey("connector_connections.id", ondelete=SET_NULL), nullable=True, index=True)
     event_type: Mapped[str] = mapped_column(String(64), index=True)
     tool_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     summary: Mapped[str | None] = mapped_column(String(500), nullable=True)

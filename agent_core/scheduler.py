@@ -179,83 +179,63 @@ class ScheduleWorker:
 
     def _run_turn(self, schedule: Schedule, run_id: str, prompt_persisted: bool) -> None:
         try:
-            # ContextVar values do not cross into worker threads. Restore the
-            # owner so user-scoped repositories can access this schedule's chat.
-            # An old ownerless linked chat is safely replaced on its next run.
-            chat = self.ensure_chat(schedule) if prompt_persisted else self.prepare_chat_for_run(schedule)
-            try:
-                memory_context = self.services.memory.recall(
-                    schedule.prompt or schedule.title, chat.id, chat.context_source_chat_id
-                )
-            except Exception:  # noqa: BLE001
-                memory_context = ""
-            plugin_tools = connected_read_tools(self.services.workspace.list_plugins())
-            full_history = self.services.chats.history(chat.id)
-            prompt = schedule.prompt or schedule.title
-            # Grounding runs before the provider call so a sourceless digest is
-            # never generated, and no model quota is spent when Tavily is down.
-            web_sources = self.services.web_search.require_sources(prompt) if schedule.require_web_source else None
-            agent = make_agent(
-                self.services,
-                chat,
-                memory_context=memory_context,
-                plugin_tools=plugin_tools,
-                # `agent.run(append_user_message=False)` ignores its prompt argument and
-                # reads the last history message, so grounding must be injected here.
-                # `make_agent` copies this list, keeping the persisted prompt clean.
-                history=self._grounded_history(full_history, prompt, web_sources) if web_sources else full_history,
-                allow_schedule_proposals=False,
-            )
-            initial_history_length = len(agent.history)
-            result = agent.run(prompt, append_user_message=False)
-            if result.content_blocks:
-                agent.history[-1]["content_blocks"] = result.content_blocks
-            saved_history = persisted_history(full_history, agent.history, initial_history_length)
-            turn_created_at = datetime.now(UTC).isoformat()
-            for item in saved_history[len(full_history):]:
-                item.setdefault("created_at", turn_created_at)
-            if web_sources and saved_history:
-                saved_history[-1]["sources"] = web_sources["sources"]
-            self.services.chats.replace_history(chat.id, saved_history)
-            self.services.chats.set_unread(chat.id, True)
-            BackgroundJobRepository(self.services.chats.database).enqueue("memory_index", {"chat_id": chat.id})
-            summary = result.text[:500]
-            self.runs.finish(run_id, summary=summary)
-            try:
-                self.notify(schedule, run_id, chat, summary)
-            except Exception:  # noqa: BLE001 - the run is already finished; never reopen it
-                pass
+            self._complete_turn(schedule, run_id, prompt_persisted)
         except Exception as exc:  # noqa: BLE001
-            transient = self._is_transient_error(exc)
-            try:
-                chat = self.ensure_chat(schedule)
-                if transient:
-                    retry = self.runs.schedule_retry(
-                        run_id,
-                        "Provider tạm thời không khả dụng; đang chờ tự thử lại.",
-                        RETRY_DELAYS_MINUTES,
-                    )
-                    if retry is not None:
-                        # The retry itself owns the status/error shown in the run log;
-                        # leave chat untouched so its user prompt is never duplicated.
-                        return
-                history = self.services.chats.history(chat.id)
-                history.append({
-                    "role": "assistant",
-                    "content": self._final_failure_message(chat, transient, exc),
-                    "created_at": datetime.now(UTC).isoformat(),
-                })
-                self.services.chats.replace_history(chat.id, history)
-                self.services.chats.set_unread(chat.id, True)
-            except Exception:
-                pass
-            if isinstance(exc, WebSourceUnavailable):
-                run_error = f"Không lấy được nguồn web mới: {exc}"
-            elif transient:
-                run_error = "Provider tạm thời không khả dụng; đã hết số lần tự thử lại."
-            else:
-                run_error = "Lỗi không thể tự thử lại; xem cấu hình provider và thử lại."
-            self.runs.finish(run_id, error=run_error)
+            self._handle_turn_failure(schedule, run_id, exc)
+
+    def _complete_turn(self, schedule: Schedule, run_id: str, prompt_persisted: bool) -> None:
+        chat = self.ensure_chat(schedule) if prompt_persisted else self.prepare_chat_for_run(schedule)
+        prompt = schedule.prompt or schedule.title
+        try:
+            memory_context = self.services.memory.recall(prompt, chat.id, chat.context_source_chat_id)
+        except Exception:  # noqa: BLE001
+            memory_context = ""
+        full_history = self.services.chats.history(chat.id)
+        web_sources = self.services.web_search.require_sources(prompt) if schedule.require_web_source else None
+        agent = make_agent(
+            self.services, chat, memory_context=memory_context,
+            plugin_tools=connected_read_tools(self.services.workspace.list_plugins()),
+            history=self._grounded_history(full_history, prompt, web_sources) if web_sources else full_history,
+            allow_schedule_proposals=False,
+        )
+        initial_history_length = len(agent.history)
+        result = agent.run(prompt, append_user_message=False)
+        if result.content_blocks:
+            agent.history[-1]["content_blocks"] = result.content_blocks
+        saved_history = persisted_history(full_history, agent.history, initial_history_length)
+        for item in saved_history[len(full_history):]:
+            item.setdefault("created_at", datetime.now(UTC).isoformat())
+        if web_sources and saved_history:
+            saved_history[-1]["sources"] = web_sources["sources"]
+        self.services.chats.replace_history(chat.id, saved_history)
+        self.services.chats.set_unread(chat.id, True)
+        BackgroundJobRepository(self.services.chats.database).enqueue("memory_index", {"chat_id": chat.id})
+        summary = result.text[:500]
+        self.runs.finish(run_id, summary=summary)
+        try:
+            self.notify(schedule, run_id, chat, summary)
+        except Exception:  # noqa: BLE001 - the run is already finished; never reopen it
+            pass
+
+    def _handle_turn_failure(self, schedule: Schedule, run_id: str, error: Exception) -> None:
+        transient = self._is_transient_error(error)
+        try:
+            chat = self.ensure_chat(schedule)
+            if transient and self.runs.schedule_retry(run_id, "Provider tạm thời không khả dụng; đang chờ tự thử lại.", RETRY_DELAYS_MINUTES) is not None:
+                return
+            history = self.services.chats.history(chat.id)
+            history.append({"role": "assistant", "content": self._final_failure_message(chat, transient, error), "created_at": datetime.now(UTC).isoformat()})
+            self.services.chats.replace_history(chat.id, history)
+            self.services.chats.set_unread(chat.id, True)
+        except Exception:  # noqa: BLE001 - report the original failure even if history persistence fails
+            pass
+        if isinstance(error, WebSourceUnavailable):
+            run_error = f"Không lấy được nguồn web mới: {error}"
+        elif transient:
+            run_error = "Provider tạm thời không khả dụng; đã hết số lần tự thử lại."
+        else:
+            run_error = "Lỗi không thể tự thử lại; xem cấu hình provider và thử lại."
+        self.runs.finish(run_id, error=run_error)
 
 
 def build_worker() -> ScheduleWorker:

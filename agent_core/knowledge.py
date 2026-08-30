@@ -18,7 +18,8 @@ from .tools.base import ToolSpec
 
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 120
-ALLOWED_DOCUMENT_SUFFIXES = {".pdf", ".docx", ".md"}
+DOCX_SUFFIX = ".docx"
+ALLOWED_DOCUMENT_SUFFIXES = {".pdf", DOCX_SUFFIX, ".md"}
 NO_DOCUMENTS_RESULT = "Không có tài liệu nào đã index để trả lời câu hỏi này."
 
 
@@ -48,7 +49,7 @@ def extract_document_parts(path: Path, suffix: str) -> tuple[list[tuple[int, str
             ],
             len(reader.pages),
         )
-    if suffix == ".docx":
+    if suffix == DOCX_SUFFIX:
         from docx import Document as DocxDocument
 
         text = "\n".join(item.text for item in DocxDocument(BytesIO(path.read_bytes())).paragraphs)
@@ -66,7 +67,7 @@ def extract_document_parts_bytes(data: bytes, suffix: str) -> tuple[list[tuple[i
     if suffix == ".pdf":
         reader = PdfReader(BytesIO(data))
         return ([(page_number, chunk) for page_number, page in enumerate(reader.pages, start=1) for chunk in _chunks(page.extract_text() or "")], len(reader.pages))
-    if suffix == ".docx":
+    if suffix == DOCX_SUFFIX:
         from docx import Document as DocxDocument
         text = "\n".join(item.text for item in DocxDocument(BytesIO(data)).paragraphs)
     elif suffix == ".md":

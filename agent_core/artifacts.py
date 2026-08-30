@@ -16,6 +16,7 @@ from .file_storage import FileStorageService
 from .tools.base import ToolSpec
 
 PREVIEW_LIMIT = 30_000
+ARTIFACT_NOT_FOUND = "Không tìm thấy artifact."
 
 
 def extract_artifact_text(data: bytes | Path, suffix: str) -> str:
@@ -62,11 +63,11 @@ class ArtifactService:
     def preview(self, asset_id: str) -> dict:
         asset = self._ensure_remote(asset_id)
         if asset is None:
-            raise ValueError("Không tìm thấy artifact.")
+            raise ValueError(ARTIFACT_NOT_FOUND)
         with self.database.session() as session:
             asset = session.get(LibraryAsset, asset_id)
             if asset is None:
-                raise ValueError("Không tìm thấy artifact.")
+                raise ValueError(ARTIFACT_NOT_FOUND)
             suffix = Path(asset.name).suffix.lower()
             if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
                 return {"kind": "image"}
@@ -83,7 +84,7 @@ class ArtifactService:
         with self.database.session() as session:
             asset = session.get(LibraryAsset, asset_id)
             if asset is None:
-                raise ValueError("Không tìm thấy artifact.")
+                raise ValueError(ARTIFACT_NOT_FOUND)
             asset.index_status, asset.index_error = "indexing", None
             session.query(ArtifactChunk).filter(ArtifactChunk.asset_id == asset_id).delete()
             session.commit()

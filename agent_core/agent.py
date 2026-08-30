@@ -66,6 +66,17 @@ class Agent:
         """Xoá lịch sử để bắt đầu cuộc trò chuyện mới."""
         self.history = []
 
+    def _run_tool_calls(self, calls: list[dict], steps: list[Step], on_step: Callable[[dict], None] | None) -> None:
+        """Run requested tools and append their observations to the conversation."""
+        for call in calls:
+            if on_step:
+                on_step({"type": "tool_call", "name": call["name"], "args": call["args"]})
+            result = self.registry.run(call["name"], call["args"])
+            steps.append(Step(tool=call["name"], args=call["args"], result=result))
+            if on_step:
+                on_step({"type": "tool_result", "name": call["name"], "result": result})
+            self.history.append({"role": "tool", "id": call["id"], "name": call["name"], "content": result})
+
     def run(
         self,
         user_text: str,
@@ -110,23 +121,7 @@ class Agent:
                 return AgentResult(text=response.markdown, steps=steps, content_blocks=response.blocks)
 
             # (C) Model muốn gọi tool -> chạy TẤT CẢ tool nó yêu cầu, rồi đưa kết quả lại.
-            for call in reply.tool_calls:
-                if on_step:
-                    on_step({"type": "tool_call", "name": call["name"], "args": call["args"]})
-
-                result = self.registry.run(call["name"], call["args"])
-                steps.append(Step(tool=call["name"], args=call["args"], result=result))
-
-                if on_step:
-                    on_step({"type": "tool_result", "name": call["name"], "result": result})
-
-                # Đưa kết quả tool vào lịch sử để model "quan sát" ở vòng lặp kế tiếp.
-                self.history.append({
-                    "role": "tool",
-                    "id": call["id"],
-                    "name": call["name"],
-                    "content": result,
-                })
+            self._run_tool_calls(reply.tool_calls, steps, on_step)
             # Quay lại đầu vòng lặp: model xem kết quả tool rồi quyết định bước tiếp theo.
 
         # Nếu chạm giới hạn số bước mà vẫn chưa xong -> dừng an toàn và báo cho người dùng.

@@ -353,6 +353,20 @@ class OllamaClient:
     def _to_tools(tools: list[ToolSpec]) -> list[dict]:
         return [{"type": "function", "function": {"name": tool.name, "description": tool.description, "parameters": tool.parameters}} for tool in tools]
 
+    @staticmethod
+    def _tool_calls(message: dict) -> list[dict]:
+        calls = []
+        for index, call in enumerate(message.get("tool_calls") or []):
+            function = call.get("function") or {}
+            arguments = function.get("arguments") or {}
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    arguments = {}
+            calls.append({"id": call.get("id") or f"ollama_call_{index}", "name": function.get("name", ""), "args": arguments if isinstance(arguments, dict) else {}})
+        return calls
+
     def complete(self, system: str, history: list[dict], tools: list[ToolSpec]) -> NormalizedReply:
         payload = {
             "model": self._model,
@@ -381,17 +395,7 @@ class OllamaClient:
             raise OllamaUnavailableError("Ollama trả về phản hồi không hợp lệ.") from exc
 
         message = body.get("message") or {}
-        calls = []
-        for index, call in enumerate(message.get("tool_calls") or []):
-            function = call.get("function") or {}
-            arguments = function.get("arguments") or {}
-            if isinstance(arguments, str):
-                try:
-                    arguments = json.loads(arguments)
-                except json.JSONDecodeError:
-                    arguments = {}
-            calls.append({"id": call.get("id") or f"ollama_call_{index}", "name": function.get("name", ""), "args": arguments if isinstance(arguments, dict) else {}})
-        return NormalizedReply(text=str(message.get("content") or "").strip(), tool_calls=calls)
+        return NormalizedReply(text=str(message.get("content") or "").strip(), tool_calls=self._tool_calls(message))
 
 
 # ============================================================================

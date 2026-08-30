@@ -47,6 +47,15 @@ from agent_core.tools import ToolRegistry, ToolSpec, build_default_registry
 from agent_core.notifications import EmailNotificationService, public_chat_url, schedule_run_email
 from agent_core.web_search import WebSearchService, build_web_search_tool, sources_from_web_steps
 
+VIETNAM_TIMEZONE = "Asia/Ho_Chi_Minh"
+API_ERROR_RESPONSES = {
+    403: {"description": "Không có quyền thực hiện thao tác này."},
+    404: {"description": "Không tìm thấy tài nguyên."},
+    409: {"description": "Trạng thái hiện tại không cho phép thao tác."},
+    422: {"description": "Dữ liệu yêu cầu không hợp lệ."},
+    502: {"description": "Dịch vụ phụ thuộc trả lỗi."},
+    503: {"description": "Dịch vụ tạm thời không khả dụng."},
+}
 
 @dataclass
 class Services:
@@ -207,7 +216,7 @@ class ScheduleRequest(BaseModel):
     recurrence: Literal["once", "daily", "weekly"] = "once"
     status: Literal["active", "paused", "completed"] = "active"
     next_run_at: datetime | None = Field(default=None, alias="nextRunAt")
-    timezone: str = "Asia/Ho_Chi_Minh"
+    timezone: str = VIETNAM_TIMEZONE
 
     model_config = {"populate_by_name": True}
 
@@ -238,7 +247,7 @@ class ScheduleProposalPayload(BaseModel):
     prompt: str = Field(min_length=1, max_length=10_000)
     starts_at: datetime = Field(alias="startsAt")
     recurrence: Literal["once", "daily", "weekly"] = "once"
-    timezone: str = Field(default="Asia/Ho_Chi_Minh", min_length=1, max_length=80)
+    timezone: str = Field(default=VIETNAM_TIMEZONE, min_length=1, max_length=80)
 
     model_config = {"populate_by_name": True}
 
@@ -461,7 +470,7 @@ def make_agent(
     knowledge_tool = build_knowledge_tool(app_services.knowledge, chat.project_id, chat.collection_id)
     schedule_tool: ToolSpec | None = None
     if chat.provider != "ollama" and allow_schedule_proposals and schedule_proposals is not None:
-        def propose_schedule(title: str, prompt: str, startsAt: str, recurrence: str = "once", timezone: str = "Asia/Ho_Chi_Minh") -> str:
+        def propose_schedule(title: str, prompt: str, startsAt: str, recurrence: str = "once", timezone: str = VIETNAM_TIMEZONE) -> str:
             proposal = ScheduleProposalPayload.model_validate({
                 "title": title, "prompt": prompt, "startsAt": startsAt,
                 "recurrence": recurrence, "timezone": timezone,
@@ -709,7 +718,7 @@ def find_invitable_workspace_users(request: Request, q: str = Query(min_length=2
         ]
 
 
-@app.post("/api/workspaces/current/invitations", status_code=201, tags=["Workspaces"])
+@app.post("/api/workspaces/current/invitations", status_code=201, tags=["Workspaces"], responses=API_ERROR_RESPONSES)
 def create_workspace_invitation(payload: WorkspaceInvitationRequest, request: Request) -> dict[str, Any]:
     require_workspace_owner(request)
     email = payload.email.strip().lower()
@@ -730,7 +739,7 @@ def create_workspace_invitation(payload: WorkspaceInvitationRequest, request: Re
     return result
 
 
-@app.patch("/api/workspaces/current/members/{user_id}", tags=["Workspaces"])
+@app.patch("/api/workspaces/current/members/{user_id}", tags=["Workspaces"], responses=API_ERROR_RESPONSES)
 def update_workspace_member(user_id: str, payload: WorkspaceMemberRoleRequest, request: Request) -> dict[str, str]:
     membership = require_workspace_owner(request)
     if membership.user_id == user_id and payload.role != "owner":
@@ -741,7 +750,7 @@ def update_workspace_member(user_id: str, payload: WorkspaceMemberRoleRequest, r
     return {"userId": item.user_id, "role": item.role}
 
 
-@app.delete("/api/workspaces/current/members/{user_id}", status_code=204, tags=["Workspaces"])
+@app.delete("/api/workspaces/current/members/{user_id}", status_code=204, tags=["Workspaces"], responses=API_ERROR_RESPONSES)
 def remove_workspace_member(user_id: str, request: Request) -> None:
     membership = require_workspace_owner(request)
     if membership.user_id == user_id:
@@ -750,7 +759,7 @@ def remove_workspace_member(user_id: str, request: Request) -> None:
         raise HTTPException(status_code=404, detail="Không tìm thấy thành viên.")
 
 
-@app.post("/api/workspaces/invitations/{invitation_id}/accept", tags=["Workspaces"])
+@app.post("/api/workspaces/invitations/{invitation_id}/accept", tags=["Workspaces"], responses=API_ERROR_RESPONSES)
 def accept_workspace_invitation(invitation_id: str, request: Request) -> dict[str, str]:
     member = services().workspace.accept_invitation(invitation_id, request.state.user.id, request.state.user.email, datetime.now(UTC))
     if member is None:
@@ -1152,7 +1161,7 @@ def list_library_assets(
     return [library_asset_json(item) for item in services().library.list(query, project_id, scope)]
 
 
-@app.post("/api/library/assets", status_code=201, tags=["Personal library"])
+@app.post("/api/library/assets", status_code=201, tags=["Personal library"], responses=API_ERROR_RESPONSES)
 async def upload_library_assets(
     files: list[UploadFile] = File(...),
     project_id: str | None = Form(default=None, alias="projectId"),
@@ -1173,7 +1182,7 @@ async def upload_library_assets(
     return {"items": uploaded, "errors": errors}
 
 
-@app.patch("/api/library/assets/{asset_id}", tags=["Personal library"])
+@app.patch("/api/library/assets/{asset_id}", tags=["Personal library"], responses=API_ERROR_RESPONSES)
 def update_library_asset(asset_id: str, payload: UpdateArtifactRequest) -> dict[str, Any]:
     values = payload.model_dump(exclude_unset=True)
     project_id = values.get("project_id")
@@ -1194,7 +1203,7 @@ def update_library_asset(asset_id: str, payload: UpdateArtifactRequest) -> dict[
     return library_asset_json(item)
 
 
-@app.post("/api/library/assets/{asset_id}/versions", status_code=201, tags=["Personal library"])
+@app.post("/api/library/assets/{asset_id}/versions", status_code=201, tags=["Personal library"], responses=API_ERROR_RESPONSES)
 async def create_library_asset_version(asset_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
     try:
         item = services().library.create_version(asset_id, file.filename or "artifact", file.content_type or "", await file.read())
@@ -1204,7 +1213,7 @@ async def create_library_asset_version(asset_id: str, file: UploadFile = File(..
     return library_asset_json(item)
 
 
-@app.get("/api/library/assets/{asset_id}/versions", tags=["Personal library"])
+@app.get("/api/library/assets/{asset_id}/versions", tags=["Personal library"], responses=API_ERROR_RESPONSES)
 def list_library_asset_versions(asset_id: str) -> list[dict[str, Any]]:
     items = services().library.versions(asset_id)
     if not items:
@@ -1221,7 +1230,7 @@ def preview_library_asset(asset_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404 if "Không tìm thấy" in message else 422, detail=message) from exc
 
 
-@app.get("/api/library/assets/{asset_id}/file", tags=["Personal library"])
+@app.get("/api/library/assets/{asset_id}/file", tags=["Personal library"], responses=API_ERROR_RESPONSES)
 def library_asset_file(asset_id: str) -> Response:
     asset = services().library.ensure_remote(asset_id)
     if asset is None:
@@ -1234,7 +1243,7 @@ def library_asset_file(asset_id: str) -> Response:
     return FileResponse(path, media_type=asset.mime_type, filename=asset.name, content_disposition_type="inline")
 
 
-@app.post("/api/library/assets/{asset_id}/reindex", status_code=202, tags=["Personal library"])
+@app.post("/api/library/assets/{asset_id}/reindex", status_code=202, tags=["Personal library"], responses=API_ERROR_RESPONSES)
 def reindex_library_asset(asset_id: str) -> dict[str, Any]:
     with services().chats.database.session() as session:
         asset = session.get(LibraryAsset, asset_id)
@@ -1248,7 +1257,7 @@ def reindex_library_asset(asset_id: str) -> dict[str, Any]:
     return library_asset_json(asset)
 
 
-@app.delete("/api/library/assets/{asset_id}", status_code=204, tags=["Personal library"])
+@app.delete("/api/library/assets/{asset_id}", status_code=204, tags=["Personal library"], responses=API_ERROR_RESPONSES)
 def delete_library_asset(asset_id: str) -> None:
     with services().chats.database.session() as session:
         asset = session.get(LibraryAsset, asset_id)
@@ -1577,7 +1586,7 @@ def create_project(payload: ProjectRequest) -> dict[str, Any]:
     return project_json(services().workspace.create(Project, **payload.model_dump()))
 
 
-@app.get("/api/projects/{project_id}", tags=["Projects"])
+@app.get("/api/projects/{project_id}", tags=["Projects"], responses=API_ERROR_RESPONSES)
 def get_project(project_id: str) -> dict[str, Any]:
     project = services().workspace.get(Project, project_id)
     if project is None:
@@ -1591,7 +1600,7 @@ def get_project(project_id: str) -> dict[str, Any]:
     return {"project": project_json(project), "chats": [chat_json(item) for item in project_chats], "documents": [document_json(item, jobs.latest_for_document(item.id)) for item in project_documents], "assets": [library_asset_json(item) for item in project_assets], "schedules": [schedule_json(item) for item in project_schedules]}
 
 
-@app.patch("/api/projects/{project_id}", tags=["Projects"])
+@app.patch("/api/projects/{project_id}", tags=["Projects"], responses=API_ERROR_RESPONSES)
 def update_project(project_id: str, payload: ProjectRequest) -> dict[str, Any]:
     item = services().workspace.update(Project, project_id, **payload.model_dump())
     if item is None:
@@ -1599,7 +1608,7 @@ def update_project(project_id: str, payload: ProjectRequest) -> dict[str, Any]:
     return project_json(item)
 
 
-@app.delete("/api/projects/{project_id}", tags=["Projects"])
+@app.delete("/api/projects/{project_id}", tags=["Projects"], responses=API_ERROR_RESPONSES)
 def delete_project(project_id: str, payload: DeleteProjectRequest) -> dict[str, Any]:
     with services().chats.database.session() as session:
         project = session.get(Project, project_id)
@@ -1643,7 +1652,7 @@ def list_schedules() -> list[dict[str, Any]]:
     return [schedule_json(item) for item in services().workspace.list(Schedule)]
 
 
-@app.post("/api/schedules", status_code=201, tags=["Schedules"])
+@app.post("/api/schedules", status_code=201, tags=["Schedules"], responses=API_ERROR_RESPONSES)
 def create_schedule(payload: ScheduleRequest) -> dict[str, Any]:
     if payload.ends_at and payload.ends_at < payload.starts_at:
         raise HTTPException(status_code=422, detail="Thời điểm kết thúc phải sau thời điểm bắt đầu.")
@@ -1658,77 +1667,65 @@ def create_schedule(payload: ScheduleRequest) -> dict[str, Any]:
     return schedule_json(services().workspace.create(Schedule, **values))
 
 
+def _schedule_proposal_block(session, chat_id: str, proposal_id: str):
+    messages = session.scalars(
+        select(ChatMessage).where(ChatMessage.chat_id == chat_id, ChatMessage.role == "assistant").order_by(ChatMessage.position).with_for_update()
+    ).all()
+    for message in messages:
+        blocks = deepcopy(message.content_blocks or [])
+        for block in blocks:
+            config = block.get("config") if isinstance(block, dict) else None
+            if isinstance(config, dict) and block.get("type") == "schedule-proposal" and config.get("proposalId") == proposal_id:
+                return message, blocks, config
+    raise HTTPException(status_code=404, detail="Không tìm thấy đề xuất lịch trình.")
+
+
+def _confirm_schedule_proposal(session, source_chat: Chat, message: ChatMessage, blocks: list[dict], config: dict, proposal_id: str) -> dict[str, Any]:
+    status = config.get("status")
+    if status == "confirmed":
+        return {"status": "confirmed", "proposalId": proposal_id, "scheduleId": config.get("scheduleId")}
+    if status != "pending":
+        raise HTTPException(status_code=409, detail="Đề xuất này đã bị hủy.")
+    try:
+        proposal = ScheduleProposalPayload.model_validate(config)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Đề xuất lịch trình không hợp lệ.") from exc
+    schedule = Schedule(title=proposal.title, prompt=proposal.prompt, starts_at=proposal.starts_at, recurrence=proposal.recurrence, timezone=proposal.timezone, project_id=config.get("projectId"), provider=source_chat.provider, model=source_chat.model, status="active", next_run_at=proposal.starts_at)
+    session.add(schedule)
+    session.flush()
+    config.update(status="confirmed", scheduleId=schedule.id)
+    message.content_blocks = blocks
+    session.commit()
+    return {"status": "confirmed", "proposalId": proposal_id, "scheduleId": schedule.id, "schedule": schedule_json(schedule)}
+
+
 def mutate_schedule_proposal(chat_id: str, proposal_id: str, action: Literal["confirm", "dismiss"]) -> dict[str, Any]:
     """Confirm/dismiss exactly one content block, atomically with Schedule creation."""
     source_chat = services().chats.get(chat_id)
     if source_chat is None:
         raise HTTPException(status_code=404, detail="Không tìm thấy chat.")
     with services().chats.database.session() as session:
-        messages = session.scalars(
-            select(ChatMessage)
-            .where(ChatMessage.chat_id == chat_id, ChatMessage.role == "assistant")
-            .order_by(ChatMessage.position)
-            .with_for_update()
-        ).all()
-        for message in messages:
-            blocks = deepcopy(message.content_blocks or [])
-            for block in blocks:
-                config = block.get("config") if isinstance(block, dict) else None
-                if block.get("type") != "schedule-proposal" or not isinstance(config, dict) or config.get("proposalId") != proposal_id:
-                    continue
-                status = config.get("status")
-                if action == "dismiss":
-                    if status == "pending":
-                        config["status"] = "dismissed"
-                        message.content_blocks = blocks
-                        session.commit()
-                    return {"status": config.get("status"), "proposalId": proposal_id}
-                if status == "confirmed":
-                    return {"status": "confirmed", "proposalId": proposal_id, "scheduleId": config.get("scheduleId")}
-                if status != "pending":
-                    raise HTTPException(status_code=409, detail="Đề xuất này đã bị hủy.")
-                try:
-                    proposal = ScheduleProposalPayload.model_validate(config)
-                except Exception as exc:  # malformed old/model-generated block
-                    raise HTTPException(status_code=422, detail="Đề xuất lịch trình không hợp lệ.") from exc
-                schedule = Schedule(
-                    title=proposal.title,
-                    prompt=proposal.prompt,
-                    starts_at=proposal.starts_at,
-                    recurrence=proposal.recurrence,
-                    timezone=proposal.timezone,
-                    project_id=config.get("projectId"),
-                    provider=source_chat.provider,
-                    model=source_chat.model,
-                    status="active",
-                    next_run_at=proposal.starts_at,
-                )
-                session.add(schedule)
-                session.flush()
-                config["status"] = "confirmed"
-                config["scheduleId"] = schedule.id
-                message.content_blocks = blocks
-                session.commit()
-                return {"status": "confirmed", "proposalId": proposal_id, "scheduleId": schedule.id, "schedule": schedule_json(schedule)}
-    raise HTTPException(status_code=404, detail="Không tìm thấy đề xuất lịch trình.")
+        message, blocks, config = _schedule_proposal_block(session, chat_id, proposal_id)
+        if action == "confirm":
+            return _confirm_schedule_proposal(session, source_chat, message, blocks, config, proposal_id)
+        if config.get("status") == "pending":
+            config["status"] = "dismissed"
+            message.content_blocks = blocks
+            session.commit()
+        return {"status": config.get("status"), "proposalId": proposal_id}
 
 
-@app.post("/api/chats/{chat_id}/schedule-proposals/{proposal_id}/confirm", status_code=201, tags=["Schedules"])
+@app.post("/api/chats/{chat_id}/schedule-proposals/{proposal_id}/confirm", status_code=201, tags=["Schedules"], responses=API_ERROR_RESPONSES)
 def confirm_chat_schedule_proposal(chat_id: str, proposal_id: str) -> dict[str, Any]:
     return mutate_schedule_proposal(chat_id, proposal_id, "confirm")
 
 
-@app.post("/api/chats/{chat_id}/schedule-proposals/{proposal_id}/dismiss", tags=["Schedules"])
+@app.post("/api/chats/{chat_id}/schedule-proposals/{proposal_id}/dismiss", tags=["Schedules"], responses=API_ERROR_RESPONSES)
 def dismiss_chat_schedule_proposal(chat_id: str, proposal_id: str) -> dict[str, Any]:
     return mutate_schedule_proposal(chat_id, proposal_id, "dismiss")
 
 
-@app.patch("/api/schedules/{schedule_id}", tags=["Schedules"])
-def update_schedule(schedule_id: str, payload: ScheduleUpdateRequest) -> dict[str, Any]:
-    current = services().workspace.get(Schedule, schedule_id)
-    if current is None:
-        raise HTTPException(status_code=404, detail="Không tìm thấy lịch trình.")
-    values = payload.model_dump(exclude_unset=True)
+def _validate_schedule_update(current: Schedule, values: dict[str, Any]) -> None:
     starts_at = values.get("starts_at", current.starts_at)
     ends_at = values.get("ends_at", current.ends_at)
     if ends_at and ends_at < starts_at:
@@ -1736,41 +1733,56 @@ def update_schedule(schedule_id: str, payload: ScheduleUpdateRequest) -> dict[st
     project_id = values.get("project_id", current.project_id)
     if project_id and services().workspace.get(Project, project_id) is None:
         raise HTTPException(status_code=422, detail="Dự án được chọn không tồn tại.")
-    if {"provider", "model"}.intersection(values):
-        requested_provider = values.get("provider", current.provider)
-        requested_model = values.get("model") if "model" in values else (current.model if "provider" not in values else None)
-        try:
-            values["provider"], values["model"] = resolve_schedule_selection(requested_provider, requested_model, current_user_id.get())
-        except (ValueError, CredentialError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-    # The form resends every field, so only a real change to the timing may
-    # rewind `next_run_at`; otherwise editing anything (a title, a checkbox)
-    # would rewind an active schedule onto an already-executed past slot.
+    if values.get("status") == "active" and current.status == "completed" and current.recurrence == "once":
+        raise HTTPException(status_code=422, detail="Lịch một lần đã hoàn tất; hãy tạo lịch mới để chạy lại.")
+
+
+def _resolve_schedule_update_model(current: Schedule, values: dict[str, Any]) -> None:
+    if not {"provider", "model"}.intersection(values):
+        return
+    provider = values.get("provider", current.provider)
+    model = values.get("model") if "model" in values else (current.model if "provider" not in values else None)
+    try:
+        values["provider"], values["model"] = resolve_schedule_selection(provider, model, current_user_id.get())
+    except (ValueError, CredentialError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _reset_next_run_if_timing_changed(current: Schedule, values: dict[str, Any]) -> None:
     timing_changed = any(key in values and values[key] != getattr(current, key) for key in ("starts_at", "recurrence"))
     if timing_changed and "next_run_at" not in values:
         values["next_run_at"] = values.get("starts_at", current.starts_at)
-    if values.get("status") == "active" and current.status == "completed" and current.recurrence == "once":
-        raise HTTPException(status_code=422, detail="Lịch một lần đã hoàn tất; hãy tạo lịch mới để chạy lại.")
+
+
+@app.patch("/api/schedules/{schedule_id}", tags=["Schedules"], responses=API_ERROR_RESPONSES)
+def update_schedule(schedule_id: str, payload: ScheduleUpdateRequest) -> dict[str, Any]:
+    current = services().workspace.get(Schedule, schedule_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy lịch trình.")
+    values = payload.model_dump(exclude_unset=True)
+    _validate_schedule_update(current, values)
+    _resolve_schedule_update_model(current, values)
+    _reset_next_run_if_timing_changed(current, values)
     item = services().workspace.update(Schedule, schedule_id, **values)
     if item and {"provider", "model"}.intersection(values) and item.chat_id:
         services().chats.update(item.chat_id, provider=item.provider, model=item.model)
     return schedule_json(item)
 
 
-@app.delete("/api/schedules/{schedule_id}", status_code=204, tags=["Schedules"])
+@app.delete("/api/schedules/{schedule_id}", status_code=204, tags=["Schedules"], responses=API_ERROR_RESPONSES)
 def delete_schedule(schedule_id: str) -> None:
     if not services().workspace.delete(Schedule, schedule_id):
         raise HTTPException(status_code=404, detail="Không tìm thấy lịch trình.")
 
 
-@app.get("/api/schedules/{schedule_id}/runs", tags=["Schedules"])
+@app.get("/api/schedules/{schedule_id}/runs", tags=["Schedules"], responses=API_ERROR_RESPONSES)
 def list_schedule_runs(schedule_id: str, limit: int = Query(default=30, ge=1, le=100)) -> list[dict[str, Any]]:
     if services().workspace.get(Schedule, schedule_id) is None:
         raise HTTPException(status_code=404, detail="Không tìm thấy lịch trình.")
     return [schedule_run_json(item) for item in ScheduleRepository(services().chats.database).list_runs(schedule_id, limit)]
 
 
-@app.post("/api/schedules/{schedule_id}/runs/{run_id}/resend-email", tags=["Schedules"])
+@app.post("/api/schedules/{schedule_id}/runs/{run_id}/resend-email", tags=["Schedules"], responses=API_ERROR_RESPONSES)
 def resend_schedule_run_email(schedule_id: str, run_id: str) -> dict[str, Any]:
     """Retry only the notification of a finished run, never the AI work itself."""
     schedule = services().workspace.get(Schedule, schedule_id)
@@ -1802,7 +1814,7 @@ def resend_schedule_run_email(schedule_id: str, run_id: str) -> dict[str, Any]:
     return schedule_run_json(runs.record_email(run_id, status="sent"))
 
 
-@app.post("/api/schedules/{schedule_id}/run-now", status_code=202, tags=["Schedules"])
+@app.post("/api/schedules/{schedule_id}/run-now", status_code=202, tags=["Schedules"], responses=API_ERROR_RESPONSES)
 def run_schedule_now(schedule_id: str) -> dict[str, str]:
     schedule = services().workspace.get(Schedule, schedule_id)
     if schedule is None:
@@ -1866,7 +1878,7 @@ def google_connector_audit(limit: int = Query(default=12, ge=1, le=50)) -> list[
     return [connector_audit_json(item) for item in services().google_workspace.repository.list_audit(GOOGLE_WORKSPACE_SLUG, limit)]
 
 
-@app.post("/api/connectors/google/authorize", tags=["Connectors"])
+@app.post("/api/connectors/google/authorize", tags=["Connectors"], responses=API_ERROR_RESPONSES)
 def google_authorize() -> dict[str, str]:
     if services().workspace.get_plugin_by_catalog_slug(GOOGLE_WORKSPACE_SLUG) is None:
         raise HTTPException(status_code=422, detail="Hãy thêm Google Workspace từ catalog trước khi kết nối.")
@@ -1920,7 +1932,7 @@ def github_connector_audit(limit: int = Query(default=12, ge=1, le=50)) -> list[
     return [connector_audit_json(item) for item in services().github.repository.list_audit(GITHUB_SLUG, limit)]
 
 
-@app.post("/api/connectors/github/authorize", tags=["Connectors"])
+@app.post("/api/connectors/github/authorize", tags=["Connectors"], responses=API_ERROR_RESPONSES)
 def github_authorize() -> dict[str, str]:
     if services().workspace.get_plugin_by_catalog_slug(GITHUB_SLUG) is None:
         raise HTTPException(status_code=422, detail="Hãy thêm GitHub từ catalog trước khi kết nối.")
@@ -1960,7 +1972,7 @@ def plugin_catalog() -> list[dict[str, Any]]:
     return [catalog_json(item, installed.get(item.slug)) for item in CATALOG]
 
 
-@app.post("/api/plugin-catalog/{slug}/install", status_code=201, tags=["Plugin catalog"])
+@app.post("/api/plugin-catalog/{slug}/install", status_code=201, tags=["Plugin catalog"], responses=API_ERROR_RESPONSES)
 def install_catalog_plugin(slug: str) -> dict[str, Any]:
     item = find_catalog_plugin(slug)
     if item is None:
@@ -1988,7 +2000,7 @@ def install_catalog_plugin(slug: str) -> dict[str, Any]:
     return plugin_json(plugin)
 
 
-@app.post("/api/plugins", status_code=201, tags=["Plugins"])
+@app.post("/api/plugins", status_code=201, tags=["Plugins"], responses=API_ERROR_RESPONSES)
 def create_plugin(payload: PluginRequest) -> dict[str, Any]:
     try:
         return plugin_json(services().workspace.create(Plugin, **payload.model_dump()))
@@ -1996,7 +2008,7 @@ def create_plugin(payload: PluginRequest) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="Slug plugin đã tồn tại.") from exc
 
 
-@app.patch("/api/plugins/{plugin_id}", tags=["Plugins"])
+@app.patch("/api/plugins/{plugin_id}", tags=["Plugins"], responses=API_ERROR_RESPONSES)
 def update_plugin(plugin_id: str, payload: PluginUpdateRequest) -> dict[str, Any]:
     current = services().workspace.get(Plugin, plugin_id)
     if current is None:
@@ -2011,7 +2023,7 @@ def update_plugin(plugin_id: str, payload: PluginUpdateRequest) -> dict[str, Any
     return plugin_json(item)
 
 
-@app.delete("/api/plugins/{plugin_id}", status_code=204, tags=["Plugins"])
+@app.delete("/api/plugins/{plugin_id}", status_code=204, tags=["Plugins"], responses=API_ERROR_RESPONSES)
 def delete_plugin(plugin_id: str) -> None:
     if not services().workspace.delete(Plugin, plugin_id):
         raise HTTPException(status_code=404, detail="Không tìm thấy plugin.")
@@ -2123,7 +2135,7 @@ def stream_chat(chat_id: str, content: str, attachments: list[dict]) -> Iterator
         yield sse(event, payload)
 
 
-@app.post("/api/chats/{chat_id}/stream", tags=["Chat streaming"])
+@app.post("/api/chats/{chat_id}/stream", tags=["Chat streaming"], responses=API_ERROR_RESPONSES)
 def chat_stream(chat_id: str, payload: ChatRequest) -> StreamingResponse:
     chat = services().chats.get(chat_id)
     if chat is not None and chat.provider == "ollama" and payload.attachment_ids:
