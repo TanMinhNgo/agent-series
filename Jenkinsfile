@@ -36,13 +36,13 @@ pipeline {
         sh '''#!/usr/bin/env bash
           set -euo pipefail
           docker rm -f agent-series-ci-postgres >/dev/null 2>&1 || true
-          docker run -d --name agent-series-ci-postgres -e POSTGRES_DB=agent_series -e POSTGRES_USER=agent -e POSTGRES_PASSWORD=agent -p 5432:5432 pgvector/pgvector:pg16
+          docker run -d --name agent-series-ci-postgres -e POSTGRES_DB=agent_series -e POSTGRES_USER=agent -e POSTGRES_PASSWORD=agent -p 55432:5432 pgvector/pgvector:pg16
           until docker exec agent-series-ci-postgres pg_isready -U agent -d agent_series; do sleep 2; done
           python3.12 -m venv .ci-venv
           .ci-venv/bin/python -m pip install --require-hashes --requirement requirements-ci.lock
           mkdir -p "$REPORTS_DIR"
-          DATABASE_URL=postgresql+psycopg://agent:agent@host.docker.internal:5432/agent_series .ci-venv/bin/python -m alembic upgrade head
-          DATABASE_URL=postgresql+psycopg://agent:agent@host.docker.internal:5432/agent_series .ci-venv/bin/python -m coverage run -m pytest -q --junitxml="$REPORTS_DIR/backend-junit.xml"
+          DATABASE_URL=postgresql+psycopg://agent:agent@host.docker.internal:55432/agent_series .ci-venv/bin/python -m alembic upgrade head
+          DATABASE_URL=postgresql+psycopg://agent:agent@host.docker.internal:55432/agent_series .ci-venv/bin/python -m coverage run -m pytest -q --junitxml="$REPORTS_DIR/backend-junit.xml"
           .ci-venv/bin/python -m coverage xml -o "$REPORTS_DIR/backend-coverage.xml"
           cd frontend
           npm ci --ignore-scripts
