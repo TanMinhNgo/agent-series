@@ -65,7 +65,7 @@ pipeline {
               -v "$PWD:/src" \
               -v "$PWD/$REPORTS_DIR/owasp:/report" \
               -v agent-series-owasp-data:/usr/share/dependency-check/data \
-              owasp/dependency-check:12.2.1 "${args[@]}"
+              owasp/dependency-check:12.2.2 "${args[@]}"
           '''
         }
       }
