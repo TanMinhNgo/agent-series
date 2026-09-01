@@ -58,9 +58,14 @@ pipeline {
           sh '''#!/usr/bin/env bash
             set -euo pipefail
             mkdir -p "$REPORTS_DIR/owasp"
+            docker volume create agent-series-owasp-data >/dev/null
             args=(--scan /src --out /report --format ALL --failOnCVSS 7)
             if [[ -n "$NVD_API_KEY" ]]; then args+=(--nvdApiKey "$NVD_API_KEY"); fi
-            docker run --rm -v "$PWD:/src" -v "$PWD/$REPORTS_DIR/owasp:/report" owasp/dependency-check:12.1.0 "${args[@]}"
+            docker run --rm \
+              -v "$PWD:/src" \
+              -v "$PWD/$REPORTS_DIR/owasp:/report" \
+              -v agent-series-owasp-data:/usr/share/dependency-check/data \
+              owasp/dependency-check:12.2.1 "${args[@]}"
           '''
         }
       }
