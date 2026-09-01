@@ -58,14 +58,48 @@ pipeline {
           sh '''#!/usr/bin/env bash
             set -euo pipefail
             mkdir -p "$REPORTS_DIR/owasp"
-            docker volume create agent-series-owasp-data >/dev/null
-            args=(--scan /src --out /report --format ALL --failOnCVSS 7)
-            if [[ -n "$NVD_API_KEY" ]]; then args+=(--nvdApiKey "$NVD_API_KEY"); fi
+            data_volume=agent-series-owasp-data
+            ready_marker=/usr/share/dependency-check/data/.agent-series-nvd-ready
+            docker volume create "$data_volume" >/dev/null
+
+            update_args=(--updateonly --nvdMaxRetryCount 20 --nvdValidForHours 24)
+            if [[ -n "$NVD_API_KEY" ]]; then update_args+=(--nvdApiKey "$NVD_API_KEY"); fi
+
+            update_nvd_cache() {
+              docker run --rm \
+                -v "$data_volume:/usr/share/dependency-check/data" \
+                owasp/dependency-check:12.2.2 "${update_args[@]}"
+            }
+
+            cache_is_verified() {
+              docker run --rm --entrypoint /bin/sh \
+                -v "$data_volume:/usr/share/dependency-check/data" \
+                owasp/dependency-check:12.2.2 \
+                -c "test -f '$ready_marker'"
+            }
+
+            mark_cache_verified() {
+              docker run --rm --entrypoint /bin/sh \
+                -v "$data_volume:/usr/share/dependency-check/data" \
+                owasp/dependency-check:12.2.2 \
+                -c "touch '$ready_marker'"
+            }
+
+            if update_nvd_cache; then
+              mark_cache_verified
+            elif cache_is_verified; then
+              echo 'NVD is temporarily unavailable; scanning with the last verified NVD cache.' >&2
+            else
+              echo 'NVD update failed before a complete cache was created; refusing an incomplete security scan.' >&2
+              exit 1
+            fi
+
             docker run --rm \
               -v "$PWD:/src" \
               -v "$PWD/$REPORTS_DIR/owasp:/report" \
-              -v agent-series-owasp-data:/usr/share/dependency-check/data \
-              owasp/dependency-check:12.2.2 "${args[@]}"
+              -v "$data_volume:/usr/share/dependency-check/data" \
+              owasp/dependency-check:12.2.2 \
+              --scan /src --out /report --format ALL --failOnCVSS 7 --noupdate
           '''
         }
       }

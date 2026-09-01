@@ -1,4 +1,5 @@
 import type { MediaAttachment } from './media';
+import type { LibraryAsset } from './library';
 
 export type ResponseBlock =
   | { type: 'trig-circle'; config: { angle?: number; radius?: number; title?: string } }
@@ -34,6 +35,7 @@ export type Message = {
   role: 'user' | 'assistant';
   content: string;
   attachments?: MediaAttachment[];
+  artifacts?: LibraryAsset[];
   contentBlocks?: ResponseBlock[];
   sources?: { name: string; url: string; kind?: 'library' | 'external' }[];
   feedbackKind?: 'helpful' | 'incorrect' | 'too_long' | 'too_short' | 'unclear' | 'wrong_style';

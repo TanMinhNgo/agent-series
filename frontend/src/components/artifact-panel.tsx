@@ -4,13 +4,14 @@ import { useQuery } from '@tanstack/react-query';
 
 import { Button } from '@/components/ui/button';
 import { request } from '@/src/hooks/client';
-import type { LibraryAsset, LibraryAssetPreview } from '@/src/types';
+import type { LibraryAsset, LibraryAssetPreview, Message } from '@/src/types';
 
 type ArtifactPanelProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   selectedArtifactId: string | null;
   onSelectedArtifactChange: (assetId: string | null) => void;
+  messages: Message[];
 };
 
 function formatSize(bytes: number) {
@@ -31,16 +32,36 @@ export function ArtifactPanel({
   onOpenChange,
   selectedArtifactId,
   onSelectedArtifactChange,
+  messages,
 }: ArtifactPanelProps) {
-  const artifacts = useQuery({
-    queryKey: ['generated-artifacts'],
-    queryFn: () => request<LibraryAsset[]>({ url: '/library/assets' }),
-  });
-  const generatedArtifacts = useMemo(
-    () => (artifacts.data || []).filter((asset) => asset.source === 'generated'),
-    [artifacts.data],
+  const groups = useMemo(
+    () =>
+      messages.flatMap((message) =>
+        message.role === 'assistant' && message.artifacts?.length
+          ? [
+              {
+                messageId: message.messageId || message.createdAt || message.content,
+                createdAt: message.createdAt,
+                artifacts: message.artifacts,
+              },
+            ]
+          : [],
+      ),
+    [messages],
   );
-  const selected = generatedArtifacts.find((asset) => asset.id === selectedArtifactId) || null;
+  const generatedArtifacts = useMemo(() => groups.flatMap((group) => group.artifacts), [groups]);
+  const initialSelected = generatedArtifacts.find((asset) => asset.id === selectedArtifactId) || null;
+  const versions = useQuery({
+    queryKey: ['artifact-versions', selectedArtifactId],
+    queryFn: () => request<LibraryAsset[]>({ url: `/library/assets/${selectedArtifactId}/versions` }),
+    enabled: Boolean(selectedArtifactId),
+  });
+  const selected = useMemo(
+    () =>
+      [...generatedArtifacts, ...(versions.data || [])].find((asset) => asset.id === selectedArtifactId) ||
+      null,
+    [generatedArtifacts, selectedArtifactId, versions.data],
+  );
   const preview = useQuery({
     queryKey: ['artifact-preview', selected?.id],
     queryFn: () => request<LibraryAssetPreview>({ url: `/library/assets/${selected?.id}/preview` }),
@@ -48,8 +69,23 @@ export function ArtifactPanel({
   });
 
   useEffect(() => {
-    if (selectedArtifactId && !artifacts.isLoading && !selected) onSelectedArtifactChange(null);
-  }, [artifacts.isLoading, onSelectedArtifactChange, selected, selectedArtifactId]);
+    if (
+      selectedArtifactId &&
+      generatedArtifacts.length &&
+      !initialSelected &&
+      !versions.isLoading &&
+      !selected
+    ) {
+      onSelectedArtifactChange(null);
+    }
+  }, [
+    generatedArtifacts.length,
+    initialSelected,
+    onSelectedArtifactChange,
+    selected,
+    selectedArtifactId,
+    versions.isLoading,
+  ]);
 
   const body = (
     <>
@@ -64,38 +100,41 @@ export function ArtifactPanel({
       </div>
       <div className="grid min-h-0 flex-1 grid-rows-[minmax(150px,0.8fr)_minmax(220px,1.2fr)]">
         <div className="min-h-0 overflow-y-auto border-b p-3">
-          {artifacts.isLoading ? (
-            <p className="flex items-center gap-2 p-2 text-sm text-muted-foreground">
-              <LoaderCircle className="animate-spin" size={16} /> Đang tải file...
-            </p>
-          ) : artifacts.error ? (
-            <p className="p-2 text-sm text-destructive">Không thể tải danh sách file AI tạo.</p>
-          ) : generatedArtifacts.length ? (
-            <div className="space-y-2">
-              {generatedArtifacts.map((asset) => (
-                <button
-                  key={asset.id}
-                  type="button"
-                  className={`w-full rounded-lg border p-3 text-left transition-colors hover:bg-muted ${
-                    selected?.id === asset.id ? 'border-primary bg-primary/5' : ''
-                  }`}
-                  onClick={() => onSelectedArtifactChange(asset.id)}
-                >
-                  <div className="flex items-start gap-2">
-                    <FileText className="mt-0.5 shrink-0 text-muted-foreground" size={16} />
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{asset.name}</span>
-                    <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px]">
-                      v{asset.version}
-                    </span>
-                  </div>
-                  <p className="mt-1 truncate pl-6 text-xs text-muted-foreground">
-                    {formatDate(asset.createdAt)} · {formatSize(asset.sizeBytes)}
+          {generatedArtifacts.length ? (
+            <div className="space-y-4">
+              {groups.map((group) => (
+                <section key={group.messageId}>
+                  <p className="mb-2 px-1 text-xs font-medium text-muted-foreground">
+                    Phản hồi {group.createdAt ? formatDate(group.createdAt) : 'vừa tạo'}
                   </p>
-                </button>
+                  <div className="space-y-2">
+                    {group.artifacts.map((asset) => (
+                      <button
+                        key={asset.id}
+                        type="button"
+                        className={`w-full rounded-lg border p-3 text-left transition-colors hover:bg-muted ${
+                          selected?.id === asset.id ? 'border-primary bg-primary/5' : ''
+                        }`}
+                        onClick={() => onSelectedArtifactChange(asset.id)}
+                      >
+                        <div className="flex items-start gap-2">
+                          <FileText className="mt-0.5 shrink-0 text-muted-foreground" size={16} />
+                          <span className="min-w-0 flex-1 truncate text-sm font-medium">{asset.name}</span>
+                          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px]">
+                            v{asset.version}
+                          </span>
+                        </div>
+                        <p className="mt-1 truncate pl-6 text-xs text-muted-foreground">
+                          {formatDate(asset.createdAt)} · {formatSize(asset.sizeBytes)}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+                </section>
               ))}
             </div>
           ) : (
-            <p className="p-2 text-sm text-muted-foreground">Chưa có file nào do AI tạo trong Thư viện.</p>
+            <p className="p-2 text-sm text-muted-foreground">Chat này chưa có file nào do AI tạo.</p>
           )}
         </div>
         <div className="min-h-0 overflow-auto p-4">
@@ -111,6 +150,20 @@ export function ArtifactPanel({
                   Tạo lúc {formatDate(selected.createdAt)} · version {selected.version}
                 </p>
               </div>
+              {versions.data && versions.data.length > 1 ? (
+                <div className="mb-3 flex flex-wrap gap-2" aria-label="Lịch sử phiên bản">
+                  {versions.data.map((asset) => (
+                    <Button
+                      key={asset.id}
+                      size="sm"
+                      variant={asset.id === selected.id ? 'secondary' : 'outline'}
+                      onClick={() => onSelectedArtifactChange(asset.id)}
+                    >
+                      v{asset.version}
+                    </Button>
+                  ))}
+                </div>
+              ) : null}
               <div className="min-h-48 rounded-lg border bg-muted/20 p-3">
                 {preview.isLoading ? (
                   <p className="flex items-center gap-2 text-sm text-muted-foreground">

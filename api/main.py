@@ -431,6 +431,22 @@ def persisted_history(full_history: list[dict[str, Any]], agent_history: list[di
     return [*full_history, *agent_history[initial_length:]]
 
 
+def created_artifact_ids(steps: list[Any]) -> list[str]:
+    """Return generated Library asset IDs from successful create_file tool results."""
+    asset_ids: list[str] = []
+    for step in steps:
+        if getattr(step, "tool", None) != "create_file":
+            continue
+        try:
+            payload = json.loads(getattr(step, "result", ""))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        asset_id = payload.get("id") if isinstance(payload, dict) else None
+        if isinstance(asset_id, str) and asset_id not in asset_ids:
+            asset_ids.append(asset_id)
+    return asset_ids
+
+
 def make_agent(
     app_services: Services,
     chat: Chat,
@@ -1293,12 +1309,24 @@ def get_chat(chat_id: str) -> dict[str, Any]:
 def messages(chat_id: str) -> list[dict[str, Any]]:
     if services().chats.get(chat_id) is None:
         raise HTTPException(status_code=404, detail="Không tìm thấy chat.")
+    backfill_links = getattr(services().chats, "backfill_artifact_links", None)
+    if backfill_links is not None:
+        backfill_links(chat_id)
     history = [item for item in services().chats.history(chat_id) if item["role"] in {"user", "assistant"}]
+    artifact_lookup = getattr(services().chats, "artifacts_by_assistant_message", None)
+    artifacts_by_message = artifact_lookup(
+        chat_id,
+        [item["message_id"] for item in history if item["role"] == "assistant" and item.get("message_id")],
+    ) if artifact_lookup is not None else {}
     feedback = services().personalization.feedback_by_message_ids(
         [item["message_id"] for item in history if item["role"] == "assistant" and item.get("message_id")]
     )
     return [
-        message_json({**item, "feedback_kind": feedback.get(item.get("message_id"))} if item["role"] == "assistant" else item)
+        message_json({
+            **item,
+            "feedback_kind": feedback.get(item.get("message_id")),
+            "artifacts": [library_asset_json(asset) for asset in artifacts_by_message.get(item.get("message_id", ""), [])],
+        } if item["role"] == "assistant" else item)
         for item in history
     ]
 
@@ -2116,6 +2144,20 @@ def stream_chat(chat_id: str, content: str, attachments: list[dict]) -> Iterator
             for item in saved_history[len(full_history):]:
                 item.setdefault("created_at", turn_created_at)
             app_services.chats.replace_history(chat_id, saved_history)
+            new_turn = saved_history[len(full_history):]
+            user_message = next((item for item in new_turn if item["role"] == "user"), None)
+            assistant_message = next((item for item in reversed(new_turn) if item["role"] == "assistant"), None)
+            generated_assets = []
+            artifact_ids = created_artifact_ids(getattr(result, "steps", []))
+            if user_message and assistant_message and artifact_ids:
+                generated_assets = app_services.chats.link_artifacts_to_turn(
+                    chat_id,
+                    user_message["message_id"],
+                    assistant_message["message_id"],
+                    artifact_ids,
+                )
+                if generated_assets:
+                    assistant_message["artifacts"] = [library_asset_json(asset) for asset in generated_assets]
             BackgroundJobRepository(app_services.chats.database).enqueue("memory_index", {"chat_id": chat_id})
             # Agent providers currently expose a completed normalized response.
             # SSE still keeps the UI responsive by streaming tool progress, then the final content.

@@ -627,6 +627,9 @@ export function ChatWorkspace({
                       }
                       onBranch={branchFromMessage}
                       onRegenerate={regenerateMessage}
+                      onOpenArtifact={(asset) =>
+                        setArtifactPanel({ open: true, selectedArtifactId: asset.id })
+                      }
                     />
                   </div>
                 </div>
@@ -657,6 +660,7 @@ export function ChatWorkspace({
                 onOpenChange={setArtifactPanelOpen}
                 selectedArtifactId={artifactPanel.selectedArtifactId}
                 onSelectedArtifactChange={selectArtifact}
+                messages={messages.data || []}
               />
             </div>
           )}

@@ -21,6 +21,7 @@ from api.main import (
     ShareRequest,
     app,
     create_chat_branch,
+    created_artifact_ids,
     create_response_feedback,
     detach_response_sources,
     list_chats,
@@ -52,6 +53,24 @@ def test_message_json_exposes_message_creation_time() -> None:
         "content": "Xin chào",
         "createdAt": created_at,
     }
+
+
+def test_message_json_keeps_artifacts_attached_to_assistant_response() -> None:
+    artifacts = [{"id": "asset-1", "name": "ke-hoach.md", "version": 1}]
+
+    assert message_json({"role": "assistant", "content": "Đã tạo file.", "artifacts": artifacts})["artifacts"] == artifacts
+
+
+def test_created_artifact_ids_ignores_unrelated_or_invalid_tool_results() -> None:
+    steps = [
+        SimpleNamespace(tool="search_web", result='{"id": "ignored"}'),
+        SimpleNamespace(tool="create_file", result='{"id": "asset-1"}'),
+        SimpleNamespace(tool="create_file", result="not-json"),
+        SimpleNamespace(tool="create_file", result='{"id": "asset-1"}'),
+        SimpleNamespace(tool="create_file", result='{"id": "asset-2"}'),
+    ]
+
+    assert created_artifact_ids(steps) == ["asset-1", "asset-2"]
 
 
 def test_schedule_proposal_requires_an_explicit_timezone() -> None:
@@ -513,6 +532,50 @@ def test_messages_include_only_current_users_feedback(monkeypatch) -> None:
 
     assert result[0].get("feedbackKind") is None
     assert result[1]["feedbackKind"] == "helpful"
+
+
+def test_messages_attach_artifacts_to_the_creating_assistant_response(monkeypatch) -> None:
+    asset = SimpleNamespace(
+        id="asset-1",
+        artifact_id="artifact-1",
+        name="ke-hoach.md",
+        version=1,
+        mime_type="text/markdown",
+        size_bytes=20,
+        source="generated",
+        project_id=None,
+        is_project_source=False,
+        index_status="pending",
+        index_error=None,
+        created_at=datetime(2026, 9, 2, tzinfo=UTC),
+    )
+
+    class Chats:
+        def get(self, _chat_id): return SimpleNamespace(id="chat-1")
+        def backfill_artifact_links(self, chat_id): assert chat_id == "chat-1"
+        def history(self, _chat_id):
+            return [
+                {"message_id": "user-1", "role": "user", "content": "Tạo kế hoạch"},
+                {"message_id": "assistant-1", "role": "assistant", "content": "Đã tạo."},
+            ]
+        def artifacts_by_assistant_message(self, chat_id, message_ids):
+            assert (chat_id, message_ids) == ("chat-1", ["assistant-1"])
+            return {"assistant-1": [asset]}
+
+    monkeypatch.setattr(
+        main_module,
+        "services",
+        lambda: SimpleNamespace(chats=Chats(), personalization=SimpleNamespace(feedback_by_message_ids=lambda _ids: {})),
+    )
+
+    result = main_module.messages("chat-1")
+
+    assert result[1]["artifacts"] == [{
+        "id": "asset-1", "artifactId": "artifact-1", "name": "ke-hoach.md", "version": 1,
+        "mimeType": "text/markdown", "sizeBytes": 20, "source": "generated", "projectId": None,
+        "isProjectSource": False, "indexStatus": "pending", "indexError": None,
+        "createdAt": "2026-09-02T00:00:00+00:00", "url": "/api/library/assets/asset-1/file",
+    }]
 
 
 def test_feedback_branch_and_regenerate_endpoints_delegate_the_selected_message(monkeypatch) -> None:

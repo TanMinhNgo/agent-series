@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from secrets import token_urlsafe
@@ -313,6 +314,20 @@ class LibraryAsset(UserOwned, Base):
     index_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     chunks: Mapped[list["ArtifactChunk"]] = relationship(back_populates="asset", cascade="all, delete-orphan")
+
+
+class ArtifactMessageLink(UserOwned, Base):
+    """Connect one immutable artifact version to the chat turn that produced it."""
+
+    __tablename__ = "artifact_message_links"
+    __table_args__ = (UniqueConstraint("asset_id", "assistant_message_id", name="uq_artifact_message_link"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    asset_id: Mapped[str] = mapped_column(ForeignKey("library_assets.id", ondelete="CASCADE"), index=True)
+    chat_id: Mapped[str] = mapped_column(ForeignKey(CHAT_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
+    user_message_id: Mapped[str] = mapped_column(ForeignKey("chat_messages.id", ondelete="CASCADE"), index=True)
+    assistant_message_id: Mapped[str] = mapped_column(ForeignKey("chat_messages.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class ArtifactChunk(UserOwned, Base):
@@ -692,35 +707,136 @@ class ChatRepository:
         with self.database.session() as session:
             return session.get(Chat, chat_id)
 
-    def replace_history(self, chat_id: str, history: list[dict]) -> None:
+    def replace_history(self, chat_id: str, history: list[dict]) -> list[dict]:
         with self.database.session() as session:
             chat = session.get(Chat, chat_id)
             if chat is None:
                 raise ValueError("Không tìm thấy chat.")
-            session.execute(delete(ChatMessage).where(ChatMessage.chat_id == chat_id))
+            existing = {
+                item.id: item
+                for item in session.scalars(select(ChatMessage).where(ChatMessage.chat_id == chat_id))
+            }
+            retained_ids: set[str] = set()
             for position, item in enumerate(history):
-                raw_created_at = item.get("created_at")
-                created_at = (
-                    raw_created_at
-                    if isinstance(raw_created_at, datetime)
-                    else datetime.fromisoformat(raw_created_at)
-                    if isinstance(raw_created_at, str)
-                    else utc_now()
-                )
-                session.add(ChatMessage(
-                    chat_id=chat_id, position=position, role=item["role"], content=item.get("content", ""),
-                    tool_call_id=item.get("id"), tool_name=item.get("name"),
-                    tool_calls=item.get("tool_calls"),
-                    attachments=[{key: value for key, value in attachment.items() if key != "data"}
-                                 for attachment in item.get("attachments", [])] or None,
-                    content_blocks=item.get("content_blocks") or None,
-                    sources=item.get("sources") or None,
-                    created_at=created_at,
-                ))
+                message_id = item.get("message_id") or str(uuid4())
+                item["message_id"] = message_id
+                retained_ids.add(message_id)
+                values = {
+                    "position": position,
+                    "role": item["role"],
+                    "content": item.get("content", ""),
+                    "tool_call_id": item.get("id"),
+                    "tool_name": item.get("name"),
+                    "tool_calls": item.get("tool_calls"),
+                    "attachments": [{key: value for key, value in attachment.items() if key != "data"}
+                                    for attachment in item.get("attachments", [])] or None,
+                    "content_blocks": item.get("content_blocks") or None,
+                    "sources": item.get("sources") or None,
+                }
+                message = existing.get(message_id)
+                if message is None:
+                    raw_created_at = item.get("created_at")
+                    values["created_at"] = (
+                        raw_created_at
+                        if isinstance(raw_created_at, datetime)
+                        else datetime.fromisoformat(raw_created_at)
+                        if isinstance(raw_created_at, str)
+                        else utc_now()
+                    )
+                    session.add(ChatMessage(id=message_id, chat_id=chat_id, **values))
+                else:
+                    for key, value in values.items():
+                        setattr(message, key, value)
+            for message_id, message in existing.items():
+                if message_id not in retained_ids:
+                    session.delete(message)
             user_message = next((item["content"] for item in history if item["role"] == "user"), "")
             if chat.title == "Cuộc trò chuyện mới" and user_message:
                 chat.title = user_message.strip()[:80]
             chat.updated_at = utc_now()
+            session.commit()
+            return history
+
+    def link_artifacts_to_turn(
+        self,
+        chat_id: str,
+        user_message_id: str,
+        assistant_message_id: str,
+        asset_ids: list[str],
+    ) -> list[LibraryAsset]:
+        if not asset_ids:
+            return []
+        with self.database.session() as session:
+            assets = list(session.scalars(select(LibraryAsset).where(LibraryAsset.id.in_(asset_ids))))
+            for asset in assets:
+                exists = session.scalar(select(ArtifactMessageLink).where(
+                    ArtifactMessageLink.asset_id == asset.id,
+                    ArtifactMessageLink.assistant_message_id == assistant_message_id,
+                ))
+                if exists is None:
+                    session.add(ArtifactMessageLink(
+                        asset_id=asset.id,
+                        chat_id=chat_id,
+                        user_message_id=user_message_id,
+                        assistant_message_id=assistant_message_id,
+                        user_id=asset.user_id,
+                        workspace_id=asset.workspace_id,
+                    ))
+            session.commit()
+            return assets
+
+    def artifacts_by_assistant_message(self, chat_id: str, message_ids: list[str]) -> dict[str, list[LibraryAsset]]:
+        if not message_ids:
+            return {}
+        with self.database.session() as session:
+            rows = session.execute(
+                select(ArtifactMessageLink.assistant_message_id, LibraryAsset)
+                .join(LibraryAsset, LibraryAsset.id == ArtifactMessageLink.asset_id)
+                .where(
+                    ArtifactMessageLink.chat_id == chat_id,
+                    ArtifactMessageLink.assistant_message_id.in_(message_ids),
+                )
+                .order_by(ArtifactMessageLink.created_at)
+            ).all()
+            result: dict[str, list[LibraryAsset]] = {}
+            for message_id, asset in rows:
+                result.setdefault(message_id, []).append(asset)
+            return result
+
+    def backfill_artifact_links(self, chat_id: str) -> None:
+        """Recover links for files made before artifact provenance was introduced."""
+        with self.database.session() as session:
+            messages = list(session.scalars(
+                select(ChatMessage).where(ChatMessage.chat_id == chat_id).order_by(ChatMessage.position)
+            ))
+            latest_user: ChatMessage | None = None
+            for index, message in enumerate(messages):
+                if message.role == "user":
+                    latest_user = message
+                    continue
+                if message.role != "tool" or message.tool_name != "create_file" or latest_user is None:
+                    continue
+                try:
+                    asset_id = str(json.loads(message.content).get("id", ""))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                asset = session.get(LibraryAsset, asset_id)
+                assistant = next((item for item in messages[index + 1 :] if item.role == "assistant"), None)
+                if asset is None or assistant is None:
+                    continue
+                exists = session.scalar(select(ArtifactMessageLink).where(
+                    ArtifactMessageLink.asset_id == asset.id,
+                    ArtifactMessageLink.assistant_message_id == assistant.id,
+                ))
+                if exists is None:
+                    session.add(ArtifactMessageLink(
+                        asset_id=asset.id,
+                        chat_id=chat_id,
+                        user_message_id=latest_user.id,
+                        assistant_message_id=assistant.id,
+                        user_id=asset.user_id,
+                        workspace_id=asset.workspace_id,
+                    ))
             session.commit()
 
     def set_unread(self, chat_id: str, unread: bool) -> Chat | None:
@@ -1244,7 +1360,7 @@ class AuthRepository:
             session.execute(delete(AuthSession).where(AuthSession.token_hash == token_hash)); session.commit()
 
     def claim_legacy_data(self, user_id: str) -> None:
-        entities = (Chat, ChatMemoryChunk, ChatShare, ChatMessage, ResponseFeedback, UserPreference, PromptTemplate, MediaAttachment, LibraryAsset, ArtifactChunk, Project, Schedule, ScheduleRun, Plugin, ConnectorConnection, OAuthState, ConnectorAuditLog, Document, DocumentChunk, KnowledgeCollection, BackgroundJob)
+        entities = (Chat, ChatMemoryChunk, ChatShare, ChatMessage, ResponseFeedback, UserPreference, PromptTemplate, MediaAttachment, LibraryAsset, ArtifactMessageLink, ArtifactChunk, Project, Schedule, ScheduleRun, Plugin, ConnectorConnection, OAuthState, ConnectorAuditLog, Document, DocumentChunk, KnowledgeCollection, BackgroundJob)
         with self.database.session() as session:
             for entity in entities:
                 session.execute(entity.__table__.update().where(entity.user_id.is_(None)).values(user_id=user_id))
@@ -1254,7 +1370,7 @@ class AuthRepository:
         return WorkspaceRepository(self.database).ensure_personal_workspace(user_id, display_name)
 
     def claim_legacy_workspace_data(self, user_id: str, workspace_id: str) -> None:
-        entities = (Chat, ChatMemoryChunk, ChatShare, ChatMessage, ResponseFeedback, UserPreference, PromptTemplate, MediaAttachment, LibraryAsset, ArtifactChunk, Project, Schedule, ScheduleRun, Plugin, ConnectorConnection, OAuthState, ConnectorAuditLog, Document, DocumentChunk, KnowledgeCollection, BackgroundJob)
+        entities = (Chat, ChatMemoryChunk, ChatShare, ChatMessage, ResponseFeedback, UserPreference, PromptTemplate, MediaAttachment, LibraryAsset, ArtifactMessageLink, ArtifactChunk, Project, Schedule, ScheduleRun, Plugin, ConnectorConnection, OAuthState, ConnectorAuditLog, Document, DocumentChunk, KnowledgeCollection, BackgroundJob)
         with self.database.session() as session:
             for entity in entities:
                 session.execute(entity.__table__.update().where(entity.user_id == user_id, entity.workspace_id.is_(None)).values(workspace_id=workspace_id))

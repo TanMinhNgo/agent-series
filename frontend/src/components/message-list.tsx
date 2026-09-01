@@ -2,7 +2,7 @@ import { Fragment, useRef, type RefObject } from 'react';
 import { useGSAP } from '@gsap/react';
 import { gsap } from 'gsap';
 import { ScrollToPlugin } from 'gsap/ScrollToPlugin';
-import { Bookmark, Copy, Sparkles } from 'lucide-react';
+import { Bookmark, Copy, FileText, Sparkles } from 'lucide-react';
 
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -10,7 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils';
 import { RichResponseLazy } from '@/src/components/rich-response-lazy';
 import { AssistantMessageActions } from '@/src/components/assistant-message-actions';
-import type { Message } from '@/src/types';
+import type { LibraryAsset, Message } from '@/src/types';
 
 gsap.registerPlugin(useGSAP, ScrollToPlugin);
 
@@ -42,6 +42,7 @@ type Props = {
   onBranch?: (message: Message) => Promise<void>;
   onRegenerate?: (message: Message) => Promise<void>;
   onScheduleProposalAction?: (proposalId: string, action: 'confirm' | 'dismiss') => void;
+  onOpenArtifact?: (asset: LibraryAsset) => void;
 };
 
 export function MessageList({
@@ -57,6 +58,7 @@ export function MessageList({
   onBranch,
   onRegenerate,
   onScheduleProposalAction,
+  onOpenArtifact,
 }: Props) {
   const latestUserMessageRef = useRef<HTMLElement | null>(null);
   const previousAssistantRef = useRef<HTMLElement | null>(null);
@@ -298,6 +300,25 @@ export function MessageList({
                     onBranch={onBranch}
                     onRegenerate={onRegenerate}
                   />
+                ) : null}
+                {message.role === 'assistant' && message.artifacts?.length ? (
+                  <div className="mt-3 max-w-2xl rounded-xl border bg-muted/30 p-3">
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">File AI đã tạo</p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {message.artifacts.map((asset) => (
+                        <button
+                          key={asset.id}
+                          type="button"
+                          className="flex min-w-0 items-center gap-2 rounded-lg border bg-background px-3 py-2 text-left hover:bg-muted"
+                          onClick={() => onOpenArtifact?.(asset)}
+                        >
+                          <FileText className="shrink-0 text-muted-foreground" size={16} />
+                          <span className="min-w-0 flex-1 truncate text-sm">{asset.name}</span>
+                          <span className="shrink-0 text-xs text-muted-foreground">v{asset.version}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 ) : null}
                 {message.messageId && message.role === 'user' ? (
                   <div className="mt-1 flex justify-end gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
