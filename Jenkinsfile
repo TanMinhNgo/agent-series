@@ -41,8 +41,8 @@ pipeline {
           python3.12 -m venv .ci-venv
           .ci-venv/bin/python -m pip install --require-hashes --requirement requirements-ci.lock
           mkdir -p "$REPORTS_DIR"
-          DATABASE_URL=postgresql+psycopg://agent:agent@localhost:5432/agent_series .ci-venv/bin/python -m alembic upgrade head
-          DATABASE_URL=postgresql+psycopg://agent:agent@localhost:5432/agent_series .ci-venv/bin/python -m coverage run -m pytest -q --junitxml="$REPORTS_DIR/backend-junit.xml"
+          DATABASE_URL=postgresql+psycopg://agent:agent@host.docker.internal:5432/agent_series .ci-venv/bin/python -m alembic upgrade head
+          DATABASE_URL=postgresql+psycopg://agent:agent@host.docker.internal:5432/agent_series .ci-venv/bin/python -m coverage run -m pytest -q --junitxml="$REPORTS_DIR/backend-junit.xml"
           .ci-venv/bin/python -m coverage xml -o "$REPORTS_DIR/backend-coverage.xml"
           cd frontend
           npm ci --ignore-scripts
