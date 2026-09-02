@@ -94,18 +94,30 @@ pipeline {
               exit 1
             fi
 
-            # Quét manifest/lockfile đã commit, không quét cả workspace CI. Bước test
-            # tạo .ci-venv, node_modules và reports; các file sinh ra đó vừa không là
-            # dependency nguồn, vừa có thể làm Dependency-Check 12.2.2 lỗi khi tạo XML.
-            docker run --rm \
-              -v "$PWD:/src" \
-              -v "$PWD/$REPORTS_DIR/owasp:/report" \
+            # CI agent only shares the Docker socket, not its workspace, with the
+            # Docker host. Copy the committed manifest/lockfiles into a scanner
+            # container instead of bind-mounting $PWD (which becomes an empty /src).
+            scan_container="$(docker create --entrypoint /bin/sh \
               -v "$data_volume:/usr/share/dependency-check/data" \
               owasp/dependency-check:12.2.2 \
+              -c 'mkdir -p /src/frontend /report; tail -f /dev/null')"
+            cleanup_scan_container() {
+              if [[ -n "${scan_container:-}" ]]; then docker rm -f "$scan_container" >/dev/null 2>&1 || true; fi
+            }
+            trap cleanup_scan_container EXIT
+            docker start "$scan_container" >/dev/null
+            docker cp requirements.txt "$scan_container:/src/requirements.txt"
+            docker cp requirements-ci.lock "$scan_container:/src/requirements-ci.lock"
+            docker cp frontend/package-lock.json "$scan_container:/src/frontend/package-lock.json"
+            docker exec "$scan_container" /usr/share/dependency-check/bin/dependency-check.sh \
               --scan /src/requirements.txt \
               --scan /src/requirements-ci.lock \
               --scan /src/frontend/package-lock.json \
               --out /report --format ALL --failOnCVSS 7 --noupdate
+            docker cp "$scan_container:/report/." "$REPORTS_DIR/owasp"
+            cleanup_scan_container
+            scan_container=''
+            trap - EXIT
           '''
         }
       }
