@@ -138,8 +138,19 @@ pipeline {
         sh '''#!/usr/bin/env bash
           set -euo pipefail
           mkdir -p "$REPORTS_DIR/trivy"
-          docker run --rm -v "$PWD:/src" aquasec/trivy:0.58.0 fs --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --format json --output /src/$REPORTS_DIR/trivy/fs.json /src
-          docker run --rm -v "$PWD:/src" aquasec/trivy:0.58.0 config --exit-code 1 --severity HIGH,CRITICAL --format json --output /src/$REPORTS_DIR/trivy/config.json /src
+          scan_container="$(docker create --entrypoint /bin/sh aquasec/trivy:0.58.0 -c 'mkdir -p /src /report; tail -f /dev/null')"
+          cleanup_scan_container() {
+            if [[ -n "${scan_container:-}" ]]; then docker rm -f "$scan_container" >/dev/null 2>&1 || true; fi
+          }
+          trap cleanup_scan_container EXIT
+          docker start "$scan_container" >/dev/null
+          git archive --format=tar HEAD | docker cp - "$scan_container:/src"
+
+          scan_status=0
+          docker exec "$scan_container" trivy fs --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --format json --output /report/fs.json /src || scan_status=$?
+          docker exec "$scan_container" trivy config --exit-code 1 --severity HIGH,CRITICAL --format json --output /report/config.json /src || scan_status=$?
+          docker cp "$scan_container:/report/." "$REPORTS_DIR/trivy"
+          exit "$scan_status"
         '''
       }
     }
@@ -160,10 +171,21 @@ pipeline {
       steps {
         sh '''#!/usr/bin/env bash
           set -euo pipefail
+          mkdir -p "$REPORTS_DIR/trivy"
+          scan_container="$(docker create --entrypoint /bin/sh -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.58.0 -c 'mkdir -p /report; tail -f /dev/null')"
+          cleanup_scan_container() {
+            if [[ -n "${scan_container:-}" ]]; then docker rm -f "$scan_container" >/dev/null 2>&1 || true; fi
+          }
+          trap cleanup_scan_container EXIT
+          docker start "$scan_container" >/dev/null
+
+          scan_status=0
           for image in agent-series-api:$IMAGE_TAG agent-series-worker:$IMAGE_TAG agent-series-frontend:$IMAGE_TAG; do
             safe_name=$(echo "$image" | tr ':/' '__')
-            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/src" aquasec/trivy:0.58.0 image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --format json --output "/src/$REPORTS_DIR/trivy/${safe_name}.json" "$image"
+            docker exec "$scan_container" trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --format json --output "/report/${safe_name}.json" "$image" || scan_status=$?
           done
+          docker cp "$scan_container:/report/." "$REPORTS_DIR/trivy"
+          exit "$scan_status"
         '''
       }
     }
