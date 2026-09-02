@@ -1,4 +1,4 @@
-import { type PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { type PointerEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FilePenLine,
   FileText,
@@ -60,6 +60,259 @@ function formatDate(value: string) {
   });
 }
 
+type ArtifactPreviewProps = {
+  preview: { isLoading: boolean; data?: LibraryAssetPreview };
+  selected: LibraryAsset;
+  fullscreen?: boolean;
+};
+
+function ArtifactPreview({ preview, selected, fullscreen = false }: ArtifactPreviewProps) {
+  let content: ReactNode;
+  if (preview.isLoading) {
+    content = (
+      <p className="flex items-center gap-2 text-sm text-muted-foreground">
+        <LoaderCircle className="animate-spin" size={16} /> Đang tải preview...
+      </p>
+    );
+  } else if (preview.data?.kind === 'image') {
+    content = (
+      <img
+        className={
+          fullscreen ? 'max-h-full max-w-full object-contain' : 'max-h-[55dvh] max-w-full object-contain'
+        }
+        src={selected.url}
+        alt={selected.name}
+      />
+    );
+  } else if (preview.data?.kind === 'pdf') {
+    content = (
+      <iframe
+        className={
+          fullscreen
+            ? 'h-full min-h-[60dvh] w-full rounded border bg-white'
+            : 'h-[52dvh] w-full rounded border bg-white'
+        }
+        src={selected.url}
+        title={`Preview ${selected.name}`}
+      />
+    );
+  } else if (preview.data?.kind === 'text') {
+    content = (
+      <pre
+        className={
+          fullscreen
+            ? 'h-full w-full overflow-auto whitespace-pre-wrap text-xs leading-5'
+            : 'max-h-[52dvh] overflow-auto whitespace-pre-wrap text-xs leading-5'
+        }
+      >
+        {preview.data.content}
+      </pre>
+    );
+  } else {
+    content = <p className="text-sm text-muted-foreground">Định dạng này chưa preview trực tiếp được.</p>;
+  }
+  return (
+    <div className={`min-h-0 ${fullscreen ? 'flex flex-1 flex-col overflow-hidden p-4 sm:p-6' : ''}`}>
+      <div
+        className={`min-h-48 border bg-muted/20 p-3 ${fullscreen ? 'flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-xl' : 'rounded-lg'}`}
+      >
+        {content}
+      </div>
+      {preview.data?.truncated ? (
+        <p className="mt-2 text-xs text-muted-foreground">Preview đã được rút gọn.</p>
+      ) : null}
+    </div>
+  );
+}
+
+type ArtifactGroup = { messageId: string; createdAt?: string; artifacts: LibraryAsset[] };
+
+function ArtifactGroupList({
+  groups,
+  generatedArtifacts,
+  selectedId,
+  onSelect,
+}: {
+  groups: ArtifactGroup[];
+  generatedArtifacts: LibraryAsset[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  if (!generatedArtifacts.length) {
+    return <p className="p-2 text-sm text-muted-foreground">Chat này chưa có file nào do AI tạo.</p>;
+  }
+  return (
+    <div className="space-y-4">
+      {groups.map((group) => (
+        <section key={group.messageId}>
+          <p className="mb-2 px-1 text-xs font-medium text-muted-foreground">
+            Phản hồi {group.createdAt ? formatDate(group.createdAt) : 'vừa tạo'}
+          </p>
+          <div className="space-y-2">
+            {group.artifacts.map((asset) => (
+              <button
+                key={asset.id}
+                type="button"
+                className={`w-full rounded-lg border p-3 text-left transition-colors hover:bg-muted ${selectedId === asset.id ? 'border-primary bg-primary/5' : ''}`}
+                onClick={() => onSelect(asset.id)}
+              >
+                <div className="flex items-start gap-2">
+                  <FileText className="mt-0.5 shrink-0 text-muted-foreground" size={16} />
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium">{asset.name}</span>
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px]">
+                    v{asset.version}
+                  </span>
+                </div>
+                <p className="mt-1 truncate pl-6 text-xs text-muted-foreground">
+                  {formatDate(asset.createdAt)} · {formatSize(asset.sizeBytes)}
+                </p>
+              </button>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+type ArtifactDetailsProps = {
+  selected: LibraryAsset;
+  versions: LibraryAsset[] | undefined;
+  latestVersion: number;
+  preview: { isLoading: boolean; data?: LibraryAssetPreview };
+  diff: { isLoading: boolean; data?: LibraryAssetDiff; error?: unknown };
+  restorePending: boolean;
+  restoreError: unknown;
+  canEditArtifacts: boolean;
+  showDiff: boolean;
+  onEdit: (asset: LibraryAsset) => void;
+  onSelectVersion: (id: string) => void;
+  onRestore: (id: string) => void;
+  onToggleDiff: () => void;
+  onOpenFullscreen: () => void;
+};
+
+function ArtifactDetails({
+  selected,
+  versions,
+  latestVersion,
+  preview,
+  diff,
+  restorePending,
+  restoreError,
+  canEditArtifacts,
+  showDiff,
+  onEdit,
+  onSelectVersion,
+  onRestore,
+  onToggleDiff,
+  onOpenFullscreen,
+}: ArtifactDetailsProps) {
+  const renderDiffContent = () => {
+    if (diff.isLoading) {
+      return (
+        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+          <LoaderCircle className="animate-spin" size={16} /> Đang tạo diff...
+        </p>
+      );
+    }
+    if (diff.data?.diff) {
+      return <pre className="whitespace-pre-wrap text-xs leading-5">{diff.data.diff}</pre>;
+    }
+    return <p className="text-sm text-muted-foreground">Không có thay đổi giữa hai version.</p>;
+  };
+
+  return (
+    <>
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="truncate font-medium">{selected.name}</h3>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Tạo lúc {formatDate(selected.createdAt)} · version {selected.version}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {isEditableArtifact(selected) ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!canEditArtifacts}
+              onClick={() => onEdit(selected)}
+              title={canEditArtifacts ? 'Sửa file này bằng AI' : 'Ollama local chưa hỗ trợ sửa file'}
+            >
+              <FilePenLine size={15} /> Sửa file này
+            </Button>
+          ) : null}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={onOpenFullscreen}
+            aria-label="Mở rộng xem nội dung"
+            title="Mở rộng xem nội dung"
+          >
+            <Maximize2 size={16} />
+          </Button>
+        </div>
+      </div>
+      {versions && versions.length > 1 ? (
+        <div className="mb-3 flex flex-wrap gap-2" aria-label="Lịch sử phiên bản">
+          {versions.map((asset) => (
+            <Button
+              key={asset.id}
+              size="sm"
+              variant={asset.id === selected.id ? 'secondary' : 'outline'}
+              onClick={() => onSelectVersion(asset.id)}
+            >
+              v{asset.version}
+            </Button>
+          ))}
+        </div>
+      ) : null}
+      {selected.version < latestVersion ? (
+        <Button
+          className="mb-3"
+          size="sm"
+          variant="outline"
+          disabled={restorePending}
+          onClick={() => onRestore(selected.id)}
+        >
+          <RotateCcw size={15} />
+          {restorePending ? 'Đang khôi phục...' : `Khôi phục v${selected.version} thành version mới`}
+        </Button>
+      ) : null}
+      {restoreError ? (
+        <p className="mb-3 text-sm text-destructive">Không thể khôi phục version này.</p>
+      ) : null}
+      {isEditableArtifact(selected) && selected.version > 1 ? (
+        <Button
+          className="mb-3"
+          size="sm"
+          variant={showDiff ? 'secondary' : 'outline'}
+          onClick={onToggleDiff}
+        >
+          <GitCompareArrows size={15} /> {showDiff ? 'Xem nội dung' : 'Xem thay đổi'}
+        </Button>
+      ) : null}
+      {showDiff ? (
+        <div className="max-h-[52dvh] overflow-auto rounded-lg border bg-muted/20 p-3">
+          {renderDiffContent()}
+          {diff.error ? <p className="mt-2 text-sm text-destructive">Không thể tải diff.</p> : null}
+        </div>
+      ) : (
+        <ArtifactPreview preview={preview} selected={selected} />
+      )}
+      <a
+        className="mt-3 inline-block text-sm text-primary hover:underline"
+        href={selected.url}
+        target="_blank"
+        rel="noreferrer"
+      >
+        Mở hoặc tải file gốc
+      </a>
+    </>
+  );
+}
+
 export function ArtifactPanel({
   open,
   onOpenChange,
@@ -98,7 +351,7 @@ export function ArtifactPanel({
     [messages],
   );
   const generatedArtifacts = useMemo(() => groups.flatMap((group) => group.artifacts), [groups]);
-  const initialSelected = generatedArtifacts.find((asset) => asset.id === selectedArtifactId) || null;
+  const initialSelected = generatedArtifacts.find((asset) => asset.id === selectedArtifactId) ?? null;
   const versions = useQuery({
     queryKey: ['artifact-versions', selectedArtifactId],
     queryFn: () => request<LibraryAsset[]>({ url: `/library/assets/${selectedArtifactId}/versions` }),
@@ -106,7 +359,7 @@ export function ArtifactPanel({
   });
   const selected = useMemo(
     () =>
-      [...generatedArtifacts, ...(versions.data || [])].find((asset) => asset.id === selectedArtifactId) ||
+      [...generatedArtifacts, ...(versions.data ?? [])].find((asset) => asset.id === selectedArtifactId) ??
       null,
     [generatedArtifacts, selectedArtifactId, versions.data],
   );
@@ -178,59 +431,8 @@ export function ArtifactPanel({
     onSelectedArtifactChange(assetId);
   };
   const latestVersion = Math.max(
-    selected?.version || 1,
-    ...(versions.data || []).map((asset) => asset.version),
-  );
-
-  const renderPreview = (fullscreen = false) => (
-    <div className={`min-h-0 ${fullscreen ? 'flex flex-1 flex-col overflow-hidden p-4 sm:p-6' : ''}`}>
-      <div
-        className={`min-h-48 border bg-muted/20 p-3 ${
-          fullscreen
-            ? 'flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-xl'
-            : 'rounded-lg'
-        }`}
-      >
-        {preview.isLoading ? (
-          <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <LoaderCircle className="animate-spin" size={16} /> Đang tải preview...
-          </p>
-        ) : preview.data?.kind === 'image' ? (
-          <img
-            className={
-              fullscreen ? 'max-h-full max-w-full object-contain' : 'max-h-[55dvh] max-w-full object-contain'
-            }
-            src={selected?.url}
-            alt={selected?.name}
-          />
-        ) : preview.data?.kind === 'pdf' ? (
-          <iframe
-            className={
-              fullscreen
-                ? 'h-full min-h-[60dvh] w-full rounded border bg-white'
-                : 'h-[52dvh] w-full rounded border bg-white'
-            }
-            src={selected?.url}
-            title={selected ? `Preview ${selected.name}` : 'Preview file'}
-          />
-        ) : preview.data?.kind === 'text' ? (
-          <pre
-            className={
-              fullscreen
-                ? 'h-full w-full overflow-auto whitespace-pre-wrap text-xs leading-5'
-                : 'max-h-[52dvh] overflow-auto whitespace-pre-wrap text-xs leading-5'
-            }
-          >
-            {preview.data.content}
-          </pre>
-        ) : (
-          <p className="text-sm text-muted-foreground">Định dạng này chưa preview trực tiếp được.</p>
-        )}
-      </div>
-      {preview.data?.truncated ? (
-        <p className="mt-2 text-xs text-muted-foreground">Preview đã được rút gọn.</p>
-      ) : null}
-    </div>
+    selected?.version ?? 1,
+    ...(versions.data ?? []).map((asset) => asset.version),
   );
 
   const startResize = (event: PointerEvent<HTMLDivElement>) => {
@@ -265,42 +467,12 @@ export function ArtifactPanel({
       </div>
       <div className="grid min-h-0 flex-1 grid-rows-[minmax(150px,0.8fr)_minmax(220px,1.2fr)]">
         <div className="min-h-0 overflow-y-auto border-b p-3">
-          {generatedArtifacts.length ? (
-            <div className="space-y-4">
-              {groups.map((group) => (
-                <section key={group.messageId}>
-                  <p className="mb-2 px-1 text-xs font-medium text-muted-foreground">
-                    Phản hồi {group.createdAt ? formatDate(group.createdAt) : 'vừa tạo'}
-                  </p>
-                  <div className="space-y-2">
-                    {group.artifacts.map((asset) => (
-                      <button
-                        key={asset.id}
-                        type="button"
-                        className={`w-full rounded-lg border p-3 text-left transition-colors hover:bg-muted ${
-                          selected?.id === asset.id ? 'border-primary bg-primary/5' : ''
-                        }`}
-                        onClick={() => selectArtifact(asset.id)}
-                      >
-                        <div className="flex items-start gap-2">
-                          <FileText className="mt-0.5 shrink-0 text-muted-foreground" size={16} />
-                          <span className="min-w-0 flex-1 truncate text-sm font-medium">{asset.name}</span>
-                          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px]">
-                            v{asset.version}
-                          </span>
-                        </div>
-                        <p className="mt-1 truncate pl-6 text-xs text-muted-foreground">
-                          {formatDate(asset.createdAt)} · {formatSize(asset.sizeBytes)}
-                        </p>
-                      </button>
-                    ))}
-                  </div>
-                </section>
-              ))}
-            </div>
-          ) : (
-            <p className="p-2 text-sm text-muted-foreground">Chat này chưa có file nào do AI tạo.</p>
-          )}
+          <ArtifactGroupList
+            groups={groups}
+            generatedArtifacts={generatedArtifacts}
+            selectedId={selected?.id || null}
+            onSelect={selectArtifact}
+          />
         </div>
         <div className="min-h-0 overflow-auto p-4">
           {!selected ? (
@@ -308,103 +480,22 @@ export function ArtifactPanel({
               Chọn một file ở phía trên để xem nội dung.
             </div>
           ) : (
-            <>
-              <div className="mb-3 flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <h3 className="truncate font-medium">{selected.name}</h3>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    Tạo lúc {formatDate(selected.createdAt)} · version {selected.version}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  {isEditableArtifact(selected) ? (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      disabled={!canEditArtifacts}
-                      onClick={() => onEditArtifact(selected)}
-                      title={canEditArtifacts ? 'Sửa file này bằng AI' : 'Ollama local chưa hỗ trợ sửa file'}
-                    >
-                      <FilePenLine size={15} /> Sửa file này
-                    </Button>
-                  ) : null}
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={() => setIsFullscreen(true)}
-                    aria-label="Mở rộng xem nội dung"
-                    title="Mở rộng xem nội dung"
-                  >
-                    <Maximize2 size={16} />
-                  </Button>
-                </div>
-              </div>
-              {versions.data && versions.data.length > 1 ? (
-                <div className="mb-3 flex flex-wrap gap-2" aria-label="Lịch sử phiên bản">
-                  {versions.data.map((asset) => (
-                    <Button
-                      key={asset.id}
-                      size="sm"
-                      variant={asset.id === selected.id ? 'secondary' : 'outline'}
-                      onClick={() => selectArtifact(asset.id)}
-                    >
-                      v{asset.version}
-                    </Button>
-                  ))}
-                </div>
-              ) : null}
-              {selected.version < latestVersion ? (
-                <Button
-                  className="mb-3"
-                  size="sm"
-                  variant="outline"
-                  disabled={restoreVersion.isPending}
-                  onClick={() => restoreVersion.mutate(selected.id)}
-                >
-                  <RotateCcw size={15} />
-                  {restoreVersion.isPending
-                    ? 'Đang khôi phục...'
-                    : `Khôi phục v${selected.version} thành version mới`}
-                </Button>
-              ) : null}
-              {restoreVersion.error ? (
-                <p className="mb-3 text-sm text-destructive">Không thể khôi phục version này.</p>
-              ) : null}
-              {isEditableArtifact(selected) && selected.version > 1 ? (
-                <Button
-                  className="mb-3"
-                  size="sm"
-                  variant={showDiff ? 'secondary' : 'outline'}
-                  onClick={() => setShowDiff((value) => !value)}
-                >
-                  <GitCompareArrows size={15} /> {showDiff ? 'Xem nội dung' : 'Xem thay đổi'}
-                </Button>
-              ) : null}
-              {showDiff ? (
-                <div className="max-h-[52dvh] overflow-auto rounded-lg border bg-muted/20 p-3">
-                  {diff.isLoading ? (
-                    <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <LoaderCircle className="animate-spin" size={16} /> Đang tạo diff...
-                    </p>
-                  ) : diff.data?.diff ? (
-                    <pre className="whitespace-pre-wrap text-xs leading-5">{diff.data.diff}</pre>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">Không có thay đổi giữa hai version.</p>
-                  )}
-                  {diff.error ? <p className="mt-2 text-sm text-destructive">Không thể tải diff.</p> : null}
-                </div>
-              ) : (
-                renderPreview()
-              )}
-              <a
-                className="mt-3 inline-block text-sm text-primary hover:underline"
-                href={selected.url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Mở hoặc tải file gốc
-              </a>
-            </>
+            <ArtifactDetails
+              selected={selected}
+              versions={versions.data}
+              latestVersion={latestVersion}
+              preview={preview}
+              diff={diff}
+              restorePending={restoreVersion.isPending}
+              restoreError={restoreVersion.error}
+              canEditArtifacts={canEditArtifacts}
+              showDiff={showDiff}
+              onEdit={onEditArtifact}
+              onSelectVersion={selectArtifact}
+              onRestore={(assetId) => restoreVersion.mutate(assetId)}
+              onToggleDiff={() => setShowDiff((value) => !value)}
+              onOpenFullscreen={() => setIsFullscreen(true)}
+            />
           )}
         </div>
       </div>
@@ -499,7 +590,7 @@ export function ArtifactPanel({
               <Minimize2 size={18} />
             </Button>
           </div>
-          {renderPreview(true)}
+          <ArtifactPreview preview={preview} selected={selected} fullscreen />
         </div>
       ) : null}
     </>

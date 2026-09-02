@@ -8,7 +8,7 @@ from copy import deepcopy
 from uuid import uuid4
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty, Queue
@@ -48,6 +48,7 @@ from agent_core.notifications import EmailNotificationService, public_chat_url, 
 from agent_core.web_search import WebSearchService, build_web_search_tool, sources_from_web_steps
 
 VIETNAM_TIMEZONE = "Asia/Ho_Chi_Minh"
+NOT_FOUND_MARKER = "Không tìm thấy"
 API_ERROR_RESPONSES = {
     403: {"description": "Không có quyền thực hiện thao tác này."},
     404: {"description": "Không tìm thấy tài nguyên."},
@@ -497,7 +498,7 @@ def created_artifact_ids(steps: list[Any]) -> list[str]:
             continue
         try:
             payload = json.loads(getattr(step, "result", ""))
-        except (TypeError, ValueError, json.JSONDecodeError):
+        except (TypeError, ValueError):
             continue
         asset_id = payload.get("id") if isinstance(payload, dict) else None
         if isinstance(asset_id, str) and asset_id not in asset_ids:
@@ -532,7 +533,7 @@ def is_ollama_tool_echo(content: str) -> bool:
     """Detect the fake function-call JSON that a small local model may print."""
     try:
         payload = json.loads(content)
-    except (TypeError, ValueError, json.JSONDecodeError):
+    except (TypeError, ValueError):
         return False
     if not isinstance(payload, dict):
         return False
@@ -545,7 +546,7 @@ def is_ollama_tool_echo(content: str) -> bool:
 def should_search_web(query: str) -> bool:
     """Avoid wasting Tavily quota on greetings and stable general knowledge."""
     normalized = query.casefold()
-    if small_talk_response(query) is not None or re.fullmatch(r"\s*hôm nay bạn khỏe không\s*[!?.]*\s*", normalized):
+    if small_talk_response(query) is not None or normalized.strip(" !?.") == "hôm nay bạn khỏe không":
         return False
     return any(re.search(pattern, normalized) for pattern in FRESH_WEB_PATTERNS)
 
@@ -1398,7 +1399,7 @@ def restore_library_asset_version(asset_id: str) -> dict[str, Any]:
         item = services().library.restore_version(asset_id)
     except ValueError as exc:
         message = str(exc)
-        raise HTTPException(status_code=404 if "Không tìm thấy" in message else 422, detail=message) from exc
+        raise HTTPException(status_code=404 if NOT_FOUND_MARKER in message else 422, detail=message) from exc
     enqueue_artifact_index(item)
     return library_asset_json(item)
 
@@ -1417,7 +1418,7 @@ def preview_library_asset(asset_id: str) -> dict[str, Any]:
         return services().artifacts.preview(asset_id)
     except ValueError as exc:
         message = str(exc)
-        raise HTTPException(status_code=404 if "Không tìm thấy" in message else 422, detail=message) from exc
+        raise HTTPException(status_code=404 if NOT_FOUND_MARKER in message else 422, detail=message) from exc
 
 
 @app.get("/api/library/assets/{asset_id}/diff", tags=["Personal library"])
@@ -1426,7 +1427,7 @@ def diff_library_asset(asset_id: str) -> dict[str, Any]:
         return services().artifacts.diff(asset_id)
     except ValueError as exc:
         message = str(exc)
-        raise HTTPException(status_code=404 if "Không tìm thấy" in message else 422, detail=message) from exc
+        raise HTTPException(status_code=404 if NOT_FOUND_MARKER in message else 422, detail=message) from exc
 
 
 @app.get("/api/library/assets/{asset_id}/file", tags=["Personal library"], responses=API_ERROR_RESPONSES)
@@ -2242,6 +2243,86 @@ def delete_plugin(plugin_id: str) -> None:
         raise HTTPException(status_code=404, detail="Không tìm thấy plugin.")
 
 
+@dataclass
+class ChatGenerationContext:
+    history: list[dict[str, Any]]
+    memory: str = ""
+    knowledge: str = ""
+    personalization: str = ""
+    web: str = ""
+    web_sources: list[dict[str, str]] = field(default_factory=list)
+
+
+def load_generation_context(app_services: Services, chat: Chat, content: str, chat_id: str, history: list[dict[str, Any]], events: Queue) -> ChatGenerationContext:
+    context = ChatGenerationContext(history=history)
+    if chat.provider != "ollama":
+        try:
+            project = app_services.workspace.get(Project, chat.project_id) if chat.project_id else None
+            context.memory = app_services.memory.recall(content, chat_id, chat.context_source_chat_id, project_id=chat.project_id, project_only=bool(project and project.memory_mode == "project_only"))
+        except Exception:  # noqa: BLE001
+            events.put(("status", {"message": "Không thể đọc Memory, vẫn tiếp tục trả lời..."}))
+    if chat.project_id is None or chat.collection_id:
+        try:
+            events.put(("status", {"message": "Đang tìm trong Thư viện..."}))
+            options = {"max_distance": OLLAMA_RAG_MAX_DISTANCE} if chat.provider == "ollama" else {}
+            retrieved = app_services.knowledge.search(content, project_id=chat.project_id, collection_id=chat.collection_id, **options)
+            context.knowledge = "" if retrieved == NO_DOCUMENTS_RESULT else retrieved
+        except Exception:  # noqa: BLE001
+            events.put(("status", {"message": "Không thể tìm Thư viện RAG, vẫn tiếp tục trả lời..."}))
+    if chat.provider == "ollama" and should_search_web(content):
+        try:
+            events.put(("status", {"message": "Đang tìm nguồn web mới..."}))
+            context.web, context.web_sources = web_context_from_result(app_services.web_search.search(content))
+            if not context.web:
+                events.put(("status", {"message": "Không thể tìm web, đang trả lời theo kiến thức sẵn có..."}))
+        except Exception:  # noqa: BLE001
+            events.put(("status", {"message": "Không thể tìm web, đang trả lời theo kiến thức sẵn có..."}))
+    if chat.provider != "ollama":
+        try:
+            app_services.personalization.observe_user_message(content)
+            context.personalization = app_services.personalization.context()
+        except Exception:  # noqa: BLE001
+            pass
+    return context
+
+
+def persist_generation(app_services: Services, chat: Chat, chat_id: str, full_history: list[dict[str, Any]], agent: Agent, initial_history_length: int, result: Any, schedule_proposals: list[dict[str, Any]], web_sources: list[dict[str, str]], events: Queue) -> None:
+    if schedule_proposals:
+        result.content_blocks = [*result.content_blocks, *schedule_proposals]
+    if result.content_blocks:
+        agent.history[-1]["content_blocks"] = result.content_blocks
+    if agent.history and agent.history[-1].get("role") == "assistant":
+        visible_content, sources = detach_response_sources(
+            agent.history[-1].get("content", ""),
+            [*sources_from_web_steps(getattr(result, "steps", [])), *web_sources],
+        )
+        if chat.provider == "ollama" and is_ollama_tool_echo(visible_content):
+            visible_content = "Mình chưa thể thực hiện thao tác đó trong chế độ Ollama local. Bạn hãy diễn đạt lại yêu cầu bằng một câu hỏi thông thường nhé."
+        agent.history[-1]["content"] = visible_content
+        if sources:
+            agent.history[-1]["sources"] = sources
+    saved_history = persisted_history(full_history, agent.history, initial_history_length)
+    turn_created_at = datetime.now(UTC).isoformat()
+    for item in saved_history[len(full_history):]:
+        item.setdefault("created_at", turn_created_at)
+    app_services.chats.replace_history(chat_id, saved_history)
+    new_turn = saved_history[len(full_history):]
+    user_message = next((item for item in new_turn if item["role"] == "user"), None)
+    assistant_message = next((item for item in reversed(new_turn) if item["role"] == "assistant"), None)
+    artifact_ids = created_artifact_ids(getattr(result, "steps", []))
+    if user_message and assistant_message and artifact_ids:
+        assets = app_services.chats.link_artifacts_to_turn(chat_id, user_message["message_id"], assistant_message["message_id"], artifact_ids)
+        if assets:
+            assistant_message["artifacts"] = [library_asset_json(asset) for asset in assets]
+    BackgroundJobRepository(app_services.chats.database).enqueue("memory_index", {"chat_id": chat_id})
+    completed_message = next(
+        (item for item in reversed(saved_history) if item["role"] == "assistant"),
+        {"role": "assistant", "content": result.text, "content_blocks": result.content_blocks},
+    )
+    events.put(("message", message_json(completed_message)))
+    events.put(("done", {}))
+
+
 def stream_chat(
     chat_id: str,
     content: str,
@@ -2285,71 +2366,22 @@ def stream_chat(
                 events.put(("message", message_json(saved_history[-1])))
                 events.put(("done", {}))
                 return
-            memory_context = ""
-            personalization_context = ""
-            if chat.provider != "ollama":
-                try:
-                    project = app_services.workspace.get(Project, chat.project_id) if chat.project_id else None
-                    memory_context = app_services.memory.recall(
-                        content,
-                        chat_id,
-                        chat.context_source_chat_id,
-                        project_id=chat.project_id,
-                        project_only=bool(project and project.memory_mode == "project_only"),
-                    )
-                except Exception:  # noqa: BLE001
-                    # Long-term memory is an enhancement: an unavailable embedding
-                    # model must never prevent the current conversation from working.
-                    events.put(("status", {"message": "Không thể đọc Memory, vẫn tiếp tục trả lời..."}))
+            context = load_generation_context(app_services, chat, content, chat_id, full_history, events)
             if cancel_event.is_set():
                 raise AgentCancelled()
-            knowledge_context = ""
-            if chat.project_id is None or chat.collection_id:
-                try:
-                    events.put(("status", {"message": "Đang tìm trong Thư viện..."}))
-                    search_options = {"max_distance": OLLAMA_RAG_MAX_DISTANCE} if chat.provider == "ollama" else {}
-                    retrieved = app_services.knowledge.search(
-                        content,
-                        project_id=chat.project_id,
-                        collection_id=chat.collection_id,
-                        **search_options,
-                    )
-                    knowledge_context = "" if retrieved == NO_DOCUMENTS_RESULT else retrieved
-                except Exception:  # noqa: BLE001
-                    # Retrieval is a priority, not a single point of failure for chat.
-                    events.put(("status", {"message": "Không thể tìm Thư viện RAG, vẫn tiếp tục trả lời..."}))
-            if cancel_event.is_set():
-                raise AgentCancelled()
-            web_context, web_sources = "", []
-            if chat.provider == "ollama" and should_search_web(content):
-                try:
-                    events.put(("status", {"message": "Đang tìm nguồn web mới..."}))
-                    web_context, web_sources = web_context_from_result(app_services.web_search.search(content))
-                    if not web_context:
-                        events.put(("status", {"message": "Không thể tìm web, đang trả lời theo kiến thức sẵn có..."}))
-                except Exception:  # noqa: BLE001
-                    events.put(("status", {"message": "Không thể tìm web, đang trả lời theo kiến thức sẵn có..."}))
-            if cancel_event.is_set():
-                raise AgentCancelled()
-            if chat.provider != "ollama":
-                try:
-                    app_services.personalization.observe_user_message(content)
-                    personalization_context = app_services.personalization.context()
-                except Exception:  # noqa: BLE001
-                    personalization_context = ""
             plugin_tools = connected_read_tools(app_services.workspace.list_plugins())
             schedule_proposals: list[dict[str, Any]] = []
             agent = make_agent(
                 app_services,
                 chat,
-                memory_context,
-                knowledge_context,
-                personalization_context=personalization_context,
+                context.memory,
+                context.knowledge,
+                personalization_context=context.personalization,
                 plugin_tools=plugin_tools,
                 history=full_history,
                 schedule_proposals=schedule_proposals,
                 artifact_edit=artifact_edit,
-                web_context=web_context,
+                web_context=context.web,
             )
             initial_history_length = len(agent.history)
             result = agent.run(
@@ -2360,51 +2392,7 @@ def stream_chat(
             )
             if cancel_event.is_set():
                 raise AgentCancelled()
-            if schedule_proposals:
-                result.content_blocks = [*result.content_blocks, *schedule_proposals]
-            if result.content_blocks:
-                agent.history[-1]["content_blocks"] = result.content_blocks
-            if agent.history and agent.history[-1].get("role") == "assistant":
-                visible_content, sources = detach_response_sources(
-                    agent.history[-1].get("content", ""),
-                    [*sources_from_web_steps(getattr(result, "steps", [])), *web_sources],
-                )
-                if chat.provider == "ollama" and is_ollama_tool_echo(visible_content):
-                    visible_content = (
-                        "Mình chưa thể thực hiện thao tác đó trong chế độ Ollama local. "
-                        "Bạn hãy diễn đạt lại yêu cầu bằng một câu hỏi thông thường nhé."
-                    )
-                agent.history[-1]["content"] = visible_content
-                if sources:
-                    agent.history[-1]["sources"] = sources
-            saved_history = persisted_history(full_history, agent.history, initial_history_length)
-            turn_created_at = datetime.now(UTC).isoformat()
-            for item in saved_history[len(full_history):]:
-                item.setdefault("created_at", turn_created_at)
-            app_services.chats.replace_history(chat_id, saved_history)
-            new_turn = saved_history[len(full_history):]
-            user_message = next((item for item in new_turn if item["role"] == "user"), None)
-            assistant_message = next((item for item in reversed(new_turn) if item["role"] == "assistant"), None)
-            generated_assets = []
-            artifact_ids = created_artifact_ids(getattr(result, "steps", []))
-            if user_message and assistant_message and artifact_ids:
-                generated_assets = app_services.chats.link_artifacts_to_turn(
-                    chat_id,
-                    user_message["message_id"],
-                    assistant_message["message_id"],
-                    artifact_ids,
-                )
-                if generated_assets:
-                    assistant_message["artifacts"] = [library_asset_json(asset) for asset in generated_assets]
-            BackgroundJobRepository(app_services.chats.database).enqueue("memory_index", {"chat_id": chat_id})
-            # Agent providers currently expose a completed normalized response.
-            # SSE still keeps the UI responsive by streaming tool progress, then the final content.
-            completed_message = next(
-                (item for item in reversed(saved_history) if item["role"] == "assistant"),
-                {"role": "assistant", "content": result.text, "content_blocks": result.content_blocks},
-            )
-            events.put(("message", message_json(completed_message)))
-            events.put(("done", {}))
+            persist_generation(app_services, chat, chat_id, full_history, agent, initial_history_length, result, schedule_proposals, context.web_sources, events)
         except AgentCancelled:
             events.put(("cancelled", {"message": "Đã dừng tạo phản hồi."}))
         except Exception as exc:  # noqa: BLE001
@@ -2442,7 +2430,7 @@ def chat_stream(chat_id: str, payload: ChatRequest) -> StreamingResponse:
         artifact_edit = services().artifacts.edit_context(payload.edit_asset_id, chat.project_id) if payload.edit_asset_id else None
     except ValueError as exc:
         message = str(exc)
-        raise HTTPException(status_code=404 if "Không tìm thấy" in message else 422, detail=message) from exc
+        raise HTTPException(status_code=404 if NOT_FOUND_MARKER in message else 422, detail=message) from exc
     try:
         cancel_event = chat_runs.start(chat_id, payload.run_id, chat.user_id) if payload.run_id else Event()
     except ValueError as exc:
