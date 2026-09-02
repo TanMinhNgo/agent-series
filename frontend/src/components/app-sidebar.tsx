@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { type UIEvent, useCallback, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   CalendarDays,
@@ -26,6 +26,7 @@ import {
   ChevronRight,
   PanelLeftClose,
   PanelLeftOpen,
+  type LucideIcon,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -79,11 +80,465 @@ type Props = {
   onToggleCollapsed?: () => void;
 };
 
+type SidebarNavButtonProps = {
+  label: string;
+  Icon: LucideIcon;
+  active: boolean;
+  collapsed: boolean;
+  onClick?: () => void;
+  primary?: boolean;
+};
+
 const themeOptions = [
   { value: 'system', label: 'System', Icon: Monitor },
   { value: 'light', label: 'Light', Icon: Sun },
   { value: 'dark', label: 'Dark', Icon: Moon },
 ] as const;
+
+function SidebarNavButton({
+  label,
+  Icon,
+  active,
+  collapsed,
+  onClick,
+  primary = false,
+}: SidebarNavButtonProps) {
+  return (
+    <Button
+      variant={primary ? 'default' : 'ghost'}
+      data-active={active}
+      aria-current={active ? 'page' : undefined}
+      className={`${primary ? '' : 'sidebar-nav-item'} justify-start ${
+        collapsed ? 'size-9 px-0 lg:mx-auto' : 'w-full'
+      } ${primary ? 'shadow-sm shadow-primary/15' : ''}`}
+      onClick={onClick}
+      title={label}
+    >
+      <Icon size={16} />
+      <span className={collapsed ? 'sr-only' : undefined}>{label}</span>
+    </Button>
+  );
+}
+
+function SidebarHeader({ collapsed, onToggleCollapsed }: Pick<Props, 'collapsed' | 'onToggleCollapsed'>) {
+  return (
+    <div className={`mb-4 flex items-center ${collapsed ? 'flex-col gap-2' : 'justify-between'}`}>
+      <div className="flex min-w-0 items-center gap-2 font-semibold tracking-tight">
+        <span className="grid size-8 shrink-0 place-items-center rounded-[0.7rem] bg-primary text-primary-foreground shadow-sm shadow-primary/20">
+          <Sparkles size={16} />
+        </span>
+        <span className={collapsed ? 'sr-only' : undefined}>Local Agent</span>
+      </div>
+      {onToggleCollapsed ? (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="hidden text-muted-foreground lg:inline-flex"
+          onClick={onToggleCollapsed}
+          aria-label={collapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'}
+          title={collapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'}
+        >
+          {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function WorkspaceSwitcher({
+  workspaces,
+  activeWorkspaceId,
+  onWorkspaceChange,
+}: Pick<Props, 'workspaces' | 'activeWorkspaceId' | 'onWorkspaceChange'>) {
+  if (!workspaces?.length) return null;
+
+  return (
+    <label className="mb-4 block text-xs text-muted-foreground">
+      <span className="section-label mb-1 block">Workspace</span>
+      <Select
+        value={activeWorkspaceId || workspaces[0]?.id}
+        onValueChange={(workspaceId) => {
+          if (workspaceId) onWorkspaceChange?.(workspaceId);
+        }}
+      >
+        <SelectTrigger className="h-10 w-full rounded-xl border-border/80 bg-background/70 pr-2 text-left shadow-none hover:bg-background">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent align="start" className="max-w-[min(20rem,var(--anchor-width))]">
+          {workspaces.map((workspace) => (
+            <SelectItem key={workspace.id} value={workspace.id} className="py-2">
+              {workspace.name} · {workspace.role}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </label>
+  );
+}
+
+function SidebarNavigation({
+  activeNavigation,
+  collapsed = false,
+  isSystemAdmin = false,
+  onCreateChat,
+  onOpenLibrary,
+  onOpenWorkspace,
+  onOpenAdmin,
+}: Pick<
+  Props,
+  | 'activeNavigation'
+  | 'collapsed'
+  | 'isSystemAdmin'
+  | 'onCreateChat'
+  | 'onOpenLibrary'
+  | 'onOpenWorkspace'
+  | 'onOpenAdmin'
+>) {
+  return (
+    <nav className="mb-5 grid gap-1">
+      <SidebarNavButton
+        label="Đoạn chat mới"
+        Icon={Plus}
+        active={activeNavigation === 'chat'}
+        collapsed={collapsed}
+        onClick={onCreateChat}
+        primary
+      />
+      <SidebarNavButton
+        label="Thư viện"
+        Icon={Library}
+        active={activeNavigation === 'library'}
+        collapsed={collapsed}
+        onClick={onOpenLibrary}
+      />
+      <SidebarNavButton
+        label="Dự án"
+        Icon={FolderKanban}
+        active={activeNavigation === 'projects'}
+        collapsed={collapsed}
+        onClick={() => onOpenWorkspace('projects')}
+      />
+      <SidebarNavButton
+        label="Lịch trình"
+        Icon={CalendarDays}
+        active={activeNavigation === 'schedules'}
+        collapsed={collapsed}
+        onClick={() => onOpenWorkspace('schedules')}
+      />
+      <SidebarNavButton
+        label="Plugin"
+        Icon={Plug}
+        active={activeNavigation === 'plugins'}
+        collapsed={collapsed}
+        onClick={() => onOpenWorkspace('plugins')}
+      />
+      <SidebarNavButton
+        label="Thành viên"
+        Icon={UserRound}
+        active={activeNavigation === 'members'}
+        collapsed={collapsed}
+        onClick={() => onOpenWorkspace('members')}
+      />
+      {isSystemAdmin ? (
+        <SidebarNavButton
+          label="Quản trị hệ thống"
+          Icon={ShieldCheck}
+          active={activeNavigation === 'admin'}
+          collapsed={collapsed}
+          onClick={onOpenAdmin}
+        />
+      ) : null}
+    </nav>
+  );
+}
+
+type ChatListSectionProps = {
+  title: string;
+  chats: Chat[];
+  projects: Project[];
+  activeChatId?: string;
+  onSelectChat: (chat: Chat) => void;
+  onRename: (chat: Chat) => void;
+  onUpdate: Props['onUpdate'];
+  onDelete: (chat: Chat) => void;
+  onShare: (chat: Chat) => void;
+  showPinIcon?: boolean;
+  className?: string;
+};
+
+function ChatListSection({
+  title,
+  chats,
+  projects,
+  activeChatId,
+  onSelectChat,
+  onRename,
+  onUpdate,
+  onDelete,
+  onShare,
+  showPinIcon,
+  className,
+}: ChatListSectionProps) {
+  if (!chats.length) return null;
+
+  return (
+    <section className={className}>
+      <p className="section-label">{title}</p>
+      <nav className="space-y-1">
+        {chats.map((chat) => (
+          <ChatRow
+            key={chat.id}
+            chat={chat}
+            active={activeChatId === chat.id}
+            onSelect={onSelectChat}
+            onRename={onRename}
+            onUpdate={onUpdate}
+            projects={projects}
+            onDelete={onDelete}
+            onShare={onShare}
+            showPinIcon={showPinIcon}
+          />
+        ))}
+      </nav>
+    </section>
+  );
+}
+
+type SidebarHistoryProps = Pick<
+  Props,
+  | 'projects'
+  | 'activeChatId'
+  | 'hasMoreChats'
+  | 'loadingMoreChats'
+  | 'onSelectChat'
+  | 'onUpdate'
+  | 'onDelete'
+  | 'onShare'
+> & {
+  pinned: Chat[];
+  recent: Chat[];
+  archived: Chat[];
+  onRename: (chat: Chat) => void;
+  onHistoryScroll: (event: UIEvent<HTMLDivElement>) => void;
+};
+
+function SidebarHistory({
+  pinned,
+  recent,
+  archived,
+  projects,
+  activeChatId,
+  hasMoreChats,
+  loadingMoreChats,
+  onSelectChat,
+  onRename,
+  onUpdate,
+  onDelete,
+  onShare,
+  onHistoryScroll,
+}: SidebarHistoryProps) {
+  const sectionProps = { projects, activeChatId, onSelectChat, onRename, onUpdate, onDelete, onShare };
+
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto" onScroll={onHistoryScroll}>
+      <ChatListSection title="Đã ghim" chats={pinned} {...sectionProps} showPinIcon={false} />
+      <ChatListSection
+        title="Gần đây"
+        chats={recent}
+        {...sectionProps}
+        className={pinned.length ? 'mt-5' : undefined}
+      />
+      {archived.length ? <Separator className="my-5" /> : null}
+      <ChatListSection title="Lưu trữ" chats={archived} {...sectionProps} />
+      {loadingMoreChats ? (
+        <p className="px-2 py-3 text-center text-xs text-muted-foreground">Đang tải thêm...</p>
+      ) : null}
+      {hasMoreChats && !loadingMoreChats ? (
+        <p className="px-2 py-3 text-center text-xs text-muted-foreground">Cuộn xuống để tải thêm lịch sử</p>
+      ) : null}
+    </div>
+  );
+}
+
+function AccountMenu({
+  collapsed = false,
+  user,
+  theme,
+  onThemeChange,
+  onOpenApiKeys,
+  onLogout,
+}: Pick<Props, 'collapsed' | 'user' | 'theme' | 'onThemeChange' | 'onOpenApiKeys' | 'onLogout'>) {
+  const accountName = user?.displayName || user?.email || 'Tài khoản';
+  const accountInitials = (user?.displayName || user?.email || 'U').slice(0, 2).toUpperCase();
+
+  return (
+    <div className={`mt-5 shrink-0 border-t pt-4 ${collapsed ? 'lg:border-t-0 lg:pt-0' : ''}`}>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="ghost"
+              className={`h-auto w-full justify-start px-2 py-2 ${collapsed ? 'lg:size-9 lg:px-0 lg:justify-center' : ''}`}
+            />
+          }
+        >
+          <span className="grid size-8 shrink-0 place-items-center rounded-full bg-pink-400 text-xs font-semibold text-white">
+            {accountInitials}
+          </span>
+          <span className={`min-w-0 flex-1 text-left ${collapsed ? 'lg:hidden' : ''}`}>
+            <span className="block truncate text-sm font-medium">{accountName}</span>
+            <span className="block text-xs text-muted-foreground">Tài khoản Google</span>
+          </span>
+          <Settings size={17} className={`text-muted-foreground ${collapsed ? 'lg:hidden' : ''}`} />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          side="top"
+          sideOffset={12}
+          align="start"
+          className="w-64 rounded-2xl p-2 shadow-xl"
+        >
+          <div className="flex items-center gap-3 px-2 py-2.5">
+            <span className="grid size-9 shrink-0 place-items-center rounded-full bg-pink-400 text-xs font-semibold text-white">
+              {accountInitials}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium">{accountName}</span>
+              <span className="block truncate text-xs text-muted-foreground">Tài khoản Google</span>
+            </span>
+            <ChevronRight size={16} className="text-muted-foreground" />
+          </div>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={onOpenApiKeys}>
+            <KeyRound /> Thêm API key của bạn
+          </DropdownMenuItem>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <Palette />
+              Cá nhân hóa
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuRadioGroup value={theme} onValueChange={(value) => onThemeChange(value as Theme)}>
+                {themeOptions.map(({ value, label, Icon }) => (
+                  <DropdownMenuRadioItem key={value} value={value}>
+                    <Icon />
+                    {label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+          <DropdownMenuItem disabled>
+            <UserRound /> Hỗ trợ <span className="ml-auto text-xs">Sắp có</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled>
+            <Settings /> Cài đặt <span className="ml-auto text-xs">Sắp có</span>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem disabled>
+            <CircleHelp /> Trợ giúp <ChevronRight className="ml-auto" />
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={onLogout} className="text-destructive focus:text-destructive">
+            <LogOut /> Đăng xuất
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
+type RenameChatDialogProps = {
+  chat: Chat | null;
+  title: string;
+  onTitleChange: (title: string) => void;
+  onClose: () => void;
+  onRename: (chat: Chat, title: string) => void;
+};
+
+function RenameChatDialog({ chat, title, onTitleChange, onClose, onRename }: RenameChatDialogProps) {
+  if (!chat) return null;
+
+  return createPortal(
+    <dialog
+      open
+      className="fixed inset-0 z-100 grid place-items-center bg-black/60 p-4"
+      aria-modal="true"
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+    >
+      <form
+        className="w-full max-w-sm rounded-2xl border bg-card p-5"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const nextTitle = title.trim();
+          if (nextTitle) onRename(chat, nextTitle);
+          onClose();
+        }}
+      >
+        <h2 className="text-lg font-semibold">Đổi tên cuộc trò chuyện</h2>
+        <input
+          autoFocus
+          maxLength={160}
+          className="mt-4 w-full rounded-xl border bg-background px-3 py-2"
+          value={title}
+          onChange={(event) => onTitleChange(event.target.value)}
+        />
+        <div className="mt-5 flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Hủy
+          </Button>
+          <Button type="submit">Lưu</Button>
+        </div>
+      </form>
+    </dialog>,
+    document.body,
+  );
+}
+
+type DeleteChatDialogProps = {
+  chat: Chat | null;
+  onClose: () => void;
+  onDelete: (chat: Chat) => void;
+};
+
+function DeleteChatDialog({ chat, onClose, onDelete }: DeleteChatDialogProps) {
+  if (!chat) return null;
+
+  return createPortal(
+    <dialog
+      open
+      className="fixed inset-0 z-100 grid place-items-center bg-black/60 p-4"
+      aria-modal="true"
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+    >
+      <section className="w-full max-w-sm rounded-2xl border bg-card p-5">
+        <h2 className="text-lg font-semibold">Xóa cuộc trò chuyện?</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Toàn bộ lịch sử và liên kết chia sẻ công khai sẽ bị thu hồi.
+        </p>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>
+            Hủy
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={() => {
+              onDelete(chat);
+              onClose();
+            }}
+          >
+            Xóa
+          </Button>
+        </div>
+      </section>
+    </dialog>,
+    document.body,
+  );
+}
 
 export function AppSidebar({
   chats,
@@ -127,7 +582,7 @@ export function AppSidebar({
     setTitle(chat.title);
   };
   const handleHistoryScroll = useCallback(
-    (event: React.UIEvent<HTMLDivElement>) => {
+    (event: UIEvent<HTMLDivElement>) => {
       const element = event.currentTarget;
       if (
         hasMoreChats &&
@@ -145,345 +600,58 @@ export function AppSidebar({
         collapsed ? 'lg:px-2' : 'lg:p-4'
       }`}
     >
-      <div className={`mb-4 flex items-center ${collapsed ? 'flex-col gap-2' : 'justify-between'}`}>
-        <div className="flex min-w-0 items-center gap-2 font-semibold tracking-tight">
-          <span className="grid size-8 shrink-0 place-items-center rounded-[0.7rem] bg-primary text-primary-foreground shadow-sm shadow-primary/20">
-            <Sparkles size={16} />
-          </span>
-          <span className={collapsed ? 'sr-only' : undefined}>Local Agent</span>
-        </div>
-        {onToggleCollapsed ? (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="hidden text-muted-foreground lg:inline-flex"
-            onClick={onToggleCollapsed}
-            aria-label={collapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'}
-            title={collapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'}
-          >
-            {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-          </Button>
-        ) : null}
-      </div>
-      {workspaces.length && !collapsed ? (
-        <label className="mb-4 block text-xs text-muted-foreground">
-          <span className="section-label mb-1 block">Workspace</span>
-          <Select
-            value={activeWorkspaceId || workspaces[0]?.id}
-            onValueChange={(workspaceId) => {
-              if (workspaceId) onWorkspaceChange?.(workspaceId);
-            }}
-          >
-            <SelectTrigger className="h-10 w-full rounded-xl border-border/80 bg-background/70 pr-2 text-left shadow-none hover:bg-background">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent align="start" className="max-w-[min(20rem,var(--anchor-width))]">
-              {workspaces.map((workspace) => (
-                <SelectItem key={workspace.id} value={workspace.id} className="py-2">
-                  {workspace.name} · {workspace.role}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </label>
+      <SidebarHeader collapsed={collapsed} onToggleCollapsed={onToggleCollapsed} />
+      {!collapsed ? (
+        <WorkspaceSwitcher
+          workspaces={workspaces}
+          activeWorkspaceId={activeWorkspaceId}
+          onWorkspaceChange={onWorkspaceChange}
+        />
       ) : null}
-      <nav className="mb-5 grid gap-1">
-        <Button
-          variant="default"
-          data-active={activeNavigation === 'chat'}
-          aria-current={activeNavigation === 'chat' ? 'page' : undefined}
-          className={`justify-start shadow-sm shadow-primary/15 ${collapsed ? 'size-9 px-0 lg:mx-auto' : 'w-full'}`}
-          onClick={onCreateChat}
-          title="Đoạn chat mới"
-        >
-          <Plus size={16} />
-          <span className={collapsed ? 'sr-only' : undefined}>Đoạn chat mới</span>
-        </Button>
-        <Button
-          variant="ghost"
-          data-active={activeNavigation === 'library'}
-          aria-current={activeNavigation === 'library' ? 'page' : undefined}
-          className={`sidebar-nav-item justify-start ${collapsed ? 'size-9 px-0 lg:mx-auto' : 'w-full'}`}
-          onClick={onOpenLibrary}
-          title="Thư viện"
-        >
-          <Library size={16} />
-          <span className={collapsed ? 'sr-only' : undefined}>Thư viện</span>
-        </Button>
-        <Button
-          variant="ghost"
-          data-active={activeNavigation === 'projects'}
-          aria-current={activeNavigation === 'projects' ? 'page' : undefined}
-          className={`sidebar-nav-item justify-start ${collapsed ? 'size-9 px-0 lg:mx-auto' : 'w-full'}`}
-          onClick={() => onOpenWorkspace('projects')}
-          title="Dự án"
-        >
-          <FolderKanban size={16} />
-          <span className={collapsed ? 'sr-only' : undefined}>Dự án</span>
-        </Button>
-        <Button
-          variant="ghost"
-          data-active={activeNavigation === 'schedules'}
-          aria-current={activeNavigation === 'schedules' ? 'page' : undefined}
-          className={`sidebar-nav-item justify-start ${collapsed ? 'size-9 px-0 lg:mx-auto' : 'w-full'}`}
-          onClick={() => onOpenWorkspace('schedules')}
-          title="Lịch trình"
-        >
-          <CalendarDays size={16} />
-          <span className={collapsed ? 'sr-only' : undefined}>Lịch trình</span>
-        </Button>
-        <Button
-          variant="ghost"
-          data-active={activeNavigation === 'plugins'}
-          aria-current={activeNavigation === 'plugins' ? 'page' : undefined}
-          className={`sidebar-nav-item justify-start ${collapsed ? 'size-9 px-0 lg:mx-auto' : 'w-full'}`}
-          onClick={() => onOpenWorkspace('plugins')}
-          title="Plugin"
-        >
-          <Plug size={16} />
-          <span className={collapsed ? 'sr-only' : undefined}>Plugin</span>
-        </Button>
-        <Button
-          variant="ghost"
-          data-active={activeNavigation === 'members'}
-          className={`sidebar-nav-item justify-start ${collapsed ? 'size-9 px-0 lg:mx-auto' : 'w-full'}`}
-          onClick={() => onOpenWorkspace('members')}
-          title="Thành viên"
-        >
-          <UserRound size={16} />
-          <span className={collapsed ? 'sr-only' : undefined}>Thành viên</span>
-        </Button>
-        {isSystemAdmin ? (
-          <Button
-            variant="ghost"
-            data-active={activeNavigation === 'admin'}
-            className={`sidebar-nav-item justify-start ${collapsed ? 'size-9 px-0 lg:mx-auto' : 'w-full'}`}
-            onClick={onOpenAdmin}
-            title="Quản trị hệ thống"
-          >
-            <ShieldCheck size={16} />
-            <span className={collapsed ? 'sr-only' : undefined}>Quản trị hệ thống</span>
-          </Button>
-        ) : null}
-      </nav>
-      <div
-        className={`min-h-0 flex-1 overflow-y-auto ${collapsed ? 'hidden lg:hidden' : ''}`}
-        onScroll={handleHistoryScroll}
-      >
-        {pinned.length ? (
-          <section>
-            <p className="section-label">Đã ghim</p>
-            <nav className="space-y-1">
-              {pinned.map((chat) => (
-                <ChatRow
-                  key={chat.id}
-                  chat={chat}
-                  active={activeChatId === chat.id}
-                  onSelect={onSelectChat}
-                  onRename={startRename}
-                  onUpdate={onUpdate}
-                  projects={projects}
-                  onDelete={setDeleteTarget}
-                  onShare={onShare}
-                  showPinIcon={false}
-                />
-              ))}
-            </nav>
-          </section>
-        ) : null}
-        {/* Spacing lives on this wrapper: `.section-label` sets `margin` with a
-            shorthand, so a `mt-*` utility on the label itself is overridden. */}
-        <section className={pinned.length ? 'mt-5' : undefined}>
-          <p className="section-label">Gần đây</p>
-          <nav className="space-y-1">
-            {recent.map((chat) => (
-              <ChatRow
-                key={chat.id}
-                chat={chat}
-                active={activeChatId === chat.id}
-                onSelect={onSelectChat}
-                onRename={startRename}
-                onUpdate={onUpdate}
-                projects={projects}
-                onDelete={setDeleteTarget}
-                onShare={onShare}
-              />
-            ))}
-          </nav>
-        </section>
-        {archived.length ? (
-          <>
-            <Separator className="my-5" />
-            <p className="section-label">Lưu trữ</p>
-            <nav className="space-y-1">
-              {archived.map((chat) => (
-                <ChatRow
-                  key={chat.id}
-                  chat={chat}
-                  active={activeChatId === chat.id}
-                  onSelect={onSelectChat}
-                  onRename={startRename}
-                  onUpdate={onUpdate}
-                  projects={projects}
-                  onDelete={setDeleteTarget}
-                  onShare={onShare}
-                />
-              ))}
-            </nav>
-          </>
-        ) : null}
-        {loadingMoreChats ? (
-          <p className="px-2 py-3 text-center text-xs text-muted-foreground">Đang tải thêm...</p>
-        ) : null}
-        {!loadingMoreChats && hasMoreChats ? (
-          <p className="px-2 py-3 text-center text-xs text-muted-foreground">
-            Cuộn xuống để tải thêm lịch sử
-          </p>
-        ) : null}
-      </div>
-      <div className={`mt-5 shrink-0 border-t pt-4 ${collapsed ? 'lg:border-t-0 lg:pt-0' : ''}`}>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button
-                variant="ghost"
-                className={`h-auto w-full justify-start px-2 py-2 ${collapsed ? 'lg:size-9 lg:px-0 lg:justify-center' : ''}`}
-              />
-            }
-          >
-            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-pink-400 text-xs font-semibold text-white">
-              {(user?.displayName || user?.email || 'U').slice(0, 2).toUpperCase()}
-            </span>
-            <span className={`min-w-0 flex-1 text-left ${collapsed ? 'lg:hidden' : ''}`}>
-              <span className="block truncate text-sm font-medium">
-                {user?.displayName || user?.email || 'Tài khoản'}
-              </span>
-              <span className="block text-xs text-muted-foreground">Tài khoản Google</span>
-            </span>
-            <Settings size={17} className={`text-muted-foreground ${collapsed ? 'lg:hidden' : ''}`} />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            side="top"
-            sideOffset={12}
-            align="start"
-            className="w-64 rounded-2xl p-2 shadow-xl"
-          >
-            <div className="flex items-center gap-3 px-2 py-2.5">
-              <span className="grid size-9 shrink-0 place-items-center rounded-full bg-pink-400 text-xs font-semibold text-white">
-                {(user?.displayName || user?.email || 'U').slice(0, 2).toUpperCase()}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">
-                  {user?.displayName || user?.email || 'Tài khoản'}
-                </span>
-                <span className="block truncate text-xs text-muted-foreground">Tài khoản Google</span>
-              </span>
-              <ChevronRight size={16} className="text-muted-foreground" />
-            </div>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={onOpenApiKeys}>
-              <KeyRound /> Thêm API key của bạn
-            </DropdownMenuItem>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <Palette />
-                Cá nhân hóa
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuRadioGroup
-                  value={theme}
-                  onValueChange={(value) => onThemeChange(value as Theme)}
-                >
-                  {themeOptions.map(({ value, label, Icon }) => (
-                    <DropdownMenuRadioItem key={value} value={value}>
-                      <Icon />
-                      {label}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuItem disabled>
-              <UserRound /> Hỗ trợ <span className="ml-auto text-xs">Sắp có</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem disabled>
-              <Settings /> Cài đặt <span className="ml-auto text-xs">Sắp có</span>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem disabled>
-              <CircleHelp /> Trợ giúp <ChevronRight className="ml-auto" />
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={onLogout} className="text-destructive focus:text-destructive">
-              <LogOut /> Đăng xuất
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-      {renameTarget
-        ? createPortal(
-            <div
-              className="fixed inset-0 z-100 grid place-items-center bg-black/60 p-4"
-              role="dialog"
-              aria-modal="true"
-            >
-              <form
-                className="w-full max-w-sm rounded-2xl border bg-card p-5"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  if (title.trim()) onRename(renameTarget, title.trim());
-                  setRenameTarget(null);
-                }}
-              >
-                <h2 className="text-lg font-semibold">Đổi tên cuộc trò chuyện</h2>
-                <input
-                  autoFocus
-                  maxLength={160}
-                  className="mt-4 w-full rounded-xl border bg-background px-3 py-2"
-                  value={title}
-                  onChange={(event) => setTitle(event.target.value)}
-                />
-                <div className="mt-5 flex justify-end gap-2">
-                  <Button type="button" variant="ghost" onClick={() => setRenameTarget(null)}>
-                    Hủy
-                  </Button>
-                  <Button type="submit">Lưu</Button>
-                </div>
-              </form>
-            </div>,
-            document.body,
-          )
-        : null}
-      {deleteTarget
-        ? createPortal(
-            <div
-              className="fixed inset-0 z-100 grid place-items-center bg-black/60 p-4"
-              role="dialog"
-              aria-modal="true"
-            >
-              <section className="w-full max-w-sm rounded-2xl border bg-card p-5">
-                <h2 className="text-lg font-semibold">Xóa cuộc trò chuyện?</h2>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Toàn bộ lịch sử và liên kết chia sẻ công khai sẽ bị thu hồi.
-                </p>
-                <div className="mt-5 flex justify-end gap-2">
-                  <Button variant="ghost" onClick={() => setDeleteTarget(null)}>
-                    Hủy
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    onClick={() => {
-                      onDelete(deleteTarget);
-                      setDeleteTarget(null);
-                    }}
-                  >
-                    Xóa
-                  </Button>
-                </div>
-              </section>
-            </div>,
-            document.body,
-          )
-        : null}
+      <SidebarNavigation
+        activeNavigation={activeNavigation}
+        collapsed={collapsed}
+        isSystemAdmin={isSystemAdmin}
+        onCreateChat={onCreateChat}
+        onOpenLibrary={onOpenLibrary}
+        onOpenWorkspace={onOpenWorkspace}
+        onOpenAdmin={onOpenAdmin}
+      />
+      {!collapsed ? (
+        <SidebarHistory
+          pinned={pinned}
+          recent={recent}
+          archived={archived}
+          projects={projects}
+          activeChatId={activeChatId}
+          hasMoreChats={hasMoreChats}
+          loadingMoreChats={loadingMoreChats}
+          onSelectChat={onSelectChat}
+          onRename={startRename}
+          onUpdate={onUpdate}
+          onDelete={setDeleteTarget}
+          onShare={onShare}
+          onHistoryScroll={handleHistoryScroll}
+        />
+      ) : (
+        <div className="flex-1" />
+      )}
+      <AccountMenu
+        collapsed={collapsed}
+        user={user}
+        theme={theme}
+        onThemeChange={onThemeChange}
+        onOpenApiKeys={onOpenApiKeys}
+        onLogout={onLogout}
+      />
+      <RenameChatDialog
+        chat={renameTarget}
+        title={title}
+        onTitleChange={setTitle}
+        onClose={() => setRenameTarget(null)}
+        onRename={onRename}
+      />
+      <DeleteChatDialog chat={deleteTarget} onClose={() => setDeleteTarget(null)} onDelete={onDelete} />
     </aside>
   );
 }
