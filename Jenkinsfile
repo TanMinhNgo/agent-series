@@ -162,7 +162,26 @@ pipeline {
           docker build --target worker -t agent-series-worker:$IMAGE_TAG -f Dockerfile.backend .
           docker build -t agent-series-frontend:$IMAGE_TAG -f frontend/Dockerfile frontend
           printf 'POSTGRES_PASSWORD=validation-only\n' > .ci.env
-          APP_ENV_FILE=.ci.env docker compose -f docker-compose.prod.yml config > "$REPORTS_DIR/docker-compose.rendered.yml"
+          # The CI agent exposes only the Docker CLI, without the Compose plugin.
+          # Its workspace cannot be bind-mounted into sibling Docker containers,
+          # so copy the compose inputs into a dedicated Compose CLI container.
+          compose_container="$(docker create --entrypoint /bin/sh docker/compose:1.29.2 -c 'mkdir -p /work /report; tail -f /dev/null')"
+          cleanup_compose_container() {
+            if [[ -n "${compose_container:-}" ]]; then docker rm -f "$compose_container" >/dev/null 2>&1 || true; fi
+          }
+          trap cleanup_compose_container EXIT
+          docker start "$compose_container" >/dev/null
+          git archive --format=tar HEAD | docker cp - "$compose_container:/work"
+          docker cp .ci.env "$compose_container:/work/.ci.env"
+          docker exec \
+            -e APP_ENV_FILE=.ci.env \
+            -e POSTGRES_PASSWORD=validation-only \
+            -e IMAGE_TAG="$IMAGE_TAG" \
+            "$compose_container" sh -c 'cd /work && docker-compose -f docker-compose.prod.yml config > /report/docker-compose.rendered.yml'
+          docker cp "$compose_container:/report/docker-compose.rendered.yml" "$REPORTS_DIR/docker-compose.rendered.yml"
+          cleanup_compose_container
+          compose_container=''
+          trap - EXIT
           docker image inspect agent-series-api:$IMAGE_TAG agent-series-worker:$IMAGE_TAG agent-series-frontend:$IMAGE_TAG > "$REPORTS_DIR/docker-images.json"
         '''
       }

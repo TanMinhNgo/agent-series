@@ -105,7 +105,12 @@ export function PromptInput({
   };
 
   return (
-    <div className={cn('w-full rounded-3xl border bg-card p-3 shadow-lg shadow-primary/5', className)}>
+    <div
+      className={cn(
+        'w-full rounded-2xl border border-border/90 bg-card/80 p-2.5 shadow-[0_12px_32px_-20px_color-mix(in_srgb,var(--foreground)_35%,transparent)] transition-shadow focus-within:border-primary/45 focus-within:shadow-[0_14px_36px_-20px_color-mix(in_srgb,var(--primary)_60%,transparent)]',
+        className,
+      )}
+    >
       <input
         ref={fileRef}
         className="hidden"
@@ -147,14 +152,14 @@ export function PromptInput({
         }}
         placeholder={placeholder}
         disabled={busy || recording}
-        className="min-h-28 w-full resize-none bg-transparent px-2 py-1 text-sm outline-none placeholder:text-muted-foreground"
+        className="min-h-24 w-full resize-none bg-transparent px-2.5 py-1.5 text-sm leading-6 outline-none placeholder:text-muted-foreground"
       />
-      <div className="flex items-center gap-1 pt-2">
+      <div className="flex items-center gap-1 border-t border-border/60 pt-2">
         <button
           type="button"
           title="Đính kèm PDF, DOCX, Markdown hoặc ảnh"
           onClick={() => fileRef.current?.click()}
-          className="rounded-full p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <Paperclip size={18} />
         </button>
@@ -162,7 +167,7 @@ export function PromptInput({
           type="button"
           title="Chọn ảnh"
           onClick={() => fileRef.current?.click()}
-          className="rounded-full p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <ImagePlus size={18} />
         </button>
@@ -177,7 +182,7 @@ export function PromptInput({
             'rounded-full p-2',
             recording
               ? 'bg-destructive text-destructive-foreground'
-              : 'text-muted-foreground hover:bg-accent',
+              : 'rounded-lg text-muted-foreground hover:bg-muted',
           )}
         >
           {recording ? <Square size={16} /> : <Mic size={18} />}
@@ -186,7 +191,7 @@ export function PromptInput({
           type="button"
           disabled={busy || (!value.trim() && !attachments.length)}
           onClick={submit}
-          className="rounded-full bg-primary p-2 text-primary-foreground disabled:opacity-50"
+          className="rounded-lg bg-primary p-2 text-primary-foreground shadow-sm shadow-primary/20 disabled:opacity-50"
         >
           <Send size={18} />
         </button>

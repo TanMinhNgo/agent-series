@@ -24,9 +24,12 @@ import {
   Trash2,
   UserRound,
   ChevronRight,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -72,6 +75,8 @@ type Props = {
   workspaces?: AppWorkspace[];
   activeWorkspaceId?: string | null;
   onWorkspaceChange?: (workspaceId: string) => void;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
 };
 
 const themeOptions = [
@@ -106,6 +111,8 @@ export function AppSidebar({
   workspaces = [],
   activeWorkspaceId,
   onWorkspaceChange,
+  collapsed = false,
+  onToggleCollapsed,
 }: Props) {
   // The backend already sorts pinned first, so every pinned chat is on the
   // first page and this split never hides one behind lazy-loaded history.
@@ -133,104 +140,136 @@ export function AppSidebar({
     [hasMoreChats, loadingMoreChats, onLoadMoreChats],
   );
   return (
-    <aside className="flex min-h-dvh flex-col border-b border-border bg-sidebar p-4 lg:sticky lg:top-0 lg:h-screen lg:border-r lg:border-b-0">
-      <div className="mb-5 flex items-center">
-        <div className="flex items-center gap-2 font-semibold">
-          <span className="grid size-8 place-items-center rounded-xl bg-primary text-primary-foreground">
+    <aside
+      className={`flex min-h-dvh flex-col border-b border-border bg-sidebar/85 p-3 transition-[width,padding] duration-200 lg:sticky lg:top-0 lg:h-screen lg:border-r lg:border-b-0 ${
+        collapsed ? 'lg:px-2' : 'lg:p-4'
+      }`}
+    >
+      <div className={`mb-4 flex items-center ${collapsed ? 'flex-col gap-2' : 'justify-between'}`}>
+        <div className="flex min-w-0 items-center gap-2 font-semibold tracking-tight">
+          <span className="grid size-8 shrink-0 place-items-center rounded-[0.7rem] bg-primary text-primary-foreground shadow-sm shadow-primary/20">
             <Sparkles size={16} />
           </span>
-          Local Agent
+          <span className={collapsed ? 'sr-only' : undefined}>Local Agent</span>
         </div>
-      </div>
-      {workspaces.length ? (
-        <label className="mb-4 block text-xs text-muted-foreground">
-          <span>Workspace</span>
-          <select
-            className="mt-1 w-full rounded-lg border bg-background px-2 py-1.5 text-sm text-foreground"
-            value={activeWorkspaceId || workspaces[0]?.id}
-            onChange={(event) => onWorkspaceChange?.(event.target.value)}
+        {onToggleCollapsed ? (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="hidden text-muted-foreground lg:inline-flex"
+            onClick={onToggleCollapsed}
+            aria-label={collapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'}
+            title={collapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'}
           >
-            {workspaces.map((workspace) => (
-              <option key={workspace.id} value={workspace.id}>
-                {workspace.name} · {workspace.role}
-              </option>
-            ))}
-          </select>
+            {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+          </Button>
+        ) : null}
+      </div>
+      {workspaces.length && !collapsed ? (
+        <label className="mb-4 block text-xs text-muted-foreground">
+          <span className="section-label mb-1 block">Workspace</span>
+          <Select
+            value={activeWorkspaceId || workspaces[0]?.id}
+            onValueChange={(workspaceId) => {
+              if (workspaceId) onWorkspaceChange?.(workspaceId);
+            }}
+          >
+            <SelectTrigger className="h-10 w-full rounded-xl border-border/80 bg-background/70 pr-2 text-left shadow-none hover:bg-background">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="start" className="max-w-[min(20rem,var(--anchor-width))]">
+              {workspaces.map((workspace) => (
+                <SelectItem key={workspace.id} value={workspace.id} className="py-2">
+                  {workspace.name} · {workspace.role}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </label>
       ) : null}
       <nav className="mb-5 grid gap-1">
         <Button
-          variant="ghost"
+          variant="default"
           data-active={activeNavigation === 'chat'}
           aria-current={activeNavigation === 'chat' ? 'page' : undefined}
-          className="sidebar-nav-item justify-start"
+          className={`justify-start shadow-sm shadow-primary/15 ${collapsed ? 'size-9 px-0 lg:mx-auto' : 'w-full'}`}
           onClick={onCreateChat}
+          title="Đoạn chat mới"
         >
           <Plus size={16} />
-          Đoạn chat mới
+          <span className={collapsed ? 'sr-only' : undefined}>Đoạn chat mới</span>
         </Button>
         <Button
           variant="ghost"
           data-active={activeNavigation === 'library'}
           aria-current={activeNavigation === 'library' ? 'page' : undefined}
-          className="sidebar-nav-item justify-start"
+          className={`sidebar-nav-item justify-start ${collapsed ? 'size-9 px-0 lg:mx-auto' : 'w-full'}`}
           onClick={onOpenLibrary}
+          title="Thư viện"
         >
           <Library size={16} />
-          Thư viện
+          <span className={collapsed ? 'sr-only' : undefined}>Thư viện</span>
         </Button>
         <Button
           variant="ghost"
           data-active={activeNavigation === 'projects'}
           aria-current={activeNavigation === 'projects' ? 'page' : undefined}
-          className="sidebar-nav-item justify-start"
+          className={`sidebar-nav-item justify-start ${collapsed ? 'size-9 px-0 lg:mx-auto' : 'w-full'}`}
           onClick={() => onOpenWorkspace('projects')}
+          title="Dự án"
         >
           <FolderKanban size={16} />
-          Dự án
+          <span className={collapsed ? 'sr-only' : undefined}>Dự án</span>
         </Button>
         <Button
           variant="ghost"
           data-active={activeNavigation === 'schedules'}
           aria-current={activeNavigation === 'schedules' ? 'page' : undefined}
-          className="sidebar-nav-item justify-start"
+          className={`sidebar-nav-item justify-start ${collapsed ? 'size-9 px-0 lg:mx-auto' : 'w-full'}`}
           onClick={() => onOpenWorkspace('schedules')}
+          title="Lịch trình"
         >
           <CalendarDays size={16} />
-          Lịch trình
+          <span className={collapsed ? 'sr-only' : undefined}>Lịch trình</span>
         </Button>
         <Button
           variant="ghost"
           data-active={activeNavigation === 'plugins'}
           aria-current={activeNavigation === 'plugins' ? 'page' : undefined}
-          className="sidebar-nav-item justify-start"
+          className={`sidebar-nav-item justify-start ${collapsed ? 'size-9 px-0 lg:mx-auto' : 'w-full'}`}
           onClick={() => onOpenWorkspace('plugins')}
+          title="Plugin"
         >
           <Plug size={16} />
-          Plugin
+          <span className={collapsed ? 'sr-only' : undefined}>Plugin</span>
         </Button>
         <Button
           variant="ghost"
           data-active={activeNavigation === 'members'}
-          className="sidebar-nav-item justify-start"
+          className={`sidebar-nav-item justify-start ${collapsed ? 'size-9 px-0 lg:mx-auto' : 'w-full'}`}
           onClick={() => onOpenWorkspace('members')}
+          title="Thành viên"
         >
           <UserRound size={16} />
-          Thành viên
+          <span className={collapsed ? 'sr-only' : undefined}>Thành viên</span>
         </Button>
         {isSystemAdmin ? (
           <Button
             variant="ghost"
             data-active={activeNavigation === 'admin'}
-            className="sidebar-nav-item justify-start"
+            className={`sidebar-nav-item justify-start ${collapsed ? 'size-9 px-0 lg:mx-auto' : 'w-full'}`}
             onClick={onOpenAdmin}
+            title="Quản trị hệ thống"
           >
             <ShieldCheck size={16} />
-            Quản trị hệ thống
+            <span className={collapsed ? 'sr-only' : undefined}>Quản trị hệ thống</span>
           </Button>
         ) : null}
       </nav>
-      <div className="min-h-0 flex-1 overflow-y-auto" onScroll={handleHistoryScroll}>
+      <div
+        className={`min-h-0 flex-1 overflow-y-auto ${collapsed ? 'hidden lg:hidden' : ''}`}
+        onScroll={handleHistoryScroll}
+      >
         {pinned.length ? (
           <section>
             <p className="section-label">Đã ghim</p>
@@ -302,21 +341,26 @@ export function AppSidebar({
           </p>
         ) : null}
       </div>
-      <div className="mt-6 shrink-0 border-t pt-5">
+      <div className={`mt-5 shrink-0 border-t pt-4 ${collapsed ? 'lg:border-t-0 lg:pt-0' : ''}`}>
         <DropdownMenu>
           <DropdownMenuTrigger
-            render={<Button variant="ghost" className="h-auto w-full justify-start px-2 py-2" />}
+            render={
+              <Button
+                variant="ghost"
+                className={`h-auto w-full justify-start px-2 py-2 ${collapsed ? 'lg:size-9 lg:px-0 lg:justify-center' : ''}`}
+              />
+            }
           >
             <span className="grid size-8 shrink-0 place-items-center rounded-full bg-pink-400 text-xs font-semibold text-white">
               {(user?.displayName || user?.email || 'U').slice(0, 2).toUpperCase()}
             </span>
-            <span className="min-w-0 flex-1 text-left">
+            <span className={`min-w-0 flex-1 text-left ${collapsed ? 'lg:hidden' : ''}`}>
               <span className="block truncate text-sm font-medium">
                 {user?.displayName || user?.email || 'Tài khoản'}
               </span>
               <span className="block text-xs text-muted-foreground">Tài khoản Google</span>
             </span>
-            <Settings size={17} className="text-muted-foreground" />
+            <Settings size={17} className={`text-muted-foreground ${collapsed ? 'lg:hidden' : ''}`} />
           </DropdownMenuTrigger>
           <DropdownMenuContent
             side="top"

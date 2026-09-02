@@ -205,12 +205,12 @@ export function MessageList({
   );
 
   return (
-    <div className="flex min-h-full flex-col space-y-6 py-5">
+    <div className="flex min-h-full flex-col space-y-8 py-8 sm:py-10">
       {!messages.length && !error && !status && (
         <div className="flex flex-1 items-center justify-center text-center">
           <div>
-            <h2 className="font-display text-4xl leading-none">Bạn muốn làm gì hôm nay?</h2>
-            <p className="mt-3 text-muted-foreground">
+            <h2 className="font-display text-4xl leading-none sm:text-5xl">Bạn muốn làm gì hôm nay?</h2>
+            <p className="mx-auto mt-4 max-w-md text-sm leading-6 text-muted-foreground sm:text-base">
               Hỏi về tài liệu đã index, phân tích một vấn đề hoặc bắt đầu ý tưởng mới.
             </p>
           </div>
@@ -248,8 +248,10 @@ export function MessageList({
             >
               <span
                 className={cn(
-                  'grid size-8 shrink-0 place-items-center rounded-lg text-xs font-semibold',
-                  message.role === 'assistant' ? 'bg-primary text-primary-foreground' : 'bg-muted',
+                  'grid size-8 shrink-0 place-items-center rounded-full text-xs font-semibold',
+                  message.role === 'assistant'
+                    ? 'bg-primary text-primary-foreground shadow-sm shadow-primary/20'
+                    : 'bg-muted',
                 )}
               >
                 {message.role === 'user' ? 'Bạn' : <Sparkles size={15} />}
@@ -262,7 +264,8 @@ export function MessageList({
               >
                 <div
                   className={cn(
-                    message.role === 'user' && 'rounded-2xl bg-primary px-4 py-2 text-primary-foreground',
+                    message.role === 'user' &&
+                      'rounded-2xl bg-primary px-4 py-2.5 text-primary-foreground shadow-sm shadow-primary/10',
                   )}
                 >
                   {message.role === 'assistant' ? (
@@ -302,14 +305,16 @@ export function MessageList({
                   />
                 ) : null}
                 {message.role === 'assistant' && message.artifacts?.length ? (
-                  <div className="mt-3 max-w-2xl rounded-xl border bg-muted/30 p-3">
-                    <p className="mb-2 text-xs font-medium text-muted-foreground">File AI đã tạo</p>
+                  <div className="mt-4 max-w-2xl border-l-2 border-primary/50 pl-3">
+                    <p className="mb-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                      File AI đã tạo
+                    </p>
                     <div className="grid gap-2 sm:grid-cols-2">
                       {message.artifacts.map((asset) => (
                         <button
                           key={asset.id}
                           type="button"
-                          className="flex min-w-0 items-center gap-2 rounded-lg border bg-background px-3 py-2 text-left hover:bg-muted"
+                          className="flex min-w-0 items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 text-left transition-colors hover:bg-muted"
                           onClick={() => onOpenArtifact?.(asset)}
                         >
                           <FileText className="shrink-0 text-muted-foreground" size={16} />
@@ -370,10 +375,10 @@ export function MessageList({
       })}
       {status && (
         <article ref={pendingAssistantRef} className="flex min-h-0 flex-1 gap-3 leading-7">
-          <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground">
+          <span className="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground shadow-sm shadow-primary/20">
             <Sparkles size={15} />
           </span>
-          <div className="rounded-2xl bg-muted/60 px-4 py-3 text-sm text-muted-foreground">
+          <div className="rounded-2xl bg-muted/70 px-4 py-3 text-sm text-muted-foreground">
             <div className="flex items-center gap-1.5" aria-label="AI đang soạn phản hồi" role="status">
               <span>Đang suy nghĩ</span>
               {[0, 1, 2].map((dot) => (

@@ -29,11 +29,11 @@ export function ChatComposer({
   onDeleteTemplate,
 }: Props) {
   return (
-    <div className="shrink-0 border-t bg-background/95 py-4 backdrop-blur">
+    <div className="shrink-0 bg-background/95 pt-3 pb-4 backdrop-blur sm:pb-5">
       {templates.length ? (
         <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
           {templates.map((template) => (
-            <span key={template.id} className="flex shrink-0 overflow-hidden rounded-full border text-xs">
+            <span key={template.id} className="flex shrink-0 overflow-hidden rounded-lg bg-muted/70 text-xs">
               <button
                 type="button"
                 className="px-3 py-1 hover:bg-muted"

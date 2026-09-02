@@ -1,7 +1,8 @@
-import { useEffect, useState, type ChangeEvent } from 'react';
+import { useEffect, useState } from 'react';
 import { Menu } from 'lucide-react';
 
 import { Separator } from '@/components/ui/separator';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { Chat, Config } from '@/src/types';
 
 type Props = {
@@ -11,8 +12,8 @@ type Props = {
   model?: string;
   busy?: boolean;
   onOpenSidebar?: () => void;
-  onProviderChange: (event: ChangeEvent<HTMLSelectElement>) => void;
-  onModelChange: (event: ChangeEvent<HTMLSelectElement>) => void;
+  onProviderChange: (provider: string) => void;
+  onModelChange: (model: string) => void;
   collections?: { id: string; name: string }[];
   onCollectionChange?: (collectionId: string | null) => void;
 };
@@ -42,8 +43,8 @@ export function ChatHeader({
 
   return (
     <header
-      className={`sticky top-0 z-30 flex min-h-16 items-center justify-between bg-background/95 px-5 backdrop-blur transition-shadow ${
-        hasScrolled ? 'shadow-sm' : ''
+      className={`sticky top-0 z-30 flex min-h-15 items-center justify-between border-b border-transparent bg-background/90 px-4 backdrop-blur transition-[border-color,box-shadow] sm:px-6 ${
+        hasScrolled ? 'border-border/80 shadow-sm shadow-black/[0.02]' : ''
       }`}
     >
       <div className="flex items-center gap-2">
@@ -57,8 +58,13 @@ export function ChatHeader({
             <Menu size={19} />
           </button>
         ) : null}
-        <div>
-          <h1 className="font-semibold">Local Agent</h1>
+        <div className="min-w-0">
+          <p className="mb-0.5 text-[10px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
+            {chat?.projectId ? 'Dự án' : 'Workspace'}
+          </p>
+          <h1 className="truncate text-sm font-semibold tracking-tight">
+            {chat?.title || 'Cuộc trò chuyện mới'}
+          </h1>
           <p className="text-xs text-muted-foreground">
             {selectedProvider && selectedModel
               ? `${selectedProvider} · ${selectedModel}`
@@ -72,43 +78,65 @@ export function ChatHeader({
         </div>
       </div>
       {config && selectedProvider && selectedModel && (
-        <div className="hidden items-center gap-2 sm:flex">
-          <select
+        <div className="hidden items-center gap-1.5 sm:flex">
+          <Select
             value={selectedProvider}
-            onChange={onProviderChange}
             disabled={busy}
-            className="select-control disabled:cursor-not-allowed disabled:opacity-60"
+            onValueChange={(value) => {
+              if (value) onProviderChange(value);
+            }}
           >
-            {Object.keys(config.providers).map((name) => (
-              <option key={name}>{name}</option>
-            ))}
-          </select>
-          {chat?.projectId ? (
-            <select
-              value={chat.collectionId || ''}
-              onChange={(event) => onCollectionChange?.(event.target.value || null)}
-              disabled={busy}
-              className="select-control max-w-44 disabled:cursor-not-allowed disabled:opacity-60"
-              aria-label="Collection tài liệu"
-            >
-              <option value="">Chưa chọn tài liệu</option>
-              {collections.map((collection) => (
-                <option key={collection.id} value={collection.id}>
-                  {collection.name}
-                </option>
+            <SelectTrigger className="h-8 max-w-32 rounded-lg border-transparent bg-muted/60 text-xs shadow-none hover:border-border hover:bg-muted">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.keys(config.providers).map((name) => (
+                <SelectItem key={name} value={name}>
+                  {name}
+                </SelectItem>
               ))}
-            </select>
+            </SelectContent>
+          </Select>
+          {chat?.projectId ? (
+            <Select
+              value={chat.collectionId || ''}
+              disabled={busy}
+              onValueChange={(value) => onCollectionChange?.(value || null)}
+            >
+              <SelectTrigger
+                className="h-8 max-w-40 rounded-lg border-transparent bg-muted/60 text-xs shadow-none hover:border-border hover:bg-muted"
+                aria-label="Collection tài liệu"
+              >
+                <SelectValue placeholder="Chưa chọn tài liệu" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">Chưa chọn tài liệu</SelectItem>
+                {collections.map((collection) => (
+                  <SelectItem key={collection.id} value={collection.id}>
+                    {collection.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           ) : null}
-          <select
+          <Select
             value={selectedModel}
-            onChange={onModelChange}
             disabled={busy}
-            className="select-control disabled:cursor-not-allowed disabled:opacity-60"
+            onValueChange={(value) => {
+              if (value) onModelChange(value);
+            }}
           >
-            {models.map((model) => (
-              <option key={model}>{model}</option>
-            ))}
-          </select>
+            <SelectTrigger className="h-8 max-w-48 rounded-lg border-transparent bg-muted/60 text-xs shadow-none hover:border-border hover:bg-muted">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {models.map((model) => (
+                <SelectItem key={model} value={model}>
+                  {model}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       )}
       <Separator

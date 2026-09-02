@@ -1,5 +1,4 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent } from 'react';
 
 import { AppSidebar } from '@/src/components/app-sidebar';
 import type { SidebarNavigation } from '@/src/components/app-sidebar';
@@ -61,6 +60,7 @@ type ChatWorkspaceProps = {
 const NEW_CHAT_SELECTION_KEY = 'agent-series.new-chat-selection';
 const ARTIFACT_PANEL_OPEN_KEY = 'agent-series.artifact-panel.open';
 const SELECTED_ARTIFACT_KEY = 'agent-series.artifact-panel.selected-artifact';
+const SIDEBAR_COLLAPSED_KEY = 'agent-series.sidebar.collapsed';
 
 type DraftSelection = { provider: string; model: string };
 type TemplateDraft = {
@@ -100,6 +100,14 @@ function savedArtifactPanelState() {
   }
 }
 
+function savedSidebarCollapsed() {
+  try {
+    return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 export function ChatWorkspace({
   chatId,
   libraryPage,
@@ -121,6 +129,7 @@ export function ChatWorkspace({
   const [userScrollRequest, setUserScrollRequest] = useState(0);
   const [runwayChatId, setRunwayChatId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(savedSidebarCollapsed);
   const [shareChat, setShareChat] = useState<Chat | null>(null);
   const [templateDraft, setTemplateDraft] = useState<TemplateDraft | null>(null);
   const [artifactPanel, setArtifactPanel] = useState(savedArtifactPanelState);
@@ -155,6 +164,9 @@ export function ChatWorkspace({
   const streamChat = useStreamChat();
   const queryClient = useQueryClient();
   const { projects, workspaces, activeWorkspaceId, selectWorkspace } = useWorkspace();
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed));
+  }, [sidebarCollapsed]);
   useEffect(() => {
     const invitationId = new URLSearchParams(window.location.search).get('invite');
     if (!invitationId || invitationHandled.current) return;
@@ -302,8 +314,7 @@ export function ChatWorkspace({
     setSidebarOpen(false);
     navigate('/');
   };
-  const changeModel = async (event: ChangeEvent<HTMLSelectElement>) => {
-    const model = event.target.value;
+  const changeModel = async (model: string) => {
     if (!activeChat) {
       setDraftSelection((selection) => ({ ...selection, model }));
       return;
@@ -315,8 +326,7 @@ export function ChatWorkspace({
       values: { provider: activeChat.provider, model },
     });
   };
-  const changeProvider = async (event: ChangeEvent<HTMLSelectElement>) => {
-    const provider = event.target.value;
+  const changeProvider = async (provider: string) => {
     if (!activeChat) {
       const model = config.data?.providers[provider]?.[0];
       if (!model) return;
@@ -438,7 +448,11 @@ export function ChatWorkspace({
 
   return (
     <main className="min-h-dvh bg-background text-foreground">
-      <div className="grid min-h-dvh w-full lg:grid-cols-[280px_minmax(0,1fr)]">
+      <div
+        className={`grid min-h-dvh w-full transition-[grid-template-columns] duration-200 ${
+          sidebarCollapsed ? 'lg:grid-cols-[64px_minmax(0,1fr)]' : 'lg:grid-cols-[280px_minmax(0,1fr)]'
+        }`}
+      >
         <div className="hidden lg:block">
           <AppSidebar
             chats={chats.data || []}
@@ -480,6 +494,8 @@ export function ChatWorkspace({
               selectWorkspace(workspaceId);
               window.location.assign('/');
             }}
+            collapsed={sidebarCollapsed}
+            onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
           />
         </div>
         {sidebarOpen ? (
@@ -589,14 +605,16 @@ export function ChatWorkspace({
             <div className="flex min-h-0 flex-1">
               <div className="flex min-w-0 flex-1 flex-col">
                 <div ref={transcriptRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-                  <div className="mx-auto min-h-full w-full max-w-5xl px-4 sm:px-8 lg:px-12">
+                  <div className="mx-auto min-h-full w-full max-w-3xl px-4 sm:px-7 lg:px-10">
                     {pins.data?.length ? (
-                      <div className="sticky top-0 z-10 flex gap-2 overflow-x-auto border-b bg-background/95 py-3 backdrop-blur">
-                        <span className="shrink-0 text-xs text-muted-foreground">Đã ghim:</span>
+                      <div className="sticky top-0 z-10 flex gap-2 overflow-x-auto border-b bg-background/95 py-2.5 backdrop-blur">
+                        <span className="shrink-0 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                          Đã ghim
+                        </span>
                         {pins.data.map((item) => (
                           <button
                             key={item.messageId}
-                            className="shrink-0 rounded-full border px-2 py-1 text-xs hover:bg-muted"
+                            className="shrink-0 rounded-md bg-muted/70 px-2 py-1 text-xs hover:bg-muted"
                             onClick={() =>
                               document
                                 .getElementById(`message-${item.messageId}`)
@@ -633,7 +651,7 @@ export function ChatWorkspace({
                     />
                   </div>
                 </div>
-                <div className="mx-auto w-full max-w-5xl px-4 sm:px-8 lg:px-12">
+                <div className="mx-auto w-full max-w-3xl px-4 sm:px-7 lg:px-10">
                   <ChatComposer
                     key={activeChat?.id || 'new-chat'}
                     prompt={prompt}

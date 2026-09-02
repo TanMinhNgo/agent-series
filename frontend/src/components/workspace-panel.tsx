@@ -2107,7 +2107,7 @@ function WorkspaceError({ message }: { message: string }) {
 
 export function WorkspacePanel({ view }: { view: WorkspaceView }) {
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-8 lg:px-12">
+    <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-8 lg:px-12 lg:py-10">
       {view === 'projects' ? (
         <ProjectsView />
       ) : view === 'schedules' ? (
