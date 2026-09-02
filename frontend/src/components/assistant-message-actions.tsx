@@ -33,6 +33,18 @@ import { cn } from '@/lib/utils';
 
 type Source = { name: string; url: string; kind?: 'library' | 'external' };
 type FeedbackKind = 'helpful' | 'incorrect' | 'too_long' | 'too_short' | 'unclear' | 'wrong_style';
+type FeedbackState = {
+  feedbackOpen: boolean;
+  setFeedbackOpen: (open: boolean) => void;
+  feedbackKind: FeedbackKind;
+  setFeedbackKind: (kind: FeedbackKind) => void;
+  note: string;
+  setNote: (note: string) => void;
+  busy: boolean;
+  feedbackError: string | null;
+  openFeedback: () => void;
+  submitFeedback: (kind?: FeedbackKind, note?: string) => Promise<void>;
+};
 
 function sourcesIn(content: string): Source[] {
   const seen = new Set<string>();
@@ -40,6 +52,60 @@ function sourcesIn(content: string): Source[] {
   return matches
     .map((match) => ({ name: match[1], url: match[2], kind: 'library' as const }))
     .filter((source) => (seen.has(source.url) ? false : (seen.add(source.url), true)));
+}
+
+function useMessageFeedback(chatId: string | undefined, message: Message): FeedbackState {
+  const queryClient = useQueryClient();
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackKind, setFeedbackKind] = useState<FeedbackKind>('unclear');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const submitFeedback = async (kind: FeedbackKind = feedbackKind, feedbackNote = note) => {
+    if (!message.messageId) return;
+    setBusy(true);
+    setFeedbackError(null);
+    try {
+      const saved = await request<{ kind: FeedbackKind }>({
+        url: `/messages/${message.messageId}/feedback`,
+        method: 'POST',
+        data: { kind, note: feedbackNote },
+      });
+      if (chatId) updateCachedFeedback(queryClient, chatId, message.messageId, saved.kind);
+      setFeedbackOpen(false);
+    } catch (reason) {
+      setFeedbackError(reason instanceof Error ? reason.message : 'Không thể lưu đánh giá.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const openFeedback = () => {
+    setFeedbackError(null);
+    setFeedbackOpen(true);
+  };
+  return {
+    feedbackOpen,
+    setFeedbackOpen,
+    feedbackKind,
+    setFeedbackKind,
+    note,
+    setNote,
+    busy,
+    feedbackError,
+    openFeedback,
+    submitFeedback,
+  };
+}
+
+function updateCachedFeedback(
+  queryClient: ReturnType<typeof useQueryClient>,
+  chatId: string,
+  messageId: string,
+  kind: FeedbackKind,
+) {
+  queryClient.setQueryData<Message[]>(queryKeys.messages(chatId), (items = []) =>
+    items.map((item) => (item.messageId === messageId ? { ...item, feedbackKind: kind } : item)),
+  );
 }
 
 export function AssistantMessageActions({
@@ -55,13 +121,8 @@ export function AssistantMessageActions({
   onBranch: (message: Message) => Promise<void>;
   onRegenerate: (message: Message) => Promise<void>;
 }) {
-  const queryClient = useQueryClient();
-  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
-  const [feedbackKind, setFeedbackKind] = useState<FeedbackKind>('unclear');
-  const [note, setNote] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const feedback = useMessageFeedback(chatId, message);
   const [copied, setCopied] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const sources = useMemo(
@@ -102,30 +163,6 @@ export function AssistantMessageActions({
     window.speechSynthesis.speak(utterance);
     setSpeaking(true);
   };
-  const submitFeedback = async (kind: FeedbackKind = feedbackKind, feedbackNote = note) => {
-    if (!message.messageId) return;
-    setBusy(true);
-    setFeedbackError(null);
-    try {
-      const saved = await request<{ kind: FeedbackKind }>({
-        url: `/messages/${message.messageId}/feedback`,
-        method: 'POST',
-        data: { kind, note: feedbackNote },
-      });
-      if (chatId) {
-        queryClient.setQueryData<Message[]>(queryKeys.messages(chatId), (items = []) =>
-          items.map((item) =>
-            item.messageId === message.messageId ? { ...item, feedbackKind: saved.kind } : item,
-          ),
-        );
-      }
-      setFeedbackOpen(false);
-    } catch (reason) {
-      setFeedbackError(reason instanceof Error ? reason.message : 'Không thể lưu đánh giá.');
-    } finally {
-      setBusy(false);
-    }
-  };
   const isHelpful = savedFeedbackKind === 'helpful';
   const hasNegativeFeedback = Boolean(savedFeedbackKind && !isHelpful);
   const FeedbackIcon = hasNegativeFeedback ? ThumbsDown : ThumbsUp;
@@ -165,16 +202,13 @@ export function AssistantMessageActions({
             </span>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" side="top" sideOffset={8} className="w-40">
-            <DropdownMenuItem onClick={() => void submitFeedback('helpful', '')}>
+            <DropdownMenuItem onClick={() => void feedback.submitFeedback('helpful', '')}>
               <ThumbsUp className={isHelpful ? 'fill-current text-primary' : undefined} />
               Trả lời tốt
               {isHelpful ? <Check className="ml-auto size-4" /> : null}
             </DropdownMenuItem>
             <DropdownMenuItem
-              onClick={() => {
-                setFeedbackError(null);
-                setFeedbackOpen(true);
-              }}
+              onClick={feedback.openFeedback}
             >
               <ThumbsDown className={hasNegativeFeedback ? 'fill-current text-primary' : undefined} />
               Trả lời tệ
@@ -234,9 +268,11 @@ export function AssistantMessageActions({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      {feedbackError ? <p className="mt-1 text-xs text-destructive">{feedbackError}</p> : null}
-      {feedbackOpen ? (
-        <Modal title="Phản hồi này cần cải thiện ở đâu?" onClose={() => setFeedbackOpen(false)}>
+      {feedback.feedbackError ? (
+        <p className="mt-1 text-xs text-destructive">{feedback.feedbackError}</p>
+      ) : null}
+      {feedback.feedbackOpen ? (
+        <Modal title="Phản hồi này cần cải thiện ở đâu?" onClose={() => feedback.setFeedbackOpen(false)}>
           <div className="grid gap-2">
             {[
               ['incorrect', 'Sai hoặc chưa chính xác'],
@@ -249,8 +285,8 @@ export function AssistantMessageActions({
                 <input
                   type="radio"
                   name={message.messageId}
-                  checked={feedbackKind === value}
-                  onChange={() => setFeedbackKind(value as typeof feedbackKind)}
+                  checked={feedback.feedbackKind === value}
+                  onChange={() => feedback.setFeedbackKind(value as FeedbackKind)}
                 />
                 {label}
               </label>
@@ -258,19 +294,21 @@ export function AssistantMessageActions({
           </div>
           <textarea
             className="mt-4 min-h-24 w-full rounded-xl border bg-background p-3 text-sm"
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
+            value={feedback.note}
+            onChange={(event) => feedback.setNote(event.target.value)}
             placeholder="Ghi chú thêm để AI cải thiện cho các lần sau (tùy chọn)"
           />
           <div className="mt-4 flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setFeedbackOpen(false)}>
+            <Button variant="ghost" onClick={() => feedback.setFeedbackOpen(false)}>
               Hủy
             </Button>
-            <Button disabled={busy} onClick={() => void submitFeedback()}>
-              {busy ? 'Đang lưu...' : 'Gửi đánh giá'}
+            <Button disabled={feedback.busy} onClick={() => void feedback.submitFeedback()}>
+              {feedback.busy ? 'Đang lưu...' : 'Gửi đánh giá'}
             </Button>
           </div>
-          {feedbackError ? <p className="mt-3 text-sm text-destructive">{feedbackError}</p> : null}
+          {feedback.feedbackError ? (
+            <p className="mt-3 text-sm text-destructive">{feedback.feedbackError}</p>
+          ) : null}
         </Modal>
       ) : null}
       {sourcesOpen ? (
