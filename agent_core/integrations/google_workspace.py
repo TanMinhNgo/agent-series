@@ -20,9 +20,9 @@ from urllib.request import Request, urlopen
 from cryptography.fernet import Fernet, InvalidToken
 from pypdf import PdfReader
 
-from .config import Settings
-from .storage import ConnectorConnection, ConnectorRepository, Plugin
-from .tools.base import ToolSpec
+from ..runtime.config import Settings
+from ..persistence.store import ConnectorConnection, ConnectorRepository, Plugin
+from ..tools.base import ToolSpec
 
 GOOGLE_WORKSPACE_SLUG = "google-workspace"
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"

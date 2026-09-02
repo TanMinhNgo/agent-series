@@ -1,4 +1,4 @@
-from agent_core.response_blocks import parse_response
+from agent_core.ai.response_blocks import parse_response
 
 
 def test_parse_response_extracts_safe_interactive_block() -> None:

@@ -12,9 +12,9 @@ from pypdf import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import select
 
-from .storage import Database, Document, DocumentChunk, KnowledgeCollection, KnowledgeCollectionDocument, current_user_id, document_scope_key
-from .file_storage import FileStorageService
-from .tools.base import ToolSpec
+from ..persistence.store import Database, Document, DocumentChunk, KnowledgeCollection, KnowledgeCollectionDocument, current_user_id, document_scope_key
+from ..content.file_storage import FileStorageService
+from ..tools.base import ToolSpec
 
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 120

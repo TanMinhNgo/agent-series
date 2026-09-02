@@ -7,7 +7,7 @@ from logging.config import fileConfig
 from alembic import context
 from dotenv import load_dotenv
 
-from agent_core.storage import Base
+from agent_core.persistence.store import Base
 
 config = context.config
 # Alembic runs outside the API process, so it must load the project .env itself.

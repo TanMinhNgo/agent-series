@@ -6,7 +6,7 @@ import base64
 from pathlib import Path
 from uuid import uuid4
 
-from .storage import MediaAttachment, MediaRepository, current_user_id
+from ..persistence.store import MediaAttachment, MediaRepository, current_user_id
 from .file_storage import FileStorageService
 
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}

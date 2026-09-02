@@ -9,7 +9,7 @@ from threading import Event, Thread
 
 from .background import BackgroundWorker
 from .scheduler import build_worker
-from .storage import BackgroundJobRepository
+from ..persistence.store import BackgroundJobRepository
 
 logger = logging.getLogger(__name__)
 

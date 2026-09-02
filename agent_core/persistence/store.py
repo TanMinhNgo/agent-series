@@ -16,6 +16,10 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, rela
 GLOBAL_DOCUMENT_SCOPE = "__library__"
 WORKSPACE_ID_FOREIGN_KEY = "workspaces.id"
 CHAT_ID_FOREIGN_KEY = "chats.id"
+USER_ID_FOREIGN_KEY = "users.id"
+PROJECT_ID_FOREIGN_KEY = "projects.id"
+CHAT_MESSAGE_ID_FOREIGN_KEY = "chat_messages.id"
+CHAT_NOT_FOUND_ERROR = "Không tìm thấy chat."
 SET_NULL = "SET NULL"
 
 def utc_now() -> datetime:
@@ -38,7 +42,7 @@ current_workspace_id: ContextVar[str | None] = ContextVar("current_workspace_id"
 class UserOwned:
     """Mixin automatically scoped on HTTP requests; internal workers run unscoped."""
 
-    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    user_id: Mapped[str | None] = mapped_column(ForeignKey(USER_ID_FOREIGN_KEY, ondelete="CASCADE"), nullable=True, index=True)
     # Data remains attributable to its creator, but visibility is controlled by
     # workspace membership.  Keeping both columns also preserves per-user
     # credentials and scheduled-job ownership.
@@ -61,7 +65,7 @@ class Workspace(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     name: Mapped[str] = mapped_column(String(160))
     is_personal: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete=SET_NULL), nullable=True, index=True)
+    created_by_user_id: Mapped[str | None] = mapped_column(ForeignKey(USER_ID_FOREIGN_KEY, ondelete=SET_NULL), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
@@ -71,7 +75,7 @@ class WorkspaceMember(Base):
     __table_args__ = (UniqueConstraint("workspace_id", "user_id", name="uq_workspace_member"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     workspace_id: Mapped[str] = mapped_column(ForeignKey(WORKSPACE_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey(USER_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
     role: Mapped[str] = mapped_column(String(16), default="viewer")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
@@ -83,7 +87,7 @@ class WorkspaceInvitation(Base):
     workspace_id: Mapped[str] = mapped_column(ForeignKey(WORKSPACE_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
     email: Mapped[str] = mapped_column(String(320), index=True)
     role: Mapped[str] = mapped_column(String(16), default="viewer")
-    invited_by_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete=SET_NULL), nullable=True)
+    invited_by_user_id: Mapped[str] = mapped_column(ForeignKey(USER_ID_FOREIGN_KEY, ondelete=SET_NULL), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
@@ -92,7 +96,7 @@ class AuthIdentity(Base):
     __tablename__ = "auth_identities"
     __table_args__ = (UniqueConstraint("provider", "provider_subject", name="uq_auth_identity_provider_subject"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey(USER_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
     provider: Mapped[str] = mapped_column(String(32))
     provider_subject: Mapped[str] = mapped_column(String(320))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -101,7 +105,7 @@ class AuthIdentity(Base):
 class AuthSession(Base):
     __tablename__ = "auth_sessions"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey(USER_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -111,7 +115,7 @@ class UserProviderCredential(Base):
     __tablename__ = "user_provider_credentials"
     __table_args__ = (UniqueConstraint("user_id", "provider", name="uq_user_provider_credential"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey(USER_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
     provider: Mapped[str] = mapped_column(String(32))
     ciphertext: Mapped[str] = mapped_column(Text)
     key_version: Mapped[str] = mapped_column(String(32), default="v1")
@@ -147,8 +151,8 @@ class SystemAuditLog(Base):
     __tablename__ = "system_audit_logs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    actor_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete=SET_NULL), nullable=True, index=True)
-    subject_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete=SET_NULL), nullable=True, index=True)
+    actor_user_id: Mapped[str | None] = mapped_column(ForeignKey(USER_ID_FOREIGN_KEY, ondelete=SET_NULL), nullable=True, index=True)
+    subject_user_id: Mapped[str | None] = mapped_column(ForeignKey(USER_ID_FOREIGN_KEY, ondelete=SET_NULL), nullable=True, index=True)
     event_type: Mapped[str] = mapped_column(String(64), index=True)
     summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -194,7 +198,7 @@ class Chat(UserOwned, Base):
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
     is_unread: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     context_source_chat_id: Mapped[str | None] = mapped_column(ForeignKey(CHAT_ID_FOREIGN_KEY, ondelete=SET_NULL), nullable=True)
-    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey(PROJECT_ID_FOREIGN_KEY, ondelete="CASCADE"), nullable=True, index=True)
     parent_chat_id: Mapped[str | None] = mapped_column(ForeignKey(CHAT_ID_FOREIGN_KEY, ondelete=SET_NULL), nullable=True, index=True)
     branch_from_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
     collection_id: Mapped[str | None] = mapped_column(ForeignKey("knowledge_collections.id", ondelete=SET_NULL), nullable=True, index=True)
@@ -253,7 +257,7 @@ class ResponseFeedback(UserOwned, Base):
     __table_args__ = (UniqueConstraint("user_id", "message_id", name="uq_response_feedback_user_message"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    message_id: Mapped[str] = mapped_column(ForeignKey("chat_messages.id", ondelete="CASCADE"), index=True)
+    message_id: Mapped[str] = mapped_column(ForeignKey(CHAT_MESSAGE_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
     kind: Mapped[str] = mapped_column(String(32))
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -276,7 +280,7 @@ class PromptTemplate(UserOwned, Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     name: Mapped[str] = mapped_column(String(160))
     content: Mapped[str] = mapped_column(Text)
-    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey(PROJECT_ID_FOREIGN_KEY, ondelete="CASCADE"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
@@ -306,7 +310,7 @@ class LibraryAsset(UserOwned, Base):
     mime_type: Mapped[str] = mapped_column(String(120))
     size_bytes: Mapped[int] = mapped_column(Integer)
     source: Mapped[str] = mapped_column(String(24), default="upload")
-    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey(PROJECT_ID_FOREIGN_KEY, ondelete="CASCADE"), nullable=True, index=True)
     artifact_id: Mapped[str] = mapped_column(String(36), default=lambda: str(uuid4()), index=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     is_project_source: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
@@ -325,8 +329,8 @@ class ArtifactMessageLink(UserOwned, Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     asset_id: Mapped[str] = mapped_column(ForeignKey("library_assets.id", ondelete="CASCADE"), index=True)
     chat_id: Mapped[str] = mapped_column(ForeignKey(CHAT_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
-    user_message_id: Mapped[str] = mapped_column(ForeignKey("chat_messages.id", ondelete="CASCADE"), index=True)
-    assistant_message_id: Mapped[str] = mapped_column(ForeignKey("chat_messages.id", ondelete="CASCADE"), index=True)
+    user_message_id: Mapped[str] = mapped_column(ForeignKey(CHAT_MESSAGE_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
+    assistant_message_id: Mapped[str] = mapped_column(ForeignKey(CHAT_MESSAGE_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
@@ -363,7 +367,7 @@ class Schedule(UserOwned, Base):
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey(PROJECT_ID_FOREIGN_KEY, ondelete="CASCADE"), nullable=True)
     chat_id: Mapped[str | None] = mapped_column(ForeignKey(CHAT_ID_FOREIGN_KEY, ondelete=SET_NULL), nullable=True)
     provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     model: Mapped[str | None] = mapped_column(String(160), nullable=True)
@@ -470,7 +474,7 @@ class Document(UserOwned, Base):
     status: Mapped[str] = mapped_column(String(16), default="pending")
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey(PROJECT_ID_FOREIGN_KEY, ondelete="CASCADE"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     chunks: Mapped[list["DocumentChunk"]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
@@ -493,7 +497,7 @@ class KnowledgeCollection(UserOwned, Base):
     __tablename__ = "knowledge_collections"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey(PROJECT_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(160))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -605,7 +609,7 @@ class ChatRepository:
         with self.database.session() as session:
             parent = session.get(Chat, chat_id)
             if parent is None:
-                raise ValueError("Không tìm thấy chat.")
+                raise ValueError(CHAT_NOT_FOUND_ERROR)
             assistant = session.get(ChatMessage, assistant_message_id)
             if assistant is None or assistant.chat_id != chat_id or assistant.role != "assistant":
                 raise ValueError("Chỉ có thể mở nhánh từ phản hồi AI thuộc chat này.")
@@ -711,51 +715,61 @@ class ChatRepository:
         with self.database.session() as session:
             chat = session.get(Chat, chat_id)
             if chat is None:
-                raise ValueError("Không tìm thấy chat.")
+                raise ValueError(CHAT_NOT_FOUND_ERROR)
             existing = {
                 item.id: item
                 for item in session.scalars(select(ChatMessage).where(ChatMessage.chat_id == chat_id))
             }
-            retained_ids: set[str] = set()
-            for position, item in enumerate(history):
-                message_id = item.get("message_id") or str(uuid4())
-                item["message_id"] = message_id
-                retained_ids.add(message_id)
-                values = {
-                    "position": position,
-                    "role": item["role"],
-                    "content": item.get("content", ""),
-                    "tool_call_id": item.get("id"),
-                    "tool_name": item.get("name"),
-                    "tool_calls": item.get("tool_calls"),
-                    "attachments": [{key: value for key, value in attachment.items() if key != "data"}
-                                    for attachment in item.get("attachments", [])] or None,
-                    "content_blocks": item.get("content_blocks") or None,
-                    "sources": item.get("sources") or None,
-                }
-                message = existing.get(message_id)
-                if message is None:
-                    raw_created_at = item.get("created_at")
-                    values["created_at"] = (
-                        raw_created_at
-                        if isinstance(raw_created_at, datetime)
-                        else datetime.fromisoformat(raw_created_at)
-                        if isinstance(raw_created_at, str)
-                        else utc_now()
-                    )
-                    session.add(ChatMessage(id=message_id, chat_id=chat_id, **values))
-                else:
-                    for key, value in values.items():
-                        setattr(message, key, value)
-            for message_id, message in existing.items():
-                if message_id not in retained_ids:
-                    session.delete(message)
-            user_message = next((item["content"] for item in history if item["role"] == "user"), "")
-            if chat.title == "Cuộc trò chuyện mới" and user_message:
-                chat.title = user_message.strip()[:80]
+            retained_ids = self._persist_history_messages(session, chat_id, history, existing)
+            self._delete_removed_messages(session, existing, retained_ids)
+            self._set_initial_chat_title(chat, history)
             chat.updated_at = utc_now()
             session.commit()
             return history
+
+    def _persist_history_messages(self, session: Session, chat_id: str, history: list[dict], existing: dict[str, ChatMessage]) -> set[str]:
+        retained_ids: set[str] = set()
+        for position, item in enumerate(history):
+            message_id = item.get("message_id") or str(uuid4())
+            item["message_id"] = message_id
+            retained_ids.add(message_id)
+            self._persist_history_message(session, chat_id, existing.get(message_id), message_id, position, item)
+        return retained_ids
+
+    @staticmethod
+    def _history_message_values(position: int, item: dict) -> dict:
+        return {
+            "position": position, "role": item["role"], "content": item.get("content", ""),
+            "tool_call_id": item.get("id"), "tool_name": item.get("name"), "tool_calls": item.get("tool_calls"),
+            "attachments": [{key: value for key, value in attachment.items() if key != "data"} for attachment in item.get("attachments", [])] or None,
+            "content_blocks": item.get("content_blocks") or None, "sources": item.get("sources") or None,
+        }
+
+    def _persist_history_message(self, session: Session, chat_id: str, message: ChatMessage | None, message_id: str, position: int, item: dict) -> None:
+        values = self._history_message_values(position, item)
+        if message is None:
+            values["created_at"] = self._created_at(item.get("created_at"))
+            session.add(ChatMessage(id=message_id, chat_id=chat_id, **values))
+            return
+        for key, value in values.items():
+            setattr(message, key, value)
+
+    @staticmethod
+    def _created_at(value: object) -> datetime:
+        if isinstance(value, datetime): return value
+        if isinstance(value, str): return datetime.fromisoformat(value)
+        return utc_now()
+
+    @staticmethod
+    def _delete_removed_messages(session: Session, existing: dict[str, ChatMessage], retained_ids: set[str]) -> None:
+        for message_id, message in existing.items():
+            if message_id not in retained_ids: session.delete(message)
+
+    @staticmethod
+    def _set_initial_chat_title(chat: Chat, history: list[dict]) -> None:
+        user_message = next((item["content"] for item in history if item["role"] == "user"), "")
+        if chat.title == "Cuộc trò chuyện mới" and user_message:
+            chat.title = user_message.strip()[:80]
 
     def link_artifacts_to_turn(
         self,
@@ -852,7 +866,7 @@ class ChatRepository:
         with self.database.session() as session:
             chat = session.get(Chat, chat_id)
             if chat is None:
-                raise ValueError("Không tìm thấy chat.")
+                raise ValueError(CHAT_NOT_FOUND_ERROR)
             chat.provider = provider
             chat.model = model
             chat.updated_at = utc_now()
@@ -1734,3 +1748,4 @@ class MediaRepository:
             item.storage_provider, item.stored_name, item.storage_file_id = provider, stored_name, file_id
             session.commit()
             return item
+

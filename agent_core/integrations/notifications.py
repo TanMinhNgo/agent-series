@@ -7,7 +7,7 @@ from datetime import datetime
 from email.message import EmailMessage
 from urllib.parse import urlparse
 
-from .config import Settings
+from ..runtime.config import Settings
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"}
 SMTP_TIMEOUT_SECONDS = 15

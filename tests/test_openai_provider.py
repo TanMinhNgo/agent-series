@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from agent_core.providers import OpenAIClient
+from agent_core.ai.providers import OpenAIClient
 
 
 class FakeCompletions:

@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
-from agent_core.storage import Base, ConnectorRepository, Database, Plugin, User, WorkspaceRepository, current_user_id
+from agent_core.persistence.store import Base, ConnectorRepository, Database, Plugin, User, WorkspaceRepository, current_user_id
 
 
 def _with_user(user_id: str):

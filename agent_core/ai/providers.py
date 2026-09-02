@@ -27,9 +27,9 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from dataclasses import dataclass, field
 
-from .config import Settings
+from ..runtime.config import Settings
 from .ollama import OllamaModelNotFoundError, OllamaUnavailableError
-from .tools.base import ToolSpec
+from ..tools.base import ToolSpec
 
 
 @dataclass

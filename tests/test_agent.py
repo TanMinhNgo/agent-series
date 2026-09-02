@@ -1,5 +1,5 @@
-from agent_core.agent import Agent
-from agent_core.providers import NormalizedReply
+from agent_core.ai.agent import Agent
+from agent_core.ai.providers import NormalizedReply
 from agent_core.tools.base import ToolSpec
 from agent_core.tools.registry import ToolRegistry
 

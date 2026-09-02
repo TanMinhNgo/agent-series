@@ -15,9 +15,9 @@ from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
-from .config import Settings
-from .storage import ConnectorConnection, ConnectorRepository, Plugin
-from .tools.base import ToolSpec
+from ..runtime.config import Settings
+from ..persistence.store import ConnectorConnection, ConnectorRepository, Plugin
+from ..tools.base import ToolSpec
 
 GITHUB_SLUG = "github"
 GITHUB_API_URL = "https://api.github.com"

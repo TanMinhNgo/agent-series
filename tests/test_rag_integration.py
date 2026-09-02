@@ -15,9 +15,9 @@ from reportlab.pdfgen.canvas import Canvas
 from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 
-from agent_core.background import BackgroundWorker
-from agent_core.knowledge import KnowledgeService, build_knowledge_tool
-from agent_core.storage import BackgroundJobRepository, Database, Project, WorkspaceRepository
+from agent_core.jobs.background import BackgroundWorker
+from agent_core.knowledge.rag import KnowledgeService, build_knowledge_tool
+from agent_core.persistence.store import BackgroundJobRepository, Database, Project, WorkspaceRepository
 
 pytestmark = pytest.mark.integration
 

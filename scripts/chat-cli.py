@@ -19,11 +19,11 @@ except (AttributeError, ValueError):
 # Cho phép `import agent_core` khi chạy trực tiếp file trong thư mục scripts/.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from agent_core.agent import Agent  # noqa: E402
-from agent_core.config import load_settings  # noqa: E402
-from agent_core.knowledge import KnowledgeService, build_knowledge_tool  # noqa: E402
-from agent_core.providers import build_client  # noqa: E402
-from agent_core.storage import Database  # noqa: E402
+from agent_core.ai.agent import Agent  # noqa: E402
+from agent_core.runtime.config import load_settings  # noqa: E402
+from agent_core.knowledge.rag import KnowledgeService, build_knowledge_tool  # noqa: E402
+from agent_core.ai.providers import build_client  # noqa: E402
+from agent_core.persistence.store import Database  # noqa: E402
 from agent_core.tools import build_default_registry  # noqa: E402
 
 

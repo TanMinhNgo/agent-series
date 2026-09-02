@@ -8,7 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from .tools.base import ToolSpec
+from ..tools.base import ToolSpec
 
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 

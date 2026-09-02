@@ -12,8 +12,8 @@ là cho agent PHỐI HỢP nhiều tool trong một câu hỏi (đọc PDF -> t�
   agent.py       -> ⭐ VÒNG LẶP AGENT (phần cốt lõi, không phụ thuộc provider)
 """
 
-from .agent import Agent, AgentResult, Step
-from .prompts import DEFAULT_SYSTEM_PROMPT
+from .ai.agent import Agent, AgentResult, Step
+from .ai.prompts import DEFAULT_SYSTEM_PROMPT
 
 __all__ = ["Agent", "AgentResult", "DEFAULT_SYSTEM_PROMPT", "Step"]
 __version__ = "0.1.0"

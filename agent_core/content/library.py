@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from sqlalchemy import func, select
 
-from .storage import Database, LibraryAsset, current_user_id
+from ..persistence.store import Database, LibraryAsset, current_user_id
 from .file_storage import FileStorageService
 
 ALLOWED_SUFFIXES = {
@@ -18,6 +18,11 @@ ALLOWED_SUFFIXES = {
     ".png", ".jpg", ".jpeg", ".webp", ".gif",
 }
 MAX_FILE_BYTES = 25 * 1024 * 1024
+EXPORT_FORMATS = {"docx", "xlsx", "pptx", "md", "csv", "pdf", "json", "txt", "py", "ts", "tsx"}
+TEXT_EXPORT_MIME_TYPES = {
+    "md": "text/markdown", "csv": "text/csv", "json": "application/json", "txt": "text/plain",
+    "py": "text/x-python", "ts": "text/typescript", "tsx": "text/tsx",
+}
 
 
 class LibraryService:
@@ -90,27 +95,44 @@ class LibraryService:
             if asset is None:
                 return None
             versions = session.scalars(select(LibraryAsset).where(LibraryAsset.artifact_id == asset.artifact_id)).all()
-            if name is not None:
-                clean_name = Path(name).name.strip()[:255]
-                if not clean_name:
-                    raise ValueError("Tên artifact không được để trống.")
-                for item in versions:
-                    item.name = clean_name
-            if project_id is not None or is_project_source is False:
-                for item in versions:
-                    item.project_id = project_id
-                    item.is_project_source = bool(project_id) if is_project_source is None else bool(is_project_source and project_id)
-                    if item.is_project_source and item.index_status == "pending":
-                        item.index_status = "queued"
-            elif is_project_source is True:
-                if not asset.project_id:
-                    raise ValueError("Cần chọn Project trước khi ghim artifact.")
-                for item in versions:
-                    item.is_project_source = True
-                    if item.index_status == "pending":
-                        item.index_status = "queued"
+            self._rename_versions(versions, name)
+            self._update_project_source(asset, versions, project_id, is_project_source)
             session.commit()
             return session.get(LibraryAsset, asset_id)
+
+    @staticmethod
+    def _rename_versions(versions: list[LibraryAsset], name: str | None) -> None:
+        if name is None:
+            return
+        clean_name = Path(name).name.strip()[:255]
+        if not clean_name:
+            raise ValueError("Tên artifact không được để trống.")
+        for item in versions:
+            item.name = clean_name
+
+    @staticmethod
+    def _queue_index_if_project_source(asset: LibraryAsset) -> None:
+        if asset.is_project_source and asset.index_status == "pending":
+            asset.index_status = "queued"
+
+    def _update_project_source(self, asset: LibraryAsset, versions: list[LibraryAsset], project_id: str | None, is_project_source: bool | None) -> None:
+        if project_id is not None or is_project_source is False:
+            self._assign_project_source(versions, project_id, is_project_source)
+        elif is_project_source is True:
+            self._pin_existing_project_source(asset, versions)
+
+    def _assign_project_source(self, versions: list[LibraryAsset], project_id: str | None, is_project_source: bool | None) -> None:
+        for item in versions:
+            item.project_id = project_id
+            item.is_project_source = bool(project_id) if is_project_source is None else bool(is_project_source and project_id)
+            self._queue_index_if_project_source(item)
+
+    def _pin_existing_project_source(self, asset: LibraryAsset, versions: list[LibraryAsset]) -> None:
+        if not asset.project_id:
+            raise ValueError("Cần chọn Project trước khi ghim artifact.")
+        for item in versions:
+            item.is_project_source = True
+            self._queue_index_if_project_source(item)
 
     def create_version(self, asset_id: str, name: str, content_type: str, data: bytes) -> LibraryAsset:
         suffix = Path(name).suffix.lower()
@@ -159,31 +181,38 @@ class LibraryService:
 
     def create_export(self, name: str, format: str, content: str, project_id: str | None = None) -> LibraryAsset:
         format = format.lower().lstrip(".")
-        if format not in {"docx", "xlsx", "pptx", "md", "csv", "pdf", "json", "txt", "py", "ts", "tsx"}: raise ValueError("Định dạng export chưa hỗ trợ.")
+        if format not in EXPORT_FORMATS: raise ValueError("Định dạng export chưa hỗ trợ.")
         filename = f"{Path(name).stem or 'tai-lieu'}.{format}"
-        if format in {"md", "csv", "json", "txt", "py", "ts", "tsx"}:
-            payload = content.encode("utf-8")
-            mime = {
-                "md": "text/markdown", "csv": "text/csv", "json": "application/json", "txt": "text/plain",
-                "py": "text/x-python", "ts": "text/typescript", "tsx": "text/tsx",
-            }[format]
-        elif format == "docx":
+        payload, mime = self._export_payload(format, content)
+        return self.upload(filename, mime, payload, source="generated", project_id=project_id)
+
+    @staticmethod
+    def _export_payload(format: str, content: str) -> tuple[bytes, str]:
+        if format in TEXT_EXPORT_MIME_TYPES:
+            return content.encode("utf-8"), TEXT_EXPORT_MIME_TYPES[format]
+        if format == "docx":
             from docx import Document
-            doc = Document(); doc.add_paragraph(content); stream = BytesIO(); doc.save(stream); payload, mime = stream.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        elif format == "xlsx":
+            doc = Document(); doc.add_paragraph(content); stream = BytesIO(); doc.save(stream)
+            return stream.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        if format == "xlsx":
             from openpyxl import Workbook
             book = Workbook(); sheet = book.active
             for row in csv.reader(StringIO(content)): sheet.append(row)
-            stream = BytesIO(); book.save(stream); payload, mime = stream.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        elif format == "pptx":
+            stream = BytesIO(); book.save(stream)
+            return stream.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        if format == "pptx":
             from pptx import Presentation
             deck = Presentation()
             for slide_text in content.split("\n\n"):
                 slide = deck.slides.add_slide(deck.slide_layouts[1]); lines = slide_text.splitlines(); slide.shapes.title.text = lines[0] if lines else "Nội dung"; slide.placeholders[1].text = "\n".join(lines[1:])
-            stream = BytesIO(); deck.save(stream); payload, mime = stream.getvalue(), "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        else:
-            from reportlab.pdfgen.canvas import Canvas
-            stream = BytesIO(); canvas = Canvas(stream); text = canvas.beginText(48, 800)
-            for line in content.splitlines(): text.textLine(line[:120])
-            canvas.drawText(text); canvas.save(); payload, mime = stream.getvalue(), "application/pdf"
-        return self.upload(filename, mime, payload, source="generated", project_id=project_id)
+            stream = BytesIO(); deck.save(stream)
+            return stream.getvalue(), "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        return LibraryService._pdf_export(content)
+
+    @staticmethod
+    def _pdf_export(content: str) -> tuple[bytes, str]:
+        from reportlab.pdfgen.canvas import Canvas
+        stream = BytesIO(); canvas = Canvas(stream); text = canvas.beginText(48, 800)
+        for line in content.splitlines(): text.textLine(line[:120])
+        canvas.drawText(text); canvas.save()
+        return stream.getvalue(), "application/pdf"

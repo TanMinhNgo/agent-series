@@ -14,10 +14,10 @@ from fastapi.testclient import TestClient
 from reportlab.pdfgen.canvas import Canvas
 from sqlalchemy import select
 
-from agent_core.background import BackgroundWorker
-from agent_core.config import load_settings
-from agent_core.knowledge import KnowledgeService
-from agent_core.storage import BackgroundJob, BackgroundJobRepository, ChatRepository, Database, Project, WorkspaceRepository
+from agent_core.jobs.background import BackgroundWorker
+from agent_core.runtime.config import load_settings
+from agent_core.knowledge.rag import KnowledgeService
+from agent_core.persistence.store import BackgroundJob, BackgroundJobRepository, ChatRepository, Database, Project, WorkspaceRepository
 from api.main import app
 
 

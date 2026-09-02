@@ -208,20 +208,6 @@ function ArtifactDetails({
   onToggleDiff,
   onOpenFullscreen,
 }: ArtifactDetailsProps) {
-  const renderDiffContent = () => {
-    if (diff.isLoading) {
-      return (
-        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <LoaderCircle className="animate-spin" size={16} /> Đang tạo diff...
-        </p>
-      );
-    }
-    if (diff.data?.diff) {
-      return <pre className="whitespace-pre-wrap text-xs leading-5">{diff.data.diff}</pre>;
-    }
-    return <p className="text-sm text-muted-foreground">Không có thay đổi giữa hai version.</p>;
-  };
-
   return (
     <>
       <div className="mb-3 flex items-start justify-between gap-3">
@@ -293,14 +279,7 @@ function ArtifactDetails({
           <GitCompareArrows size={15} /> {showDiff ? 'Xem nội dung' : 'Xem thay đổi'}
         </Button>
       ) : null}
-      {showDiff ? (
-        <div className="max-h-[52dvh] overflow-auto rounded-lg border bg-muted/20 p-3">
-          {renderDiffContent()}
-          {diff.error ? <p className="mt-2 text-sm text-destructive">Không thể tải diff.</p> : null}
-        </div>
-      ) : (
-        <ArtifactPreview preview={preview} selected={selected} />
-      )}
+      <ArtifactBody showDiff={showDiff} diff={diff} preview={preview} selected={selected} />
       <a
         className="mt-3 inline-block text-sm text-primary hover:underline"
         href={selected.url}
@@ -311,6 +290,33 @@ function ArtifactDetails({
       </a>
     </>
   );
+}
+
+function ArtifactBody({
+  showDiff,
+  diff,
+  preview,
+  selected,
+}: Pick<ArtifactDetailsProps, 'showDiff' | 'diff' | 'preview' | 'selected'>) {
+  if (!showDiff) return <ArtifactPreview preview={preview} selected={selected} />;
+  return (
+    <div className="max-h-[52dvh] overflow-auto rounded-lg border bg-muted/20 p-3">
+      <DiffContent diff={diff} />
+      {diff.error ? <p className="mt-2 text-sm text-destructive">Không thể tải diff.</p> : null}
+    </div>
+  );
+}
+
+function DiffContent({ diff }: Pick<ArtifactDetailsProps, 'diff'>) {
+  if (diff.isLoading) {
+    return (
+      <p className="flex items-center gap-2 text-sm text-muted-foreground">
+        <LoaderCircle className="animate-spin" size={16} /> Đang tạo diff...
+      </p>
+    );
+  }
+  if (diff.data?.diff) return <pre className="whitespace-pre-wrap text-xs leading-5">{diff.data.diff}</pre>;
+  return <p className="text-sm text-muted-foreground">Không có thay đổi giữa hai version.</p>;
 }
 
 export function ArtifactPanel({

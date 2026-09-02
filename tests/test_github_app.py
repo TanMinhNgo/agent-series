@@ -5,8 +5,8 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from cryptography.fernet import Fernet
 
-from agent_core.github_app import GITHUB_SLUG, GitHubAppExecutor, GitHubAppService, GitHubConnectorError
-from agent_core.storage import Plugin
+from agent_core.integrations.github_app import GITHUB_SLUG, GitHubAppExecutor, GitHubAppService, GitHubConnectorError
+from agent_core.persistence.store import Plugin
 
 
 class FakeConnectorRepository:

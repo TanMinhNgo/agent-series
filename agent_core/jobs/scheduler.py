@@ -6,24 +6,24 @@ import time
 from datetime import UTC, datetime
 from threading import Event, Thread
 
-from api.main import Services, make_agent, persisted_history, queue_pending_artifacts
-from agent_core.artifacts import ArtifactService
-from agent_core.config import load_settings
-from agent_core.knowledge import KnowledgeService
-from agent_core.library import LibraryService
-from agent_core.media import MediaService
-from agent_core.file_storage import FileStorageService
-from agent_core.memory import MemoryService
-from agent_core.ollama import OllamaCatalog
-from agent_core.personalization import PersonalizationService
-from agent_core.notifications import EmailNotificationService, public_chat_url, schedule_run_email
-from agent_core.web_search import WebSearchService, WebSourceUnavailable
-from agent_core.google_workspace import GOOGLE_WORKSPACE_SLUG, GoogleWorkspaceExecutor, GoogleWorkspaceService
-from agent_core.github_app import GITHUB_SLUG, GitHubAppExecutor, GitHubAppService
-from agent_core.auth import AuthService
-from agent_core.credentials import UserCredentialService
-from agent_core.plugin_execution import EXECUTORS, connected_read_tools
-from agent_core.storage import AuthRepository, BackgroundJobRepository, Chat, ChatRepository, ConnectorRepository, Database, MediaRepository, ModelRegistryRepository, Schedule, ScheduleRepository, WorkspaceRepository, current_user_id, current_workspace_id
+from api.app import make_agent, persisted_history, queue_pending_artifacts
+from agent_core.content.artifacts import ArtifactService
+from agent_core.runtime.services import Services, build_services
+from agent_core.knowledge.rag import KnowledgeService
+from agent_core.content.library import LibraryService
+from agent_core.content.media import MediaService
+from agent_core.content.file_storage import FileStorageService
+from agent_core.knowledge.memory import MemoryService
+from agent_core.ai.ollama import OllamaCatalog
+from agent_core.knowledge.personalization import PersonalizationService
+from agent_core.integrations.notifications import EmailNotificationService, public_chat_url, schedule_run_email
+from agent_core.integrations.web_search import WebSearchService, WebSourceUnavailable
+from agent_core.integrations.google_workspace import GOOGLE_WORKSPACE_SLUG, GoogleWorkspaceExecutor, GoogleWorkspaceService
+from agent_core.integrations.github_app import GITHUB_SLUG, GitHubAppExecutor, GitHubAppService
+from agent_core.runtime.auth import AuthService
+from agent_core.runtime.credentials import UserCredentialService
+from agent_core.integrations.plugin_execution import EXECUTORS, connected_read_tools
+from agent_core.persistence.store import AuthRepository, BackgroundJobRepository, Chat, ChatRepository, ConnectorRepository, Database, MediaRepository, ModelRegistryRepository, Schedule, ScheduleRepository, WorkspaceRepository, current_user_id, current_workspace_id
 
 RETRY_DELAYS_MINUTES = (5, 15, 30)
 HEARTBEAT_SECONDS = 60
@@ -239,38 +239,7 @@ class ScheduleWorker:
 
 
 def build_worker() -> ScheduleWorker:
-    settings = load_settings()
-    database = Database(settings.database_url)
-    media_storage = FileStorageService(settings.media_dir, settings.imagekit_private_key, settings.imagekit_url_endpoint)
-    knowledge_storage = FileStorageService(settings.knowledge_dir, settings.imagekit_private_key, settings.imagekit_url_endpoint)
-    media = MediaService(MediaRepository(database), settings.media_dir, media_storage)
-    auth_repository = AuthRepository(database)
-    model_registry = ModelRegistryRepository(database)
-    model_registry.seed(settings.provider_models)
-    connectors = ConnectorRepository(database)
-    google_workspace = GoogleWorkspaceService(connectors, settings)
-    github = GitHubAppService(connectors, settings)
-    EXECUTORS[GOOGLE_WORKSPACE_SLUG] = GoogleWorkspaceExecutor(google_workspace)
-    EXECUTORS[GITHUB_SLUG] = GitHubAppExecutor(github)
-    services = Services(
-        settings=settings,
-        chats=ChatRepository(database),
-        knowledge=KnowledgeService(database, settings.knowledge_dir, settings.embedding_model, knowledge_storage),
-        media=media,
-        library=LibraryService(database, settings.media_dir, media_storage),
-        artifacts=ArtifactService(database, settings.media_dir, settings.embedding_model, media_storage),
-        memory=MemoryService(database, settings.embedding_model),
-        workspace=WorkspaceRepository(database),
-        google_workspace=google_workspace,
-        github=github,
-        auth=AuthService(auth_repository, settings),
-        model_registry=model_registry,
-        credentials=UserCredentialService(auth_repository, settings),
-        personalization=PersonalizationService(database),
-        web_search=WebSearchService(settings.tavily_api_key),
-        email=EmailNotificationService(settings),
-        ollama=OllamaCatalog(settings.ollama_base_url),
-    )
+    services = build_services()
     queue_pending_artifacts(services)
     return ScheduleWorker(services)
 

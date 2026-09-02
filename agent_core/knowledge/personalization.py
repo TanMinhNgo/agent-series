@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from .storage import ChatMessage, Database, ResponseFeedback, UserPreference, current_user_id
+from ..persistence.store import ChatMessage, Database, ResponseFeedback, UserPreference, current_user_id
 
 FEEDBACK_STYLES = {
     "too_long": "concise",
@@ -44,41 +44,60 @@ class PersonalizationService:
             session.commit()
 
     def record_feedback(self, message_id: str, kind: str, note: str | None = None) -> ResponseFeedback:
+        user_id = self._validate_feedback_request(kind)
+        with self.database.session() as session:
+            self._require_assistant_message(session, message_id)
+            feedback, previous_kind = self._save_feedback(session, user_id, message_id, kind, note)
+            profile = self._preference_profile(session, user_id)
+            self._update_style_scores(profile, previous_kind, kind)
+            session.commit()
+            return feedback
+
+    @staticmethod
+    def _validate_feedback_request(kind: str) -> str:
         if kind not in {"helpful", "incorrect", *FEEDBACK_STYLES}:
             raise ValueError("Loại đánh giá không hợp lệ.")
         user_id = current_user_id.get()
         if not user_id:
             raise ValueError("Cần đăng nhập để đánh giá phản hồi.")
-        with self.database.session() as session:
-            message = session.get(ChatMessage, message_id)
-            if message is None or message.role != "assistant":
-                raise ValueError("Chỉ có thể đánh giá phản hồi AI của bạn.")
-            feedback = session.scalar(
-                select(ResponseFeedback).where(
-                    ResponseFeedback.user_id == user_id,
-                    ResponseFeedback.message_id == message_id,
-                )
-            )
-            previous_kind = feedback.kind if feedback is not None else None
-            if feedback is None:
-                feedback = ResponseFeedback(user_id=user_id, message_id=message_id, kind=kind, note=(note or "").strip()[:2000] or None)
-                session.add(feedback)
-            else:
-                feedback.kind, feedback.note = kind, (note or "").strip()[:2000] or None
-            profile = session.scalar(select(UserPreference).where(UserPreference.user_id == user_id))
-            if profile is None:
-                profile = UserPreference(user_id=user_id, style_scores={}, topic_counts={})
-                session.add(profile)
-            scores = dict(profile.style_scores or {})
-            previous_style = FEEDBACK_STYLES.get(previous_kind or "")
-            if previous_style:
-                scores[previous_style] = max(0, int(scores.get(previous_style, 0)) - 1)
-            style = FEEDBACK_STYLES.get(kind)
-            if style:
-                scores[style] = int(scores.get(style, 0)) + 1
-            profile.style_scores = scores
-            session.commit()
-            return feedback
+        return user_id
+
+    @staticmethod
+    def _require_assistant_message(session, message_id: str) -> None:
+        message = session.get(ChatMessage, message_id)
+        if message is None or message.role != "assistant":
+            raise ValueError("Chỉ có thể đánh giá phản hồi AI của bạn.")
+
+    @staticmethod
+    def _save_feedback(session, user_id: str, message_id: str, kind: str, note: str | None) -> tuple[ResponseFeedback, str | None]:
+        feedback = session.scalar(select(ResponseFeedback).where(ResponseFeedback.user_id == user_id, ResponseFeedback.message_id == message_id))
+        previous_kind = feedback.kind if feedback is not None else None
+        cleaned_note = (note or "").strip()[:2000] or None
+        if feedback is None:
+            feedback = ResponseFeedback(user_id=user_id, message_id=message_id, kind=kind, note=cleaned_note)
+            session.add(feedback)
+        else:
+            feedback.kind, feedback.note = kind, cleaned_note
+        return feedback, previous_kind
+
+    @staticmethod
+    def _preference_profile(session, user_id: str) -> UserPreference:
+        profile = session.scalar(select(UserPreference).where(UserPreference.user_id == user_id))
+        if profile is None:
+            profile = UserPreference(user_id=user_id, style_scores={}, topic_counts={})
+            session.add(profile)
+        return profile
+
+    @staticmethod
+    def _update_style_scores(profile: UserPreference, previous_kind: str | None, kind: str) -> None:
+        scores = dict(profile.style_scores or {})
+        previous_style = FEEDBACK_STYLES.get(previous_kind or "")
+        if previous_style:
+            scores[previous_style] = max(0, int(scores.get(previous_style, 0)) - 1)
+        style = FEEDBACK_STYLES.get(kind)
+        if style:
+            scores[style] = int(scores.get(style, 0)) + 1
+        profile.style_scores = scores
 
     def feedback_by_message_ids(self, message_ids: list[str]) -> dict[str, str]:
         """Return the current user's saved feedback for a batch of assistant turns."""

@@ -1,7 +1,7 @@
 import json
 from types import SimpleNamespace
 
-from agent_core.web_search import sources_from_web_steps
+from agent_core.integrations.web_search import sources_from_web_steps
 
 
 def test_sources_from_web_steps_keeps_only_unique_https_results() -> None:

@@ -9,8 +9,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Protocol
 
-from .storage import Plugin
-from .tools.base import ToolSpec
+from ..persistence.store import Plugin
+from ..tools.base import ToolSpec
 
 
 class PluginExecutor(Protocol):

@@ -14,7 +14,7 @@ from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2.id_token import verify_oauth2_token
 
 from .config import Settings
-from .storage import AuthRepository, User
+from ..persistence.store import AuthRepository, User
 
 SESSION_COOKIE = "agent_series_session"
 LOGGER = logging.getLogger(__name__)

@@ -1,4 +1,4 @@
-from agent_core.knowledge import _chunks
+from agent_core.knowledge.rag import _chunks
 
 
 def test_chunking_keeps_content_and_bounds_chunk_size():

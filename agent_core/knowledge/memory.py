@@ -7,8 +7,8 @@ from typing import Any
 
 from sqlalchemy import select
 
-from .knowledge import _chunks
-from .storage import Chat, ChatMemoryChunk, Database
+from .rag import _chunks
+from ..persistence.store import Chat, ChatMemoryChunk, Database
 
 
 class MemoryService:

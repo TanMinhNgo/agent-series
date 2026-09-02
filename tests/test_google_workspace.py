@@ -5,8 +5,8 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from cryptography.fernet import Fernet
 
-from agent_core.google_workspace import GOOGLE_WORKSPACE_SLUG, GoogleConnectorError, GoogleWorkspaceExecutor, GoogleWorkspaceService
-from agent_core.storage import Plugin
+from agent_core.integrations.google_workspace import GOOGLE_WORKSPACE_SLUG, GoogleConnectorError, GoogleWorkspaceExecutor, GoogleWorkspaceService
+from agent_core.persistence.store import Plugin
 
 
 class FakeConnectorRepository:

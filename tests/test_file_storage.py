@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_core.file_storage import FileStorageService
+from agent_core.content.file_storage import FileStorageService
 
 
 def test_local_storage_upload_read_and_delete(tmp_path: Path) -> None:

@@ -19,7 +19,7 @@ from typing import Callable, Optional
 
 from .prompts import DEFAULT_SYSTEM_PROMPT
 from .response_blocks import parse_response
-from .tools.registry import ToolRegistry
+from ..tools.registry import ToolRegistry
 
 # Backward-compatible import for code that previously used agent.SYSTEM_PROMPT.
 SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT

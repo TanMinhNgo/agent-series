@@ -12,10 +12,10 @@ from pathlib import Path
 from pypdf import PdfReader
 from sqlalchemy import select
 
-from .knowledge import _chunks
-from .storage import ArtifactChunk, Database, LibraryAsset, current_user_id
+from ..knowledge.rag import _chunks
+from ..persistence.store import ArtifactChunk, Database, LibraryAsset, current_user_id
 from .file_storage import FileStorageService
-from .tools.base import ToolSpec
+from ..tools.base import ToolSpec
 
 PREVIEW_LIMIT = 30_000
 ARTIFACT_NOT_FOUND = "Không tìm thấy artifact."

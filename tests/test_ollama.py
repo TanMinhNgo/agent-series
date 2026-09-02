@@ -5,8 +5,8 @@ from urllib.error import URLError
 import pytest
 
 import api.main as main_module
-from agent_core.ollama import OllamaCatalog, OllamaUnavailableError
-from agent_core.providers import OllamaClient
+from agent_core.ai.ollama import OllamaCatalog, OllamaUnavailableError
+from agent_core.ai.providers import OllamaClient
 from agent_core.tools.base import ToolSpec
 
 
@@ -26,7 +26,7 @@ class FakeResponse:
 
 def test_ollama_catalog_discovers_installed_models(monkeypatch):
     monkeypatch.setattr(
-        "agent_core.ollama.urlopen",
+        "agent_core.ai.ollama.urlopen",
         lambda request, timeout: FakeResponse({"models": [{"name": "qwen3:8b"}, {"name": "llama3.2:3b"}, {"name": "cloud:latest", "remote_host": "https://ollama.com"}, {"name": "qwen3:8b"}]}),
     )
 
@@ -34,7 +34,7 @@ def test_ollama_catalog_discovers_installed_models(monkeypatch):
 
 
 def test_ollama_catalog_reports_offline_runtime(monkeypatch):
-    monkeypatch.setattr("agent_core.ollama.urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(URLError("offline")))
+    monkeypatch.setattr("agent_core.ai.ollama.urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(URLError("offline")))
 
     with pytest.raises(OllamaUnavailableError, match="Không thể kết nối Ollama"):
         OllamaCatalog("http://127.0.0.1:11434").models()
@@ -42,7 +42,7 @@ def test_ollama_catalog_reports_offline_runtime(monkeypatch):
 
 def test_ollama_client_normalizes_tool_calls(monkeypatch):
     monkeypatch.setattr(
-        "agent_core.providers.urlopen",
+        "agent_core.ai.providers.urlopen",
         lambda request, timeout: FakeResponse(
             {"message": {"content": "", "tool_calls": [{"function": {"name": "search_knowledge_base", "arguments": {"query": "RAG là gì?"}}}]}}
         ),
@@ -63,7 +63,7 @@ def test_llama_3b_uses_conservative_local_generation_options(monkeypatch):
         captured["payload"] = json.loads(request.data.decode())
         return FakeResponse({"message": {"content": "Xin chào"}})
 
-    monkeypatch.setattr("agent_core.providers.urlopen", fake_urlopen)
+    monkeypatch.setattr("agent_core.ai.providers.urlopen", fake_urlopen)
     client = OllamaClient("http://127.0.0.1:11434", "llama3.2:3b", 0.7, 2048)
 
     client.complete("system", [{"role": "user", "content": "hello"}], [])

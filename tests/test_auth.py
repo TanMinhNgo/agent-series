@@ -1,8 +1,8 @@
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
-from agent_core.auth import AuthService, GOOGLE_AUTH_STATE_PURPOSE
-from agent_core.storage import User
+from agent_core.runtime.auth import AuthService, GOOGLE_AUTH_STATE_PURPOSE
+from agent_core.persistence.store import User
 
 
 def settings() -> SimpleNamespace:

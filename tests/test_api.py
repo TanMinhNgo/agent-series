@@ -36,17 +36,17 @@ from api.main import (
     persisted_history,
     recent_chat_history,
 )
-from agent_core.background import BackgroundWorker
-from agent_core.artifacts import ArtifactEditContext, ArtifactService, extract_artifact_text
-from agent_core.plugin_catalog import CATALOG, find_catalog_plugin
-from agent_core.plugin_execution import connected_read_tools
-from agent_core.memory import MemoryService
-from agent_core.knowledge import ALLOWED_DOCUMENT_SUFFIXES, build_knowledge_tool, extract_document_parts
-from agent_core.credentials import CredentialError, UserCredentialService
-from agent_core.storage import Chat, Plugin, Schedule, ScheduleRepository, current_user_id, document_scope_key, utc_now
-from agent_core.scheduler import RunHeartbeat, ScheduleWorker
-from agent_core.notifications import public_chat_url
-from agent_core.web_search import WebSearchService, WebSourceUnavailable
+from agent_core.jobs.background import BackgroundWorker
+from agent_core.content.artifacts import ArtifactEditContext, ArtifactService, extract_artifact_text
+from agent_core.integrations.plugin_catalog import CATALOG, find_catalog_plugin
+from agent_core.integrations.plugin_execution import connected_read_tools
+from agent_core.knowledge.memory import MemoryService
+from agent_core.knowledge.rag import ALLOWED_DOCUMENT_SUFFIXES, build_knowledge_tool, extract_document_parts
+from agent_core.runtime.credentials import CredentialError, UserCredentialService
+from agent_core.persistence.store import Chat, Plugin, Schedule, ScheduleRepository, current_user_id, document_scope_key, utc_now
+from agent_core.jobs.scheduler import RunHeartbeat, ScheduleWorker
+from agent_core.integrations.notifications import public_chat_url
+from agent_core.integrations.web_search import WebSearchService, WebSourceUnavailable
 
 
 def test_message_json_exposes_message_creation_time() -> None:
@@ -302,9 +302,9 @@ def test_schedule_worker_restores_owner_and_replaces_legacy_chat(monkeypatch) ->
     )
     worker = ScheduleWorker(services)
     worker.runs = Runs()
-    monkeypatch.setattr("agent_core.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
-    monkeypatch.setattr("agent_core.scheduler.connected_read_tools", lambda _plugins: [])
-    monkeypatch.setattr("agent_core.scheduler.BackgroundJobRepository", lambda _database: SimpleNamespace(enqueue=lambda *_args, **_kwargs: None))
+    monkeypatch.setattr("agent_core.jobs.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
+    monkeypatch.setattr("agent_core.jobs.scheduler.connected_read_tools", lambda _plugins: [])
+    monkeypatch.setattr("agent_core.jobs.scheduler.BackgroundJobRepository", lambda _database: SimpleNamespace(enqueue=lambda *_args, **_kwargs: None))
     schedule = Schedule(
         id="schedule-1",
         user_id="user-1",
@@ -358,9 +358,9 @@ def test_schedule_worker_retries_transient_provider_errors_without_duplicate_pro
     )
     worker = ScheduleWorker(services)
     worker.runs = Runs()
-    monkeypatch.setattr("agent_core.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
-    monkeypatch.setattr("agent_core.scheduler.connected_read_tools", lambda _plugins: [])
-    monkeypatch.setattr("agent_core.scheduler.BackgroundJobRepository", lambda _database: SimpleNamespace(enqueue=lambda *_args, **_kwargs: None))
+    monkeypatch.setattr("agent_core.jobs.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
+    monkeypatch.setattr("agent_core.jobs.scheduler.connected_read_tools", lambda _plugins: [])
+    monkeypatch.setattr("agent_core.jobs.scheduler.BackgroundJobRepository", lambda _database: SimpleNamespace(enqueue=lambda *_args, **_kwargs: None))
     worker.execute(Schedule(id="schedule-1", user_id="user-1", title="Báo cáo", prompt="Tạo báo cáo", chat_id=chat.id), "run-1")
 
     assert attempts == 1
@@ -424,8 +424,8 @@ def test_schedule_worker_reports_final_transient_failure_after_retry_budget(monk
     services = SimpleNamespace(chats=Chats(), memory=SimpleNamespace(recall=lambda *_args: ""), workspace=SimpleNamespace(list_plugins=lambda: []))
     worker = ScheduleWorker(services)
     worker.runs = Runs()
-    monkeypatch.setattr("agent_core.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
-    monkeypatch.setattr("agent_core.scheduler.connected_read_tools", lambda _plugins: [])
+    monkeypatch.setattr("agent_core.jobs.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
+    monkeypatch.setattr("agent_core.jobs.scheduler.connected_read_tools", lambda _plugins: [])
 
     worker.execute(Schedule(id="schedule-1", user_id="user-1", title="Báo cáo", prompt="Tạo báo cáo", chat_id=chat.id), "run-1")
 
@@ -479,9 +479,9 @@ def _grounded_worker(monkeypatch, *, search_result: str, notify_email: bool, sen
     services.web_search.require_sources = WebSearchService.require_sources.__get__(services.web_search)
     worker = ScheduleWorker(services)
     worker.runs = Runs()
-    monkeypatch.setattr("agent_core.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
-    monkeypatch.setattr("agent_core.scheduler.connected_read_tools", lambda _plugins: [])
-    monkeypatch.setattr("agent_core.scheduler.BackgroundJobRepository", lambda _database: SimpleNamespace(enqueue=lambda *_args, **_kwargs: None))
+    monkeypatch.setattr("agent_core.jobs.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
+    monkeypatch.setattr("agent_core.jobs.scheduler.connected_read_tools", lambda _plugins: [])
+    monkeypatch.setattr("agent_core.jobs.scheduler.BackgroundJobRepository", lambda _database: SimpleNamespace(enqueue=lambda *_args, **_kwargs: None))
     schedule = Schedule(
         id="schedule-1", user_id="user-1", title="Tin AI", prompt="Tổng hợp tin AI",
         chat_id=chat.id, require_web_source=True, notify_email=notify_email,

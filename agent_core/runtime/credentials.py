@@ -9,7 +9,7 @@ from urllib.request import Request, urlopen
 from cryptography.fernet import Fernet, InvalidToken
 
 from .config import Settings
-from .storage import AuthRepository, UserProviderCredential
+from ..persistence.store import AuthRepository, UserProviderCredential
 
 SUPPORTED_PROVIDERS = {"gemini", "openai", "anthropic"}
 

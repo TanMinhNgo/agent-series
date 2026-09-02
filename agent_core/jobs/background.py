@@ -5,11 +5,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .knowledge import KnowledgeService
-from .artifacts import ArtifactService
-from .memory import MemoryService
-from .storage import BackgroundJobRepository, ChatRepository
-from .file_storage import FileStorageService
+from ..knowledge.rag import KnowledgeService
+from ..content.artifacts import ArtifactService
+from ..knowledge.memory import MemoryService
+from ..persistence.store import BackgroundJobRepository, ChatRepository
+from ..content.file_storage import FileStorageService
 
 
 class BackgroundWorker:
