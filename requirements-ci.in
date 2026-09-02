@@ -1,4 +1,6 @@
 # GitHub-hosted runners have no CUDA runtime, so CI must use the CPU wheel.
---extra-index-url https://download.pytorch.org/whl/cpu
+# Do not use this as an extra index: it mirrors unrelated PyPI packages with
+# different hashes, which breaks pip's --require-hashes verification.
+--find-links https://download.pytorch.org/whl/cpu/torch/
 -r requirements.txt
 torch==2.13.0+cpu
