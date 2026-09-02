@@ -207,9 +207,7 @@ export function AssistantMessageActions({
               Trả lời tốt
               {isHelpful ? <Check className="ml-auto size-4" /> : null}
             </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={feedback.openFeedback}
-            >
+            <DropdownMenuItem onClick={feedback.openFeedback}>
               <ThumbsDown className={hasNegativeFeedback ? 'fill-current text-primary' : undefined} />
               Trả lời tệ
               {hasNegativeFeedback ? <Check className="ml-auto size-4" /> : null}
