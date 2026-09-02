@@ -94,12 +94,18 @@ pipeline {
               exit 1
             fi
 
+            # Quét manifest/lockfile đã commit, không quét cả workspace CI. Bước test
+            # tạo .ci-venv, node_modules và reports; các file sinh ra đó vừa không là
+            # dependency nguồn, vừa có thể làm Dependency-Check 12.2.2 lỗi khi tạo XML.
             docker run --rm \
               -v "$PWD:/src" \
               -v "$PWD/$REPORTS_DIR/owasp:/report" \
               -v "$data_volume:/usr/share/dependency-check/data" \
               owasp/dependency-check:12.2.2 \
-              --scan /src --out /report --format ALL --failOnCVSS 7 --noupdate
+              --scan /src/requirements.txt \
+              --scan /src/requirements-ci.lock \
+              --scan /src/frontend/package-lock.json \
+              --out /report --format ALL --failOnCVSS 7 --noupdate
           '''
         }
       }
