@@ -13,7 +13,10 @@ from sqlalchemy import func, select
 from .storage import Database, LibraryAsset, current_user_id
 from .file_storage import FileStorageService
 
-ALLOWED_SUFFIXES = {".pdf", ".docx", ".xlsx", ".pptx", ".md", ".csv", ".json", ".txt", ".png", ".jpg", ".jpeg", ".webp", ".gif"}
+ALLOWED_SUFFIXES = {
+    ".pdf", ".docx", ".xlsx", ".pptx", ".md", ".csv", ".json", ".txt", ".py", ".ts", ".tsx",
+    ".png", ".jpg", ".jpeg", ".webp", ".gif",
+}
 MAX_FILE_BYTES = 25 * 1024 * 1024
 
 
@@ -139,6 +142,14 @@ class LibraryService:
             session.commit()
             return item
 
+    def restore_version(self, asset_id: str) -> LibraryAsset:
+        """Copy a selected historical version into a new, latest version."""
+        asset = self.ensure_remote(asset_id)
+        if asset is None:
+            raise ValueError("Không tìm thấy artifact.")
+        data = self.storage.read(asset.storage_provider, asset.stored_name, asset.storage_file_id)
+        return self.create_version(asset.id, asset.name, asset.mime_type, data)
+
     def delete(self, asset_id: str) -> bool:
         with self.database.session() as session:
             asset = session.get(LibraryAsset, asset_id)
@@ -148,11 +159,14 @@ class LibraryService:
 
     def create_export(self, name: str, format: str, content: str, project_id: str | None = None) -> LibraryAsset:
         format = format.lower().lstrip(".")
-        if format not in {"docx", "xlsx", "pptx", "md", "csv", "pdf", "json"}: raise ValueError("Định dạng export chưa hỗ trợ.")
+        if format not in {"docx", "xlsx", "pptx", "md", "csv", "pdf", "json", "txt", "py", "ts", "tsx"}: raise ValueError("Định dạng export chưa hỗ trợ.")
         filename = f"{Path(name).stem or 'tai-lieu'}.{format}"
-        if format in {"md", "csv", "json"}:
+        if format in {"md", "csv", "json", "txt", "py", "ts", "tsx"}:
             payload = content.encode("utf-8")
-            mime = {"md": "text/markdown", "csv": "text/csv", "json": "application/json"}[format]
+            mime = {
+                "md": "text/markdown", "csv": "text/csv", "json": "application/json", "txt": "text/plain",
+                "py": "text/x-python", "ts": "text/typescript", "tsx": "text/tsx",
+            }[format]
         elif format == "docx":
             from docx import Document
             doc = Document(); doc.add_paragraph(content); stream = BytesIO(); doc.save(stream); payload, mime = stream.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

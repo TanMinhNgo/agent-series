@@ -27,5 +27,11 @@ DEFAULT_SYSTEM_PROMPT = (
     "dữ liệu, hãy nói thật, tuyệt đối không bịa."
 )
 
+OLLAMA_SYSTEM_PROMPT = (
+    "Bạn là trợ lý tiếng Việt thân thiện. Trả lời trực tiếp, ngắn gọn và tự nhiên. "
+    "Không có tool: không được xuất JSON, function call hoặc tên tool. "
+    "Chỉ dùng ngữ cảnh tài liệu hoặc web khi nó liên quan; nếu không có, trả lời bằng kiến thức sẵn có."
+)
 
-__all__ = ["DEFAULT_SYSTEM_PROMPT"]
+
+__all__ = ["DEFAULT_SYSTEM_PROMPT", "OLLAMA_SYSTEM_PROMPT"]

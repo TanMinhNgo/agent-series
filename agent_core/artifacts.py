@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import dataclass
+from difflib import unified_diff
 import json
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -17,6 +19,18 @@ from .tools.base import ToolSpec
 
 PREVIEW_LIMIT = 30_000
 ARTIFACT_NOT_FOUND = "Không tìm thấy artifact."
+EDITABLE_ARTIFACT_SUFFIXES = {".md", ".txt", ".json", ".py", ".ts", ".tsx"}
+
+
+@dataclass(frozen=True)
+class ArtifactEditContext:
+    asset_id: str
+    artifact_id: str
+    name: str
+    mime_type: str
+    project_id: str | None
+    version: int
+    content: str
 
 
 def extract_artifact_text(data: bytes | Path, suffix: str) -> str:
@@ -24,7 +38,7 @@ def extract_artifact_text(data: bytes | Path, suffix: str) -> str:
     if isinstance(data, Path):
         data = data.read_bytes()
     suffix = suffix.lower()
-    if suffix in {".md", ".txt", ".csv", ".json"}:
+    if suffix in {".md", ".txt", ".csv", ".json", ".py", ".ts", ".tsx"}:
         return data.decode("utf-8", errors="replace")
     if suffix == ".pdf":
         return "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(data)).pages)
@@ -78,6 +92,76 @@ class ArtifactService:
             except ValueError:
                 return {"kind": "download"}
             return {"kind": "text", "content": content[:PREVIEW_LIMIT], "truncated": len(content) > PREVIEW_LIMIT}
+
+    def edit_context(self, asset_id: str, project_id: str | None) -> ArtifactEditContext:
+        """Read one exact, user-scoped artifact version for an AI edit request."""
+        self._ensure_remote(asset_id)
+        with self.database.session() as session:
+            asset = session.get(LibraryAsset, asset_id)
+            if asset is None:
+                raise ValueError(ARTIFACT_NOT_FOUND)
+            if asset.project_id != project_id:
+                raise ValueError("File này không thuộc Project của chat hiện tại.")
+            suffix = Path(asset.name).suffix.lower()
+            if suffix not in EDITABLE_ARTIFACT_SUFFIXES:
+                raise ValueError("Chỉ hỗ trợ sửa bằng AI cho Markdown, text, JSON, Python và TypeScript.")
+            content = extract_artifact_text(
+                self.storage.read(asset.storage_provider, asset.stored_name, asset.storage_file_id), suffix,
+            )
+            if len(content) > PREVIEW_LIMIT:
+                raise ValueError("File vượt quá 30.000 ký tự nên chưa thể sửa an toàn bằng AI.")
+            return ArtifactEditContext(
+                asset_id=asset.id,
+                artifact_id=asset.artifact_id,
+                name=asset.name,
+                mime_type=asset.mime_type,
+                project_id=asset.project_id,
+                version=asset.version,
+                content=content,
+            )
+
+    def diff(self, asset_id: str) -> dict:
+        """Return a unified diff against the immediately preceding version."""
+        self._ensure_remote(asset_id)
+        with self.database.session() as session:
+            asset = session.get(LibraryAsset, asset_id)
+            if asset is None:
+                raise ValueError(ARTIFACT_NOT_FOUND)
+            previous = session.scalar(
+                select(LibraryAsset)
+                .where(LibraryAsset.artifact_id == asset.artifact_id, LibraryAsset.version < asset.version)
+                .order_by(LibraryAsset.version.desc())
+                .limit(1)
+            )
+            if previous is None:
+                raise ValueError("File này chưa có phiên bản trước để so sánh.")
+            suffix = Path(asset.name).suffix.lower()
+            if suffix not in EDITABLE_ARTIFACT_SUFFIXES:
+                raise ValueError("Chỉ hỗ trợ xem thay đổi cho file text hoặc code.")
+            current_content = extract_artifact_text(
+                self.storage.read(asset.storage_provider, asset.stored_name, asset.storage_file_id), suffix,
+            )
+            previous_content = extract_artifact_text(
+                self.storage.read(previous.storage_provider, previous.stored_name, previous.storage_file_id), suffix,
+            )
+            if max(len(current_content), len(previous_content)) > PREVIEW_LIMIT:
+                raise ValueError("File vượt quá 30.000 ký tự nên chưa thể so sánh an toàn.")
+            diff = "\n".join(
+                unified_diff(
+                    previous_content.splitlines(),
+                    current_content.splitlines(),
+                    fromfile=f"{previous.name} (v{previous.version})",
+                    tofile=f"{asset.name} (v{asset.version})",
+                    lineterm="",
+                )
+            )
+            return {
+                "baseAssetId": previous.id,
+                "baseVersion": previous.version,
+                "assetId": asset.id,
+                "version": asset.version,
+                "diff": diff,
+            }
 
     def index(self, asset_id: str) -> LibraryAsset:
         self._ensure_remote(asset_id)

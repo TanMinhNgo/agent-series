@@ -236,7 +236,14 @@ class KnowledgeService:
             session.commit()
             return True
 
-    def search(self, query: str, top_k: int = 4, project_id: str | None = None, collection_id: str | None = None) -> str:
+    def search(
+        self,
+        query: str,
+        top_k: int = 4,
+        project_id: str | None = None,
+        collection_id: str | None = None,
+        max_distance: float | None = None,
+    ) -> str:
         if not query.strip():
             return "[Lỗi] Câu hỏi truy vấn đang trống."
         top_k = max(1, min(int(top_k), 8))
@@ -250,6 +257,8 @@ class KnowledgeService:
             )
             if collection_id:
                 statement = statement.join(KnowledgeCollectionDocument).where(KnowledgeCollectionDocument.collection_id == collection_id)
+            if max_distance is not None:
+                statement = statement.where(distance <= max_distance)
             rows = session.execute(statement.order_by(distance).limit(top_k)).all()
         if not rows:
             return NO_DOCUMENTS_RESULT

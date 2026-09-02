@@ -25,6 +25,7 @@ export type PromptInputProps = {
   placeholder?: string;
   className?: string;
   maxAttachments?: number;
+  onStop?: () => void;
 };
 
 export function PromptInput({
@@ -35,6 +36,7 @@ export function PromptInput({
   placeholder = 'Hỏi bất kỳ điều gì...',
   className,
   maxAttachments = 6,
+  onStop,
 }: PromptInputProps) {
   const [attachments, setAttachments] = React.useState<Attachment[]>([]);
   const [recording, setRecording] = React.useState(false);
@@ -189,11 +191,12 @@ export function PromptInput({
         </button>
         <button
           type="button"
-          disabled={busy || (!value.trim() && !attachments.length)}
-          onClick={submit}
+          disabled={busy ? !onStop : !value.trim() && !attachments.length}
+          onClick={busy ? onStop : submit}
+          title={busy ? 'Dừng tạo phản hồi' : 'Gửi tin nhắn'}
           className="rounded-lg bg-primary p-2 text-primary-foreground shadow-sm shadow-primary/20 disabled:opacity-50"
         >
-          <Send size={18} />
+          {busy ? <Square size={16} /> : <Send size={18} />}
         </button>
       </div>
     </div>

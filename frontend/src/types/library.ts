@@ -54,3 +54,11 @@ export type LibraryAssetPreview = {
   content?: string;
   truncated?: boolean;
 };
+
+export type LibraryAssetDiff = {
+  baseAssetId: string;
+  baseVersion: number;
+  assetId: string;
+  version: number;
+  diff: string;
+};

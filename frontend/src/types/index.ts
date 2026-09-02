@@ -4,6 +4,7 @@ export type { Document } from './document';
 export type {
   KnowledgeCollection,
   LibraryAsset,
+  LibraryAssetDiff,
   LibraryAssetPreview,
   LibraryAssetUpdate,
   LibraryMemory,

@@ -3,6 +3,7 @@ import time
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
+from threading import Event
 
 from fastapi.testclient import TestClient
 
@@ -13,6 +14,7 @@ from types import SimpleNamespace
 
 from api.main import (
     BranchChatRequest,
+    ChatRequest,
     FeedbackRequest,
     ProjectRequest,
     ScheduleRequest,
@@ -28,12 +30,14 @@ from api.main import (
     make_agent,
     message_json,
     model_error_message,
+    ollama_recent_history,
+    small_talk_response,
     prepare_chat_regeneration,
     persisted_history,
     recent_chat_history,
 )
 from agent_core.background import BackgroundWorker
-from agent_core.artifacts import extract_artifact_text
+from agent_core.artifacts import ArtifactEditContext, ArtifactService, extract_artifact_text
 from agent_core.plugin_catalog import CATALOG, find_catalog_plugin
 from agent_core.plugin_execution import connected_read_tools
 from agent_core.memory import MemoryService
@@ -71,6 +75,131 @@ def test_created_artifact_ids_ignores_unrelated_or_invalid_tool_results() -> Non
     ]
 
     assert created_artifact_ids(steps) == ["asset-1", "asset-2"]
+
+
+def test_created_artifact_ids_keeps_ai_created_versions() -> None:
+    steps = [
+        SimpleNamespace(tool="create_artifact_version", result='{"id": "asset-v2"}'),
+        SimpleNamespace(tool="create_file", result='{"id": "asset-v1"}'),
+    ]
+
+    assert created_artifact_ids(steps) == ["asset-v2", "asset-v1"]
+
+
+def test_chat_request_accepts_an_optional_edit_asset_id() -> None:
+    request = ChatRequest.model_validate({"content": "Đổi phần mở đầu", "editAssetId": "asset-v1"})
+
+    assert request.edit_asset_id == "asset-v1"
+
+
+def test_chat_request_accepts_a_client_run_id() -> None:
+    request = ChatRequest.model_validate({"content": "Xin chào", "runId": "run-1"})
+
+    assert request.run_id == "run-1"
+
+
+def test_chat_run_registry_cancels_only_the_owner() -> None:
+    registry = main_module.ChatRunRegistry()
+    event = registry.start("chat-1", "run-1", "user-1")
+
+    assert not registry.cancel("chat-1", "run-1", "user-2")
+    assert registry.cancel("chat-1", "run-1", "user-1")
+    assert event.is_set()
+
+
+def test_ollama_web_search_ignores_greetings_and_detects_fresh_questions() -> None:
+    assert not main_module.should_search_web("Hôm nay bạn khỏe không?")
+    assert main_module.should_search_web("Tin tức AI mới nhất hôm nay là gì?")
+
+
+def test_ollama_small_talk_uses_a_natural_fast_response() -> None:
+    assert small_talk_response("cảm ơn nhiều nha") == "Không có gì nha, mình rất vui được giúp bạn."
+    assert small_talk_response("Cảm ơn, bạn giải thích thêm RAG nhé") is None
+    assert small_talk_response("Chào bạn!") == "Chào bạn! Mình ở đây, bạn cần mình hỗ trợ gì?"
+    assert small_talk_response("Dạo này ổn không?") == "Mình vẫn ổn và luôn sẵn sàng hỗ trợ bạn. Còn bạn thì sao?"
+
+
+def test_ollama_history_is_limited_without_mutating_persisted_messages() -> None:
+    history = [
+        {"role": "user", "content": f"câu hỏi {index} " + ("x" * 2_000)}
+        for index in range(6)
+    ]
+
+    prompt_history = ollama_recent_history(history)
+
+    assert len(prompt_history) == 3
+    assert sum(len(item["content"]) for item in prompt_history) <= 6_000
+    assert len(history[-1]["content"]) > 2_000
+
+
+def test_ollama_tool_echo_is_rejected_before_rendering() -> None:
+    assert main_module.is_ollama_tool_echo('{"type":"function","function":{"name":"calculator"}}')
+    assert not main_module.is_ollama_tool_echo("Đây là câu trả lời bình thường.")
+
+
+def test_stream_chat_answers_ollama_small_talk_without_model_or_memory(monkeypatch) -> None:
+    chat = Chat(id="chat-1", user_id="user-1", provider="ollama", model="llama3.2:3b")
+    saved: list[dict] = []
+
+    class Chats:
+        def get(self, _chat_id): return chat
+        def history(self, _chat_id): return []
+        def replace_history(self, _chat_id, history):
+            for index, item in enumerate(history):
+                item["message_id"] = f"message-{index}"
+            saved.extend(history)
+
+    service = SimpleNamespace(chats=Chats())
+    monkeypatch.setattr(main_module, "services", lambda: service)
+
+    events = list(main_module.stream_chat("chat-1", "cảm ơn nhiều nha", []))
+
+    assert saved[-1]["content"] == "Không có gì nha, mình rất vui được giúp bạn."
+    assert any("event: message" in event for event in events)
+
+
+def test_stream_chat_answers_cloud_small_talk_without_provider_call(monkeypatch) -> None:
+    chat = Chat(id="chat-1", user_id="user-1", provider="openai", model="gpt-5.6-terra")
+    saved: list[dict] = []
+
+    class Chats:
+        def get(self, _chat_id): return chat
+        def history(self, _chat_id): return []
+        def replace_history(self, _chat_id, history):
+            for index, item in enumerate(history):
+                item["message_id"] = f"message-{index}"
+            saved.extend(history)
+
+    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(chats=Chats()))
+    monkeypatch.setattr(main_module, "build_client", lambda _settings: (_ for _ in ()).throw(AssertionError("LLM must not run")))
+
+    events = list(main_module.stream_chat("chat-1", "Dạo này ổn không?", []))
+
+    assert saved[-1]["content"] == "Mình vẫn ổn và luôn sẵn sàng hỗ trợ bạn. Còn bạn thì sao?"
+    assert any("event: done" in event for event in events)
+
+
+def test_stream_chat_does_not_persist_a_pre_cancelled_run(monkeypatch) -> None:
+    chat = Chat(id="chat-1", user_id="user-1", provider="openai", model="gpt-5.6-terra")
+    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(chats=SimpleNamespace(get=lambda _id: chat)))
+    cancel_event = Event()
+    cancel_event.set()
+
+    events = list(main_module.stream_chat("chat-1", "Xin chào", [], cancel_event=cancel_event))
+
+    assert any("event: cancelled" in event for event in events)
+
+
+def test_restore_library_asset_version_copies_the_selected_version(monkeypatch) -> None:
+    restored = SimpleNamespace(id="asset-v3", artifact_id="artifact-1", name="ke-hoach.md", version=3)
+    observed: list[str] = []
+    service = SimpleNamespace(library=SimpleNamespace(restore_version=lambda asset_id: observed.append(asset_id) or restored))
+    monkeypatch.setattr(main_module, "services", lambda: service)
+    monkeypatch.setattr(main_module, "enqueue_artifact_index", lambda asset: observed.append(asset.id))
+    monkeypatch.setattr(main_module, "library_asset_json", lambda asset: {"id": asset.id, "version": asset.version})
+
+    assert main_module.restore_library_asset_version("asset-v1") == {"id": "asset-v3", "version": 3}
+    assert observed == ["asset-v1", "asset-v3"]
 
 
 def test_schedule_proposal_requires_an_explicit_timezone() -> None:
@@ -672,9 +801,9 @@ def test_stream_chat_restores_the_chat_owner_in_its_worker_thread(monkeypatch) -
 
     class AgentStub:
         history: list[dict] = []
-        def run(self, _content, _attachments, on_step):
+        def run(self, _content, _attachments, on_step, **_kwargs):
             self.history = [
-                {"role": "user", "content": "hello"},
+                {"role": "user", "content": "RAG là gì?"},
                 {"role": "assistant", "content": "world"},
             ]
             return SimpleNamespace(text="world", content_blocks=[])
@@ -692,7 +821,7 @@ def test_stream_chat_restores_the_chat_owner_in_its_worker_thread(monkeypatch) -
     monkeypatch.setattr(main_module, "make_agent", lambda *_args, **_kwargs: AgentStub())
     monkeypatch.setattr(main_module, "BackgroundJobRepository", Jobs)
 
-    events = list(main_module.stream_chat("chat-1", "hello", []))
+    events = list(main_module.stream_chat("chat-1", "RAG là gì?", []))
 
     assert observed == ["user-1"]
     message_event = next(event for event in events if 'event: message' in event)
@@ -711,7 +840,7 @@ def test_stream_chat_retrieves_the_global_library_before_creating_the_agent(monk
 
     class AgentStub:
         history: list[dict] = []
-        def run(self, _content, _attachments, on_step):
+        def run(self, _content, _attachments, on_step, **_kwargs):
             self.history = [{"role": "user", "content": "RAG là gì?"}, {"role": "assistant", "content": "RAG"}]
             return SimpleNamespace(text="RAG", content_blocks=[])
 
@@ -834,6 +963,82 @@ def test_make_agent_does_not_mutate_the_history_being_persisted(monkeypatch) -> 
     agent.history.append({"role": "assistant", "content": "Câu trả lời mới"})
 
     assert history == [{"role": "user", "content": "Câu hỏi cũ"}]
+
+
+def test_make_agent_uses_a_version_only_tool_for_an_artifact_edit(monkeypatch) -> None:
+    captured_tools = []
+    created = []
+    chat = Chat(id="chat-1", provider="openai", model="gpt-5.6-terra", project_id=None)
+    edit = ArtifactEditContext(
+        asset_id="asset-v1",
+        artifact_id="artifact-1",
+        name="ke-hoach.md",
+        mime_type="text/markdown",
+        project_id=None,
+        version=1,
+        content="# Bản cũ",
+    )
+    services = SimpleNamespace(
+        workspace=SimpleNamespace(get=lambda *_args, **_kwargs: None),
+        media=SimpleNamespace(hydrate_history=lambda value: value),
+        knowledge=SimpleNamespace(),
+        library=SimpleNamespace(
+            create_version=lambda *args: created.append(args)
+            or SimpleNamespace(id="asset-v2", artifact_id="artifact-1", name="ke-hoach.md", version=2),
+        ),
+    )
+    monkeypatch.setattr(main_module, "selected_settings", lambda *_args: SimpleNamespace(max_steps=5))
+    monkeypatch.setattr(main_module, "build_client", lambda _settings: object())
+    monkeypatch.setattr(main_module, "build_knowledge_tool", lambda *_args: None)
+    monkeypatch.setattr(main_module, "build_default_registry", lambda _knowledge, extra_tools: captured_tools.extend(extra_tools) or object())
+    monkeypatch.setattr(main_module, "enqueue_artifact_index", lambda *_args: None)
+    monkeypatch.setattr(main_module, "library_asset_json", lambda asset: {"id": asset.id, "artifactId": asset.artifact_id})
+
+    make_agent(services, chat, history=[], artifact_edit=edit)
+
+    assert {tool.name for tool in captured_tools} == {"create_artifact_version"}
+    result = json.loads(captured_tools[0].func("# Bản mới"))
+    assert result == {"id": "asset-v2", "artifactId": "artifact-1"}
+    assert created == [("asset-v1", "ke-hoach.md", "text/markdown", "# Bản mới".encode())]
+    with pytest.raises(ValueError, match="một version"):
+        captured_tools[0].func("# Không được tạo thêm")
+
+
+def test_artifact_service_returns_a_unified_diff_for_the_previous_version(tmp_path: Path) -> None:
+    previous = SimpleNamespace(
+        id="asset-v1", artifact_id="artifact-1", name="ke-hoach.md", version=1,
+        storage_provider="memory", stored_name="v1", storage_file_id=None,
+    )
+    current = SimpleNamespace(
+        id="asset-v2", artifact_id="artifact-1", name="ke-hoach.md", version=2,
+        storage_provider="memory", stored_name="v2", storage_file_id=None,
+    )
+
+    class Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def get(self, _model, asset_id):
+            return {"asset-v1": previous, "asset-v2": current}.get(asset_id)
+
+        def scalar(self, _statement):
+            return previous
+
+    storage = SimpleNamespace(read=lambda _provider, name, _file_id: {"v1": b"# Cu\nNoi dung cu\n", "v2": b"# Cu\nNoi dung moi\n"}[name])
+    service = ArtifactService(SimpleNamespace(session=lambda: Session()), tmp_path, "unused", storage)
+
+    result = service.diff("asset-v2")
+
+    assert result == {
+        "baseAssetId": "asset-v1",
+        "baseVersion": 1,
+        "assetId": "asset-v2",
+        "version": 2,
+        "diff": "--- ke-hoach.md (v1)\n+++ ke-hoach.md (v2)\n@@ -1,2 +1,2 @@\n # Cu\n-Noi dung cu\n+Noi dung moi",
+    }
 
 
 def test_global_knowledge_tool_searches_only_global_documents() -> None:
@@ -985,6 +1190,7 @@ def test_artifact_text_preview_extracts_utf8_source(tmp_path: Path) -> None:
     path = tmp_path / "brief.md"
     path.write_text("# Kế hoạch\nArtifact có thể được truy hồi.", encoding="utf-8")
     assert "truy hồi" in extract_artifact_text(path, ".md")
+    assert extract_artifact_text(b"const answer: string = 'ok';", ".ts").startswith("const answer")
 
 
 def test_background_worker_indexes_an_artifact_job() -> None:

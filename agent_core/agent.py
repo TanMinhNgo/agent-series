@@ -25,6 +25,10 @@ from .tools.registry import ToolRegistry
 SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT
 
 
+class AgentCancelled(Exception):
+    """Raised when the user stops the active chat run before it is persisted."""
+
+
 @dataclass
 class Step:
     """Một bước agent đã thực hiện: gọi tool gì, với tham số gì, nhận kết quả gì.
@@ -66,9 +70,11 @@ class Agent:
         """Xoá lịch sử để bắt đầu cuộc trò chuyện mới."""
         self.history = []
 
-    def _run_tool_calls(self, calls: list[dict], steps: list[Step], on_step: Callable[[dict], None] | None) -> None:
+    def _run_tool_calls(self, calls: list[dict], steps: list[Step], on_step: Callable[[dict], None] | None, cancel_event=None) -> None:
         """Run requested tools and append their observations to the conversation."""
         for call in calls:
+            if cancel_event is not None and cancel_event.is_set():
+                raise AgentCancelled()
             if on_step:
                 on_step({"type": "tool_call", "name": call["name"], "args": call["args"]})
             result = self.registry.run(call["name"], call["args"])
@@ -83,6 +89,7 @@ class Agent:
         attachments: list[dict] | None = None,
         on_step: Optional[Callable[[dict], None]] = None,
         append_user_message: bool = True,
+        cancel_event=None,
     ) -> AgentResult:
         """Xử lý MỘT câu hỏi của người dùng, trả về câu trả lời cuối + các bước đã đi.
 
@@ -102,10 +109,14 @@ class Agent:
 
         # Vòng lặp có GIỚI HẠN số bước (phanh an toàn chống lặp vô hạn).
         for _ in range(self.max_steps):
+            if cancel_event is not None and cancel_event.is_set():
+                raise AgentCancelled()
             # (A) Hỏi model: dựa trên lịch sử + danh sách tool, bạn muốn làm gì?
             reply = self.client.complete(
                 self.system_prompt, self.history, self.registry.specs()
             )
+            if cancel_event is not None and cancel_event.is_set():
+                raise AgentCancelled()
 
             # Ghi lại lượt của model vào lịch sử (kèm các tool nó muốn gọi, nếu có).
             self.history.append({
@@ -121,7 +132,7 @@ class Agent:
                 return AgentResult(text=response.markdown, steps=steps, content_blocks=response.blocks)
 
             # (C) Model muốn gọi tool -> chạy TẤT CẢ tool nó yêu cầu, rồi đưa kết quả lại.
-            self._run_tool_calls(reply.tool_calls, steps, on_step)
+            self._run_tool_calls(reply.tool_calls, steps, on_step, cancel_event)
             # Quay lại đầu vòng lặp: model xem kết quả tool rồi quyết định bước tiếp theo.
 
         # Nếu chạm giới hạn số bước mà vẫn chưa xong -> dừng an toàn và báo cho người dùng.

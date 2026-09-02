@@ -368,11 +368,17 @@ class OllamaClient:
         return calls
 
     def complete(self, system: str, history: list[dict], tools: list[ToolSpec]) -> NormalizedReply:
+        options = {"temperature": self._temperature, "num_predict": self._max_tokens}
+        # Llama 3.2 3B is the user's local model. Conservative generation keeps
+        # short Vietnamese chat replies coherent without changing any global
+        # provider setting or asking the user to install a larger model.
+        if self._model.casefold().startswith("llama3.2:3b"):
+            options.update({"temperature": min(self._temperature, 0.1), "num_predict": min(self._max_tokens, 512)})
         payload = {
             "model": self._model,
             "messages": self._to_messages(system, history),
             "stream": False,
-            "options": {"temperature": self._temperature, "num_predict": self._max_tokens},
+            "options": options,
         }
         if tools:
             payload["tools"] = self._to_tools(tools)

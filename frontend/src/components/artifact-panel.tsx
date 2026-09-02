@@ -1,10 +1,20 @@
 import { type PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { FileText, LoaderCircle, Maximize2, Minimize2, PanelRightOpen, X } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
+import {
+  FilePenLine,
+  FileText,
+  GitCompareArrows,
+  LoaderCircle,
+  Maximize2,
+  Minimize2,
+  PanelRightOpen,
+  RotateCcw,
+  X,
+} from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { Button } from '@/components/ui/button';
 import { request } from '@/src/hooks/client';
-import type { LibraryAsset, LibraryAssetPreview, Message } from '@/src/types';
+import type { LibraryAsset, LibraryAssetDiff, LibraryAssetPreview, Message } from '@/src/types';
 
 type ArtifactPanelProps = {
   open: boolean;
@@ -12,12 +22,19 @@ type ArtifactPanelProps = {
   selectedArtifactId: string | null;
   onSelectedArtifactChange: (assetId: string | null) => void;
   messages: Message[];
+  canEditArtifacts: boolean;
+  onEditArtifact: (asset: LibraryAsset) => void;
 };
 
 const ARTIFACT_PANEL_WIDTH_KEY = 'agent-series.artifact-panel.width';
 const DEFAULT_PANEL_WIDTH = 390;
 const MIN_PANEL_WIDTH = 320;
 const MAX_PANEL_WIDTH = 720;
+const EDITABLE_ARTIFACT_EXTENSIONS = ['.md', '.txt', '.json', '.py', '.ts', '.tsx'];
+
+function isEditableArtifact(asset: LibraryAsset) {
+  return EDITABLE_ARTIFACT_EXTENSIONS.some((extension) => asset.name.toLowerCase().endsWith(extension));
+}
 
 function clampPanelWidth(width: number) {
   if (typeof window === 'undefined') {
@@ -49,7 +66,10 @@ export function ArtifactPanel({
   selectedArtifactId,
   onSelectedArtifactChange,
   messages,
+  canEditArtifacts,
+  onEditArtifact,
 }: ArtifactPanelProps) {
+  const queryClient = useQueryClient();
   const [panelWidth, setPanelWidth] = useState(() => {
     if (typeof window === 'undefined') return DEFAULT_PANEL_WIDTH;
 
@@ -60,6 +80,7 @@ export function ArtifactPanel({
   });
   const [isResizing, setIsResizing] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showDiff, setShowDiff] = useState(false);
   const resizeStart = useRef<{ x: number; width: number } | null>(null);
   const groups = useMemo(
     () =>
@@ -93,6 +114,20 @@ export function ArtifactPanel({
     queryKey: ['artifact-preview', selected?.id],
     queryFn: () => request<LibraryAssetPreview>({ url: `/library/assets/${selected?.id}/preview` }),
     enabled: Boolean(selected),
+  });
+  const diff = useQuery({
+    queryKey: ['artifact-diff', selected?.id],
+    queryFn: () => request<LibraryAssetDiff>({ url: `/library/assets/${selected?.id}/diff` }),
+    enabled: Boolean(selected && selected.version > 1 && showDiff),
+  });
+  const restoreVersion = useMutation({
+    mutationFn: (assetId: string) =>
+      request<LibraryAsset>({ url: `/library/assets/${assetId}/restore`, method: 'POST' }),
+    onSuccess: (asset) => {
+      void queryClient.invalidateQueries({ queryKey: ['artifact-versions'] });
+      void queryClient.invalidateQueries({ queryKey: ['generated-artifacts'] });
+      selectArtifact(asset.id);
+    },
   });
 
   useEffect(() => {
@@ -139,8 +174,13 @@ export function ArtifactPanel({
   const updatePanelWidth = (width: number) => setPanelWidth(clampPanelWidth(width));
   const selectArtifact = (assetId: string | null) => {
     setIsFullscreen(false);
+    setShowDiff(false);
     onSelectedArtifactChange(assetId);
   };
+  const latestVersion = Math.max(
+    selected?.version || 1,
+    ...(versions.data || []).map((asset) => asset.version),
+  );
 
   const renderPreview = (fullscreen = false) => (
     <div className={`min-h-0 ${fullscreen ? 'flex flex-1 flex-col overflow-hidden p-4 sm:p-6' : ''}`}>
@@ -276,15 +316,28 @@ export function ArtifactPanel({
                     Tạo lúc {formatDate(selected.createdAt)} · version {selected.version}
                   </p>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => setIsFullscreen(true)}
-                  aria-label="Mở rộng xem nội dung"
-                  title="Mở rộng xem nội dung"
-                >
-                  <Maximize2 size={16} />
-                </Button>
+                <div className="flex shrink-0 items-center gap-1">
+                  {isEditableArtifact(selected) ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={!canEditArtifacts}
+                      onClick={() => onEditArtifact(selected)}
+                      title={canEditArtifacts ? 'Sửa file này bằng AI' : 'Ollama local chưa hỗ trợ sửa file'}
+                    >
+                      <FilePenLine size={15} /> Sửa file này
+                    </Button>
+                  ) : null}
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => setIsFullscreen(true)}
+                    aria-label="Mở rộng xem nội dung"
+                    title="Mở rộng xem nội dung"
+                  >
+                    <Maximize2 size={16} />
+                  </Button>
+                </div>
               </div>
               {versions.data && versions.data.length > 1 ? (
                 <div className="mb-3 flex flex-wrap gap-2" aria-label="Lịch sử phiên bản">
@@ -300,7 +353,49 @@ export function ArtifactPanel({
                   ))}
                 </div>
               ) : null}
-              {renderPreview()}
+              {selected.version < latestVersion ? (
+                <Button
+                  className="mb-3"
+                  size="sm"
+                  variant="outline"
+                  disabled={restoreVersion.isPending}
+                  onClick={() => restoreVersion.mutate(selected.id)}
+                >
+                  <RotateCcw size={15} />
+                  {restoreVersion.isPending
+                    ? 'Đang khôi phục...'
+                    : `Khôi phục v${selected.version} thành version mới`}
+                </Button>
+              ) : null}
+              {restoreVersion.error ? (
+                <p className="mb-3 text-sm text-destructive">Không thể khôi phục version này.</p>
+              ) : null}
+              {isEditableArtifact(selected) && selected.version > 1 ? (
+                <Button
+                  className="mb-3"
+                  size="sm"
+                  variant={showDiff ? 'secondary' : 'outline'}
+                  onClick={() => setShowDiff((value) => !value)}
+                >
+                  <GitCompareArrows size={15} /> {showDiff ? 'Xem nội dung' : 'Xem thay đổi'}
+                </Button>
+              ) : null}
+              {showDiff ? (
+                <div className="max-h-[52dvh] overflow-auto rounded-lg border bg-muted/20 p-3">
+                  {diff.isLoading ? (
+                    <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <LoaderCircle className="animate-spin" size={16} /> Đang tạo diff...
+                    </p>
+                  ) : diff.data?.diff ? (
+                    <pre className="whitespace-pre-wrap text-xs leading-5">{diff.data.diff}</pre>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">Không có thay đổi giữa hai version.</p>
+                  )}
+                  {diff.error ? <p className="mt-2 text-sm text-destructive">Không thể tải diff.</p> : null}
+                </div>
+              ) : (
+                renderPreview()
+              )}
               <a
                 className="mt-3 inline-block text-sm text-primary hover:underline"
                 href={selected.url}

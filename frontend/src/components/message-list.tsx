@@ -33,6 +33,7 @@ type Props = {
   chatId?: string;
   messages: Message[];
   status: string | null;
+  isResponding: boolean;
   error: string | null;
   userScrollRequest: number;
   isRunwayRequested: boolean;
@@ -49,6 +50,7 @@ export function MessageList({
   chatId,
   messages,
   status,
+  isResponding,
   error,
   userScrollRequest,
   isRunwayRequested,
@@ -373,7 +375,7 @@ export function MessageList({
           </Fragment>
         );
       })}
-      {status && (
+      {(status || isResponding) && (
         <article ref={pendingAssistantRef} className="flex min-h-0 flex-1 gap-3 leading-7">
           <span className="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground shadow-sm shadow-primary/20">
             <Sparkles size={15} />
@@ -389,7 +391,9 @@ export function MessageList({
                 />
               ))}
             </div>
-            {status !== 'Agent đang suy nghĩ...' && <p className="mt-1 text-xs opacity-75">{status}</p>}
+            {status && status !== 'Agent đang suy nghĩ...' && (
+              <p className="mt-1 text-xs opacity-75">{status}</p>
+            )}
           </div>
         </article>
       )}

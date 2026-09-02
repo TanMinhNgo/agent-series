@@ -56,6 +56,21 @@ def test_ollama_client_normalizes_tool_calls(monkeypatch):
     assert reply.tool_calls == [{"id": "ollama_call_0", "name": "search_knowledge_base", "args": {"query": "RAG là gì?"}}]
 
 
+def test_llama_3b_uses_conservative_local_generation_options(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["payload"] = json.loads(request.data.decode())
+        return FakeResponse({"message": {"content": "Xin chào"}})
+
+    monkeypatch.setattr("agent_core.providers.urlopen", fake_urlopen)
+    client = OllamaClient("http://127.0.0.1:11434", "llama3.2:3b", 0.7, 2048)
+
+    client.complete("system", [{"role": "user", "content": "hello"}], [])
+
+    assert captured["payload"]["options"] == {"temperature": 0.1, "num_predict": 512}
+
+
 def test_ollama_history_is_text_only_and_preserves_tool_observation():
     client = OllamaClient("http://127.0.0.1:11434", "qwen3:8b", 0.2, 99)
 
@@ -73,7 +88,7 @@ def test_ollama_history_is_text_only_and_preserves_tool_observation():
     assert messages[3] == {"role": "tool", "content": "result"}
 
 
-def test_ollama_agent_only_receives_the_local_rag_tool(monkeypatch):
+def test_ollama_agent_receives_no_function_tools(monkeypatch):
     selected = SimpleNamespace(
         provider="ollama",
         ollama_base_url="http://127.0.0.1:11434",
@@ -104,4 +119,5 @@ def test_ollama_agent_only_receives_the_local_rag_tool(monkeypatch):
 
     agent = main_module.make_agent(fake_services, chat, plugin_tools=[ToolSpec(name="plugin_read", description="plugin", parameters={}, func=lambda: "")], history=[])
 
-    assert [tool.name for tool in agent.registry.specs()] == ["search_knowledge_base"]
+    assert agent.registry.specs() == []
+    assert "Không có tool" in agent.system_prompt

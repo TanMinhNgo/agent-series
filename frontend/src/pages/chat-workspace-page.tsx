@@ -23,7 +23,7 @@ import { useWorkspace } from '@/src/hooks/use-workspace';
 import { useAuth } from '@/src/hooks/use-auth';
 import { useChatWorkspaceData } from '@/src/hooks/use-chat-workspace-data';
 import { request } from '@/src/hooks/client';
-import type { Chat, Message, Theme } from '@/src/types';
+import type { Chat, LibraryAsset, Message, Theme } from '@/src/types';
 import { SettingsApiKeysPage } from '@/src/pages/settings-api-keys-page';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -125,6 +125,7 @@ export function ChatWorkspace({
   const [prompt, setPrompt] = useState('');
   const [draftSelection, setDraftSelection] = useState(savedNewChatSelection);
   const [status, setStatus] = useState<string | null>(null);
+  const [isResponding, setIsResponding] = useState(false);
   const [uiError, setUiError] = useState<string | null>(null);
   const [userScrollRequest, setUserScrollRequest] = useState(0);
   const [runwayChatId, setRunwayChatId] = useState<string | null>(null);
@@ -133,6 +134,7 @@ export function ChatWorkspace({
   const [shareChat, setShareChat] = useState<Chat | null>(null);
   const [templateDraft, setTemplateDraft] = useState<TemplateDraft | null>(null);
   const [artifactPanel, setArtifactPanel] = useState(savedArtifactPanelState);
+  const [editingArtifact, setEditingArtifact] = useState<LibraryAsset | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const invitationHandled = useRef(false);
   // React state updates asynchronously, so `streamChat.isPending` alone cannot
@@ -232,12 +234,17 @@ export function ChatWorkspace({
   const setArtifactPanelOpen = (open: boolean) => setArtifactPanel((panel) => ({ ...panel, open }));
   const selectArtifact = (selectedArtifactId: string | null) =>
     setArtifactPanel((panel) => ({ ...panel, selectedArtifactId }));
+  const startArtifactEdit = (asset: LibraryAsset) => {
+    setEditingArtifact(asset);
+    setPrompt('');
+    setUiError(null);
+  };
   const handleStreamEvent = (name: string, data: Record<string, unknown>) => {
     if (name === 'status') setStatus(String(data.message));
     if (name === 'tool_call') setStatus(`Đang dùng ${String(data.name)}...`);
     if (name === 'tool_result') {
       setStatus(`Đã nhận kết quả từ ${String(data.name)}.`);
-      if (data.name === 'create_file') {
+      if (data.name === 'create_file' || data.name === 'create_artifact_version') {
         try {
           const result = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
           if (
@@ -376,6 +383,7 @@ export function ChatWorkspace({
   const regenerateMessage = async (message: Message) => {
     if (!activeChat || !message.messageId || streamChat.isPending) return;
     setUiError(null);
+    setIsResponding(true);
     setStatus('Agent đang suy nghĩ...');
     try {
       const { content } = await request<{ content: string }>({
@@ -386,6 +394,7 @@ export function ChatWorkspace({
       await streamChat.mutateAsync({
         chatId: activeChat.id,
         content,
+        runId: crypto.randomUUID(),
         skipOptimisticUser: true,
         replaceAssistantMessageId: message.messageId,
         onEvent: handleStreamEvent,
@@ -393,6 +402,16 @@ export function ChatWorkspace({
     } catch (reason) {
       setStatus(null);
       setUiError(reason instanceof Error ? reason.message : 'Không thể tạo lại phản hồi.');
+    } finally {
+      setIsResponding(false);
+    }
+  };
+  const stopResponse = async () => {
+    const cancelled = await streamChat.cancel();
+    if (cancelled) {
+      setStatus(null);
+      setIsResponding(false);
+      setRunwayChatId(null);
     }
   };
   const send = async (contentValue: string, files: File[]) => {
@@ -405,8 +424,11 @@ export function ChatWorkspace({
     )
       return;
     sendLock.current = true;
+    setIsResponding(true);
     const content = contentValue.trim() || 'Hãy phân tích các tệp đính kèm này.';
+    const artifactEdit = editingArtifact;
     setPrompt('');
+    setEditingArtifact(null);
     // Show the thinking state immediately. Waiting for the first SSE event
     // leaves a noticeable blank period while uploads, retrieval, or the API
     // connection is still being established.
@@ -431,7 +453,9 @@ export function ChatWorkspace({
       await streamChat.mutateAsync({
         chatId: chat.id,
         content,
+        runId: crypto.randomUUID(),
         attachments: uploadedImages,
+        editAssetId: artifactEdit?.id,
         onEvent: handleStreamEvent,
         onUserMessageQueued: () => {
           setRunwayChatId(chat.id);
@@ -440,9 +464,11 @@ export function ChatWorkspace({
       });
     } catch (reason) {
       setStatus(null);
+      if (artifactEdit) setEditingArtifact(artifactEdit);
       setUiError(reason instanceof Error ? reason.message : 'Gửi tin nhắn thất bại.');
     } finally {
       sendLock.current = false;
+      setIsResponding(false);
     }
   };
 
@@ -631,6 +657,7 @@ export function ChatWorkspace({
                       chatId={activeChat?.id}
                       messages={messages.data || []}
                       status={status}
+                      isResponding={isResponding}
                       error={error}
                       userScrollRequest={userScrollRequest}
                       isRunwayRequested={runwayChatId === activeChat?.id}
@@ -658,6 +685,7 @@ export function ChatWorkspace({
                     busy={
                       chatActions.update.isPending ||
                       streamChat.isPending ||
+                      isResponding ||
                       uploadDocuments.isPending ||
                       uploadMedia.isPending
                     }
@@ -670,6 +698,9 @@ export function ChatWorkspace({
                     }
                     onEditTemplate={(template) => openTemplateEditor(template)}
                     onDeleteTemplate={(id) => deleteTemplate.mutate(id)}
+                    editingArtifact={editingArtifact}
+                    onCancelArtifactEdit={() => setEditingArtifact(null)}
+                    onStop={() => void stopResponse()}
                   />
                 </div>
               </div>
@@ -679,6 +710,8 @@ export function ChatWorkspace({
                 selectedArtifactId={artifactPanel.selectedArtifactId}
                 onSelectedArtifactChange={selectArtifact}
                 messages={messages.data || []}
+                canEditArtifacts={activeChat?.provider !== 'ollama'}
+                onEditArtifact={startArtifactEdit}
               />
             </div>
           )}
