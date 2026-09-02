@@ -138,7 +138,7 @@ pipeline {
         sh '''#!/usr/bin/env bash
           set -euo pipefail
           mkdir -p "$REPORTS_DIR/trivy"
-          scan_container="$(docker create --entrypoint /bin/sh aquasec/trivy:0.58.0 -c 'mkdir -p /src /report; tail -f /dev/null')"
+          scan_container="$(docker create --entrypoint /bin/sh aquasec/trivy:0.74.0 -c 'mkdir -p /src /report; tail -f /dev/null')"
           cleanup_scan_container() {
             if [[ -n "${scan_container:-}" ]]; then docker rm -f "$scan_container" >/dev/null 2>&1 || true; fi
           }
@@ -172,7 +172,7 @@ pipeline {
         sh '''#!/usr/bin/env bash
           set -euo pipefail
           mkdir -p "$REPORTS_DIR/trivy"
-          scan_container="$(docker create --entrypoint /bin/sh -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.58.0 -c 'mkdir -p /report; tail -f /dev/null')"
+          scan_container="$(docker create --entrypoint /bin/sh -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 -c 'mkdir -p /report; tail -f /dev/null')"
           cleanup_scan_container() {
             if [[ -n "${scan_container:-}" ]]; then docker rm -f "$scan_container" >/dev/null 2>&1 || true; fi
           }
