@@ -2,12 +2,7 @@ import { type UIEvent, useCallback, useState } from 'react';
 
 import { DeleteChatDialog, RenameChatDialog } from './app-sidebar-dialogs';
 import { SidebarHistory, type ChatUpdate } from './app-sidebar-history';
-import {
-  AccountMenu,
-  SidebarHeader,
-  SidebarNavigationMenu,
-  WorkspaceSwitcher,
-} from './app-sidebar-navigation';
+import { AccountMenu, SidebarHeader, SidebarNavigationMenu } from './app-sidebar-navigation';
 import type { WorkspaceView } from '@/src/components/workspace-panel';
 import type { AuthUser } from '@/src/hooks/use-auth';
 import type { AppWorkspace, Chat, Project, Theme } from '@/src/types';
@@ -108,13 +103,6 @@ export function AppSidebar({
       }`}
     >
       <SidebarHeader collapsed={collapsed} onToggleCollapsed={onToggleCollapsed} />
-      {!collapsed ? (
-        <WorkspaceSwitcher
-          workspaces={workspaces}
-          activeWorkspaceId={activeWorkspaceId}
-          onWorkspaceChange={onWorkspaceChange}
-        />
-      ) : null}
       <SidebarNavigationMenu
         activeNavigation={activeNavigation}
         collapsed={collapsed}
@@ -150,6 +138,9 @@ export function AppSidebar({
         onThemeChange={onThemeChange}
         onOpenApiKeys={onOpenApiKeys}
         onLogout={onLogout}
+        workspaces={workspaces}
+        activeWorkspaceId={activeWorkspaceId}
+        onWorkspaceChange={onWorkspaceChange}
       />
       <RenameChatDialog
         chat={renameTarget}

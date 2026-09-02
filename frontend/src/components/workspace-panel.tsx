@@ -1925,7 +1925,8 @@ function MembersView() {
           </form>
           {createWorkspace.error ? <FormError message={createWorkspace.error.message} /> : null}
           <p className="mt-3 text-xs text-muted-foreground">
-            Bạn hiện có {workspaces.data?.length || 0} workspace. Dùng selector Sidebar để chuyển.
+            Bạn hiện có {workspaces.data?.length || 0} workspace. Khi có từ hai workspace, bạn có thể chuyển
+            trong menu tài khoản.
           </p>
         </CardContent>
       </Card>

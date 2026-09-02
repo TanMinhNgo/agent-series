@@ -34,7 +34,6 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { AppWorkspace, Theme } from '@/src/types';
 import type { AuthUser } from '@/src/hooks/use-auth';
 import type { WorkspaceView } from '@/src/components/workspace-panel';
@@ -109,41 +108,6 @@ export function SidebarHeader({
         </Button>
       ) : null}
     </div>
-  );
-}
-
-export function WorkspaceSwitcher({
-  workspaces,
-  activeWorkspaceId,
-  onWorkspaceChange,
-}: {
-  workspaces: AppWorkspace[];
-  activeWorkspaceId?: string | null;
-  onWorkspaceChange?: (workspaceId: string) => void;
-}) {
-  if (!workspaces.length) return null;
-
-  return (
-    <label className="mb-4 block text-xs text-muted-foreground">
-      <span className="section-label mb-1 block">Workspace</span>
-      <Select
-        value={activeWorkspaceId || workspaces[0]?.id}
-        onValueChange={(workspaceId) => {
-          if (workspaceId) onWorkspaceChange?.(workspaceId);
-        }}
-      >
-        <SelectTrigger className="h-10 w-full rounded-xl border-border/80 bg-background/70 pr-2 text-left shadow-none hover:bg-background">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent align="start" className="max-w-[min(20rem,var(--anchor-width))]">
-          {workspaces.map((workspace) => (
-            <SelectItem key={workspace.id} value={workspace.id} className="py-2">
-              {workspace.name} · {workspace.role}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </label>
   );
 }
 
@@ -229,6 +193,9 @@ export function AccountMenu({
   onThemeChange,
   onOpenApiKeys,
   onLogout,
+  workspaces,
+  activeWorkspaceId,
+  onWorkspaceChange,
 }: {
   collapsed: boolean;
   user?: AuthUser | null;
@@ -236,9 +203,14 @@ export function AccountMenu({
   onThemeChange: (theme: Theme) => void;
   onOpenApiKeys?: () => void;
   onLogout?: () => void;
+  workspaces: AppWorkspace[];
+  activeWorkspaceId?: string | null;
+  onWorkspaceChange?: (workspaceId: string) => void;
 }) {
   const accountName = user?.displayName || user?.email || 'Tài khoản';
   const accountInitials = (user?.displayName || user?.email || 'U').slice(0, 2).toUpperCase();
+  const canSwitchWorkspace = workspaces.length > 1;
+  const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) || workspaces[0];
 
   return (
     <div className={`mt-5 shrink-0 border-t pt-4 ${collapsed ? 'lg:border-t-0 lg:pt-0' : ''}`}>
@@ -277,6 +249,29 @@ export function AccountMenu({
             <ChevronRight size={16} className="text-muted-foreground" />
           </div>
           <DropdownMenuSeparator />
+          {canSwitchWorkspace ? (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <UserRound />
+                <span className="min-w-0 flex-1 truncate">
+                  {activeWorkspace?.name || 'Không gian làm việc'}
+                </span>
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="min-w-56">
+                <DropdownMenuRadioGroup
+                  value={activeWorkspaceId || workspaces[0]?.id}
+                  onValueChange={(workspaceId) => onWorkspaceChange?.(workspaceId)}
+                >
+                  {workspaces.map((workspace) => (
+                    <DropdownMenuRadioItem key={workspace.id} value={workspace.id}>
+                      <span className="max-w-40 truncate">{workspace.name}</span>
+                      <span className="ml-auto text-xs text-muted-foreground">{workspace.role}</span>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          ) : null}
           <DropdownMenuItem onClick={onOpenApiKeys}>
             <KeyRound /> Thêm API key của bạn
           </DropdownMenuItem>

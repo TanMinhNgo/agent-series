@@ -86,11 +86,17 @@ if ($workerTask) {
 
 # Wait for a fresh heartbeat before exposing the local stack. It catches a
 # missing database/model dependency instead of leaving queued jobs unnoticed.
+# The first load of the local embedding model can take tens of seconds, so a
+# short fixed timeout would stop a healthy worker before its first heartbeat.
+$workerStartupTimeoutSeconds = 90
 $workerOnline = $false
-for ($attempt = 0; $attempt -lt 10; $attempt++) {
+for ($attempt = 0; $attempt -lt $workerStartupTimeoutSeconds; $attempt++) {
     Start-Sleep -Seconds 1
     $workerOnline = & .\.venv\Scripts\python.exe -c "from datetime import UTC, datetime; from agent_core.config import load_settings; from agent_core.storage import BackgroundJobRepository, Database; print(BackgroundJobRepository(Database(load_settings().database_url)).worker_status(datetime.now(UTC))['online'])"
     if ($workerOnline -eq "True") { break }
+    if (($attempt + 1) % 10 -eq 0) {
+        Write-Host "Worker dang khoi dong ($($attempt + 1)/$workerStartupTimeoutSeconds giay)..." -ForegroundColor Yellow
+    }
 }
 if ($workerOnline -ne "True") {
     if ($schedulerJob) {
