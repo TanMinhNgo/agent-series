@@ -31,6 +31,7 @@ DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
 DRIVE_DOWNLOAD_URL = "https://www.googleapis.com/drive/v3/files/{file_id}"
 DRIVE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files?uploadType=media"
 DRIVE_WRITE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+APPLICATION_JSON = "application/json"
 CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
 SCOPES = (
@@ -254,7 +255,7 @@ class GoogleWorkspaceService:
                 text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(raw)).pages).strip()
                 self.repository.audit(GOOGLE_WORKSPACE_SLUG, "tool_invoked", connection.id, "read_google_drive_file", f"Đọc nội dung Drive: {metadata.get('name', file_id)}.")
                 return text[:20_000] if text else "PDF không có nội dung văn bản để đọc."
-            elif mime_type.startswith("text/") or mime_type in {"application/json", "application/xml"}:
+            elif mime_type.startswith("text/") or mime_type in {APPLICATION_JSON, "application/xml"}:
                 raw = self._http_bytes(f"{DRIVE_DOWNLOAD_URL.format(file_id=file_id)}?alt=media", headers)
             else:
                 return f"{metadata.get('name', 'File')} là {mime_type or 'file nhị phân'} nên chưa thể đọc trực tiếp. Mở: {metadata.get('webViewLink') or 'https://drive.google.com/open?id=' + file_id}"
@@ -274,17 +275,17 @@ class GoogleWorkspaceService:
         if folder_id: metadata["parents"] = [folder_id]
         boundary = "agent-series-upload"
         body = (
-            f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{json.dumps(metadata)}\r\n"
+            f"--{boundary}\r\nContent-Type: {APPLICATION_JSON}; charset=UTF-8\r\n\r\n{json.dumps(metadata)}\r\n"
             f"--{boundary}\r\nContent-Type: {mime_type or 'application/octet-stream'}\r\n\r\n"
         ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
         request = Request(
             "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
-            data=body, method="POST", headers={"Authorization": f"Bearer {token}", "Content-Type": f"multipart/related; boundary={boundary}", "Accept": "application/json"},
+            data=body, method="POST", headers={"Authorization": f"Bearer {token}", "Content-Type": f"multipart/related; boundary={boundary}", "Accept": APPLICATION_JSON},
         )
         try:
             with urlopen(request, timeout=30) as response:  # noqa: S310 - fixed Google upload endpoint.
                 result = json.loads(response.read().decode())
-        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+        except (URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise GoogleConnectorError("Không thể upload file lên Google Drive lúc này.") from exc
         self.repository.audit(GOOGLE_WORKSPACE_SLUG, "write_confirmed", connection.id, "upload_google_drive_file", f"Đã upload {name} sau xác nhận.")
         return {"id": result.get("id"), "name": result.get("name", name), "webViewLink": result.get("webViewLink")}
@@ -363,7 +364,7 @@ class GoogleWorkspaceService:
     @staticmethod
     def _http_json(url: str, method: str = "GET", data: dict[str, str] | None = None, headers: dict[str, str] | None = None) -> dict[str, Any]:
         body = urlencode(data).encode() if data else None
-        request = Request(url, data=body, method=method, headers={"Accept": "application/json", **({"Content-Type": "application/x-www-form-urlencoded"} if body else {}), **(headers or {})})
+        request = Request(url, data=body, method=method, headers={"Accept": APPLICATION_JSON, **({"Content-Type": "application/x-www-form-urlencoded"} if body else {}), **(headers or {})})
         try:
             with urlopen(request, timeout=15) as response:  # noqa: S310 - URLs are fixed Google endpoints.
                 return json.loads(response.read().decode())

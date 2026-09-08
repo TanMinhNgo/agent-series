@@ -2208,27 +2208,26 @@ def load_personalization_context(app_services: Services, chat: Chat, content: st
         return ""
 
 
-def persist_generation(app_services: Services, chat: Chat, chat_id: str, full_history: list[dict[str, Any]], agent: Agent, initial_history_length: int, result: Any, schedule_proposals: list[dict[str, Any]], web_sources: list[dict[str, str]], retrieval_traces: list[dict[str, Any]], events: Queue) -> None:
+def prepare_generation_history(chat: Chat, agent: Agent, result: Any, schedule_proposals: list[dict[str, Any]], web_sources: list[dict[str, str]]) -> None:
     if schedule_proposals:
         result.content_blocks = [*result.content_blocks, *schedule_proposals]
     if result.content_blocks:
         agent.history[-1]["content_blocks"] = result.content_blocks
-    if agent.history and agent.history[-1].get("role") == "assistant":
-        visible_content, sources = detach_response_sources(
-            agent.history[-1].get("content", ""),
-            [*sources_from_web_steps(getattr(result, "steps", [])), *web_sources],
-        )
-        if chat.provider == "ollama" and is_ollama_tool_echo(visible_content):
-            visible_content = "Mình chưa thể thực hiện thao tác đó trong chế độ Ollama local. Bạn hãy diễn đạt lại yêu cầu bằng một câu hỏi thông thường nhé."
-        agent.history[-1]["content"] = visible_content
-        if sources:
-            agent.history[-1]["sources"] = sources
-    saved_history = persisted_history(full_history, agent.history, initial_history_length)
-    turn_created_at = datetime.now(UTC).isoformat()
-    for item in saved_history[len(full_history):]:
-        item.setdefault("created_at", turn_created_at)
-    app_services.chats.replace_history(chat_id, saved_history)
-    new_turn = saved_history[len(full_history):]
+
+    if not agent.history or agent.history[-1].get("role") != "assistant":
+        return
+    visible_content, sources = detach_response_sources(
+        agent.history[-1].get("content", ""),
+        [*sources_from_web_steps(getattr(result, "steps", [])), *web_sources],
+    )
+    if chat.provider == "ollama" and is_ollama_tool_echo(visible_content):
+        visible_content = "Mình chưa thể thực hiện thao tác đó trong chế độ Ollama local. Bạn hãy diễn đạt lại yêu cầu bằng một câu hỏi thông thường nhé."
+    agent.history[-1]["content"] = visible_content
+    if sources:
+        agent.history[-1]["sources"] = sources
+
+
+def attach_generation_evidence(app_services: Services, chat: Chat, chat_id: str, new_turn: list[dict[str, Any]], result: Any, retrieval_traces: list[dict[str, Any]]) -> None:
     user_message = next((item for item in new_turn if item["role"] == "user"), None)
     assistant_message = next((item for item in reversed(new_turn) if item["role"] == "assistant"), None)
     artifact_ids = created_artifact_ids(getattr(result, "steps", []))
@@ -2239,6 +2238,16 @@ def persist_generation(app_services: Services, chat: Chat, chat_id: str, full_hi
     if assistant_message and retrieval_traces:
         app_services.workspace.save_retrieval_traces(assistant_message["message_id"], chat.project_id, retrieval_traces)
         assistant_message["retrievalTrace"] = retrieval_traces
+
+
+def persist_generation(app_services: Services, chat: Chat, chat_id: str, full_history: list[dict[str, Any]], agent: Agent, initial_history_length: int, result: Any, schedule_proposals: list[dict[str, Any]], web_sources: list[dict[str, str]], retrieval_traces: list[dict[str, Any]], events: Queue) -> None:
+    prepare_generation_history(chat, agent, result, schedule_proposals, web_sources)
+    saved_history = persisted_history(full_history, agent.history, initial_history_length)
+    turn_created_at = datetime.now(UTC).isoformat()
+    for item in saved_history[len(full_history):]:
+        item.setdefault("created_at", turn_created_at)
+    app_services.chats.replace_history(chat_id, saved_history)
+    attach_generation_evidence(app_services, chat, chat_id, saved_history[len(full_history):], result, retrieval_traces)
     BackgroundJobRepository(app_services.chats.database).enqueue("memory_index", {"chat_id": chat_id})
     completed_message = next(
         (item for item in reversed(saved_history) if item["role"] == "assistant"),

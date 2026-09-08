@@ -161,12 +161,12 @@ function ConnectorScopes({
   isSaving,
   error,
   onSave,
-}: {
+}: Readonly<{
   scopes: Detail['connectorScopes'];
   isSaving: boolean;
   error: string | null;
   onSave: (slug: 'google-workspace' | 'github', config: Record<string, unknown>) => void;
-}) {
+}>) {
   const github = scopes.find((item) => item.connectorSlug === 'github')?.config.repositories;
   const drive = scopes.find((item) => item.connectorSlug === 'google-workspace')?.config.fileIds;
   const [repositories, setRepositories] = useState(Array.isArray(github) ? github.join('\n') : '');
@@ -186,7 +186,7 @@ function ConnectorScopes({
       </CardHeader>
       <CardContent className="grid gap-5 md:grid-cols-2">
         <label className="grid gap-2 text-sm font-medium">
-          GitHub repositories
+          <span>GitHub repositories</span>
           <textarea
             className="min-h-28 rounded-md border bg-background p-2 text-sm font-normal"
             value={repositories}
@@ -197,6 +197,7 @@ function ConnectorScopes({
             Mỗi dòng một repository được phép đọc.
           </span>
           <button
+            type="button"
             className="w-fit rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50"
             disabled={isSaving}
             onClick={() => onSave('github', { repositories: ids(repositories) })}
@@ -205,7 +206,7 @@ function ConnectorScopes({
           </button>
         </label>
         <label className="grid gap-2 text-sm font-medium">
-          Google Drive file IDs
+          <span>Google Drive file IDs</span>
           <textarea
             className="min-h-28 rounded-md border bg-background p-2 text-sm font-normal"
             value={fileIds}
@@ -216,6 +217,7 @@ function ConnectorScopes({
             Mỗi dòng một file Drive được phép đọc.
           </span>
           <button
+            type="button"
             className="w-fit rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50"
             disabled={isSaving}
             onClick={() => onSave('google-workspace', { fileIds: ids(fileIds) })}
@@ -229,7 +231,7 @@ function ConnectorScopes({
   );
 }
 
-function Metric({ icon, label, value }: { icon: ReactNode; label: string; value: number }) {
+function Metric({ icon, label, value }: Readonly<{ icon: ReactNode; label: string; value: number }>) {
   return (
     <Card>
       <CardContent className="flex items-center gap-3 py-4">
