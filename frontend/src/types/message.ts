@@ -38,6 +38,14 @@ export type Message = {
   artifacts?: LibraryAsset[];
   contentBlocks?: ResponseBlock[];
   sources?: { name: string; url: string; kind?: 'library' | 'external' }[];
+  retrievalTrace?: {
+    sourceKind: string;
+    sourceId: string;
+    sourceName: string;
+    version: number | null;
+    chunkRef: string | null;
+    url: string;
+  }[];
   feedbackKind?: 'helpful' | 'incorrect' | 'too_long' | 'too_short' | 'unclear' | 'wrong_style';
   pinned?: boolean;
   /** Present only while a locally queued turn has not been confirmed by the API. */

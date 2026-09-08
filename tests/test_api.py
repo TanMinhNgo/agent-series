@@ -39,7 +39,8 @@ from api.main import (
 from agent_core.jobs.background import BackgroundWorker
 from agent_core.content.artifacts import ArtifactEditContext, ArtifactService, extract_artifact_text
 from agent_core.integrations.plugin_catalog import CATALOG, find_catalog_plugin
-from agent_core.integrations.plugin_execution import connected_read_tools
+from agent_core.integrations.plugin_execution import EXECUTORS, connected_read_tools, project_scoped_read_tools
+from agent_core.tools import ToolSpec
 from agent_core.knowledge.memory import MemoryService
 from agent_core.knowledge.rag import ALLOWED_DOCUMENT_SUFFIXES, build_knowledge_tool, extract_document_parts
 from agent_core.runtime.credentials import CredentialError, UserCredentialService
@@ -1281,6 +1282,29 @@ def test_plugin_tools_require_an_enabled_connected_read_plugin() -> None:
     }
     plugin.enabled = False
     assert connected_read_tools([plugin]) == []
+
+
+def test_project_connector_tools_only_expose_explicitly_scoped_reads() -> None:
+    plugin = Plugin(id="plugin-1", slug="github", name="GitHub", enabled=True, connection_status="connected", capabilities=["search"])
+    class GitHubExecutor:
+        def tools(self):
+            return [
+                ToolSpec("list_github_repositories", "", {}, lambda: "all"),
+                ToolSpec("read_github_repository_file", "", {}, lambda repository, path: f"{repository}/{path}"),
+                ToolSpec("search_github_issues", "", {}, lambda repository, query: f"{repository}:{query}"),
+            ]
+    previous = EXECUTORS.get("github")
+    EXECUTORS["github"] = GitHubExecutor()
+    try:
+        tools = {item.name: item for item in project_scoped_read_tools([plugin], {"github": {"repositories": ["owner/allowed"]}})}
+        assert set(tools) == {"read_github_repository_file", "search_github_issues"}
+        assert tools["read_github_repository_file"].func(repository="owner/allowed", path="README.md") == "owner/allowed/README.md"
+        assert "không nằm trong phạm vi" in tools["search_github_issues"].func(repository="owner/blocked", query="bug")
+    finally:
+        if previous is None:
+            EXECUTORS.pop("github", None)
+        else:
+            EXECUTORS["github"] = previous
 
 
 def test_plugin_catalog_has_unique_slugs_and_expected_core_apps() -> None:

@@ -334,6 +334,69 @@ class ArtifactMessageLink(UserOwned, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class ProjectActivity(UserOwned, Base):
+    """An append-only, workspace-visible record of work performed in a Project."""
+
+    __tablename__ = "project_activities"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str | None] = mapped_column(ForeignKey(PROJECT_ID_FOREIGN_KEY, ondelete="CASCADE"), nullable=True, index=True)
+    actor_user_id: Mapped[str | None] = mapped_column(ForeignKey(USER_ID_FOREIGN_KEY, ondelete=SET_NULL), nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), index=True)
+    subject_type: Mapped[str] = mapped_column(String(32))
+    subject_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    summary: Mapped[str] = mapped_column(String(500))
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+class ProjectConnectorScope(UserOwned, Base):
+    """Explicit external sources that chats and schedules in a Project may use."""
+
+    __tablename__ = "project_connector_scopes"
+    __table_args__ = (UniqueConstraint("project_id", "connector_slug", name="uq_project_connector_scope"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(ForeignKey(PROJECT_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
+    connector_slug: Mapped[str] = mapped_column(String(80), index=True)
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class ExternalActionProposal(UserOwned, Base):
+    """A short-lived confirmation record for a write to an external service."""
+
+    __tablename__ = "external_action_proposals"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str | None] = mapped_column(ForeignKey(PROJECT_ID_FOREIGN_KEY, ondelete="CASCADE"), nullable=True, index=True)
+    action_type: Mapped[str] = mapped_column(String(64), index=True)
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class MessageRetrievalTrace(UserOwned, Base):
+    """The exact retrieval evidence supplied to an assistant response."""
+
+    __tablename__ = "message_retrieval_traces"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    message_id: Mapped[str] = mapped_column(ForeignKey(CHAT_MESSAGE_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey(PROJECT_ID_FOREIGN_KEY, ondelete="CASCADE"), nullable=True, index=True)
+    source_kind: Mapped[str] = mapped_column(String(24))
+    source_id: Mapped[str] = mapped_column(String(36), index=True)
+    source_name: Mapped[str] = mapped_column(String(255))
+    version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    chunk_ref: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    url: Mapped[str] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class ArtifactChunk(UserOwned, Base):
     __tablename__ = "artifact_chunks"
     __table_args__ = (UniqueConstraint("asset_id", "chunk_index", name="uq_artifact_chunks_asset_index"),)
@@ -1013,6 +1076,78 @@ class WorkspaceRepository:
             session.delete(item)
             session.commit()
             return True
+
+    def add_project_activity(self, project_id: str | None, event_type: str, subject_type: str, subject_id: str | None, summary: str, metadata: dict | None = None) -> ProjectActivity:
+        with self.database.session() as session:
+            item = ProjectActivity(
+                project_id=project_id, actor_user_id=current_user_id.get(), event_type=event_type,
+                subject_type=subject_type, subject_id=subject_id, summary=summary, metadata_json=metadata,
+            )
+            session.add(item); session.commit(); return item
+
+    def project_activity(self, project_id: str, limit: int = 50) -> list[ProjectActivity]:
+        with self.database.session() as session:
+            return list(session.scalars(
+                select(ProjectActivity).where(
+                    (ProjectActivity.project_id == project_id) | (ProjectActivity.project_id.is_(None))
+                ).order_by(ProjectActivity.created_at.desc()).limit(limit)
+            ))
+
+    def save_retrieval_traces(self, message_id: str, project_id: str | None, traces: list[dict]) -> None:
+        if not traces:
+            return
+        with self.database.session() as session:
+            session.add_all(MessageRetrievalTrace(message_id=message_id, project_id=project_id, **trace) for trace in traces)
+            session.commit()
+
+    def retrieval_traces(self, message_ids: list[str]) -> dict[str, list[MessageRetrievalTrace]]:
+        if not message_ids:
+            return {}
+        with self.database.session() as session:
+            rows = session.scalars(select(MessageRetrievalTrace).where(MessageRetrievalTrace.message_id.in_(message_ids)).order_by(MessageRetrievalTrace.created_at)).all()
+            result: dict[str, list[MessageRetrievalTrace]] = {}
+            for item in rows:
+                result.setdefault(item.message_id, []).append(item)
+            return result
+
+    def connector_scopes(self, project_id: str) -> list[ProjectConnectorScope]:
+        with self.database.session() as session:
+            return list(session.scalars(select(ProjectConnectorScope).where(ProjectConnectorScope.project_id == project_id).order_by(ProjectConnectorScope.connector_slug)))
+
+    def save_connector_scope(self, project_id: str, connector_slug: str, config: dict) -> ProjectConnectorScope:
+        with self.database.session() as session:
+            item = session.scalar(select(ProjectConnectorScope).where(ProjectConnectorScope.project_id == project_id, ProjectConnectorScope.connector_slug == connector_slug))
+            if item is None:
+                item = ProjectConnectorScope(project_id=project_id, connector_slug=connector_slug, config=config)
+                session.add(item)
+            else:
+                item.config, item.updated_at = config, utc_now()
+            session.commit(); return item
+
+    def delete_connector_scope(self, project_id: str, connector_slug: str) -> bool:
+        with self.database.session() as session:
+            item = session.scalar(select(ProjectConnectorScope).where(ProjectConnectorScope.project_id == project_id, ProjectConnectorScope.connector_slug == connector_slug))
+            if item is None: return False
+            session.delete(item); session.commit(); return True
+
+    def create_external_proposal(self, action_type: str, config: dict, project_id: str | None = None) -> ExternalActionProposal:
+        with self.database.session() as session:
+            item = ExternalActionProposal(action_type=action_type, config=config, project_id=project_id, expires_at=utc_now() + timedelta(minutes=15))
+            session.add(item); session.commit(); return item
+
+    def claim_external_proposal(self, proposal_id: str) -> ExternalActionProposal | None:
+        """Consume a one-time confirmation before a non-idempotent external write."""
+        with self.database.session() as session:
+            item = session.get(ExternalActionProposal, proposal_id)
+            if item is None or item.status != "pending" or item.expires_at <= utc_now(): return None
+            item.status, item.confirmed_at = "running", utc_now(); session.commit(); return item
+
+    def finish_external_proposal(self, proposal_id: str, error: str | None = None) -> ExternalActionProposal | None:
+        with self.database.session() as session:
+            item = session.get(ExternalActionProposal, proposal_id)
+            if item is None or item.status != "running": return None
+            item.status, item.error = ("failed", error[:2_000]) if error else ("completed", None)
+            session.commit(); return item
 
     def list_for_user(self, user_id: str) -> list[tuple[Workspace, WorkspaceMember]]:
         with self.database.session() as session:

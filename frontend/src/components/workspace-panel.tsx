@@ -302,6 +302,9 @@ function ProjectCard({
         >
           <Trash2 />
         </Button>
+        <a href={`/projects/${item.id}`} className="text-sm text-primary hover:underline">
+          Mở
+        </a>
       </CardContent>
     </Card>
   );
@@ -498,6 +501,31 @@ const scheduleStatusLabels: Record<Schedule['status'], string> = {
   paused: 'Đang tạm dừng',
   completed: 'Đã hoàn tất',
 };
+
+const WORKFLOW_RECIPES = [
+  {
+    id: 'daily-ai-digest',
+    title: 'Daily AI digest',
+    prompt: 'Tìm nguồn web mới, tổng hợp tin AI quan trọng hôm nay, nêu nguồn và tạo báo cáo Markdown.',
+    recurrence: 'daily' as const,
+    requireWebSource: true,
+  },
+  {
+    id: 'github-weekly-summary',
+    title: 'GitHub weekly summary',
+    prompt:
+      'Dùng GitHub đã chọn cho Project để tổng hợp issue, PR và workflow trong tuần; tạo báo cáo Markdown có nguồn.',
+    recurrence: 'weekly' as const,
+    requireWebSource: false,
+  },
+  {
+    id: 'project-report',
+    title: 'Project report',
+    prompt: 'Tổng hợp tiến độ Project, nguồn đã ghim, chat và artifact gần đây; tạo báo cáo Markdown.',
+    recurrence: 'weekly' as const,
+    requireWebSource: false,
+  },
+] as const;
 
 const scheduleFilterLabels = {
   active: 'Đang hoạt động',
@@ -885,6 +913,13 @@ function ScheduleForm({
   const models = config.data?.providers[selectedProvider] || [];
   const selectedModel = model && models.includes(model) ? model : models[0] || model;
   const runs = useScheduleRuns(schedule?.id);
+  const applyRecipe = (recipe: (typeof WORKFLOW_RECIPES)[number]) => {
+    setTitle(recipe.title);
+    setPrompt(recipe.prompt);
+    setRecurrence(recipe.recurrence);
+    setRequireWebSource(recipe.requireWebSource);
+    setNotifyEmail(true);
+  };
   return (
     <FormDialog title={schedule ? 'Sửa lịch trình' : 'Tạo lịch trình'} onClose={onClose}>
       <form
@@ -909,6 +944,28 @@ function ScheduleForm({
           )
         }
       >
+        {!schedule ? (
+          <Field label="Workflow recipe">
+            <select
+              className="workspace-input"
+              defaultValue=""
+              onChange={(event) => {
+                const recipe = WORKFLOW_RECIPES.find((item) => item.id === event.target.value);
+                if (recipe) applyRecipe(recipe);
+              }}
+            >
+              <option value="">Tự cấu hình</option>
+              {WORKFLOW_RECIPES.map((recipe) => (
+                <option key={recipe.id} value={recipe.id}>
+                  {recipe.title}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Recipe chỉ điền sẵn form; bạn luôn cần xem và xác nhận trước khi tạo lịch.
+            </p>
+          </Field>
+        ) : null}
         <Field label="Tiêu đề">
           <input
             required

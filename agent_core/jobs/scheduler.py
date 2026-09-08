@@ -22,7 +22,7 @@ from agent_core.integrations.google_workspace import GOOGLE_WORKSPACE_SLUG, Goog
 from agent_core.integrations.github_app import GITHUB_SLUG, GitHubAppExecutor, GitHubAppService
 from agent_core.runtime.auth import AuthService
 from agent_core.runtime.credentials import UserCredentialService
-from agent_core.integrations.plugin_execution import EXECUTORS, connected_read_tools
+from agent_core.integrations.plugin_execution import EXECUTORS, connected_read_tools, project_scoped_read_tools
 from agent_core.persistence.store import AuthRepository, BackgroundJobRepository, Chat, ChatRepository, ConnectorRepository, Database, MediaRepository, ModelRegistryRepository, Schedule, ScheduleRepository, WorkspaceRepository, current_user_id, current_workspace_id
 
 RETRY_DELAYS_MINUTES = (5, 15, 30)
@@ -194,7 +194,13 @@ class ScheduleWorker:
         web_sources = self.services.web_search.require_sources(prompt) if schedule.require_web_source else None
         agent = make_agent(
             self.services, chat, memory_context=memory_context,
-            plugin_tools=connected_read_tools(self.services.workspace.list_plugins()),
+            plugin_tools=(
+                project_scoped_read_tools(
+                    self.services.workspace.list_plugins(),
+                    {item.connector_slug: item.config or {} for item in self.services.workspace.connector_scopes(schedule.project_id)},
+                )
+                if schedule.project_id else connected_read_tools(self.services.workspace.list_plugins())
+            ),
             history=self._grounded_history(full_history, prompt, web_sources) if web_sources else full_history,
             allow_schedule_proposals=False,
         )

@@ -327,6 +327,28 @@ export function MessageList({
                     </div>
                   </div>
                 ) : null}
+                {message.role === 'assistant' && message.retrievalTrace?.length ? (
+                  <div className="mt-4 max-w-2xl border-l-2 border-sky-500/50 pl-3">
+                    <p className="mb-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                      Nguồn đã dùng
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {message.retrievalTrace.map((source) => (
+                        <a
+                          key={`${source.sourceId}-${source.chunkRef || ''}`}
+                          href={source.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rounded-md bg-muted/60 px-2 py-1 text-xs hover:bg-muted"
+                        >
+                          {source.sourceName}
+                          {source.version ? ` · v${source.version}` : ''}
+                          {source.chunkRef ? ` · ${source.chunkRef}` : ''}
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 {message.messageId && message.role === 'user' ? (
                   <div className="mt-1 flex justify-end gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
                     <Tooltip>

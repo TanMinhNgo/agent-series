@@ -244,8 +244,16 @@ class KnowledgeService:
         collection_id: str | None = None,
         max_distance: float | None = None,
     ) -> str:
+        result, _ = self.search_with_trace(query, top_k, project_id, collection_id, max_distance)
+        return result
+
+    def search_with_trace(
+        self, query: str, top_k: int = 4, project_id: str | None = None,
+        collection_id: str | None = None, max_distance: float | None = None,
+    ) -> tuple[str, list[dict]]:
+        """Return prompt context plus the immutable document chunks behind it."""
         if not query.strip():
-            return "[Lỗi] Câu hỏi truy vấn đang trống."
+            return "[Lỗi] Câu hỏi truy vấn đang trống.", []
         top_k = max(1, min(int(top_k), 8))
         vector = self._embed([query], "query")[0]
         with self.database.session() as session:
@@ -261,7 +269,13 @@ class KnowledgeService:
                 statement = statement.where(distance <= max_distance)
             rows = session.execute(statement.order_by(distance).limit(top_k)).all()
         if not rows:
-            return NO_DOCUMENTS_RESULT
+            return NO_DOCUMENTS_RESULT, []
+        traces = [
+            {"source_kind": "document", "source_id": chunk.document_id, "source_name": name,
+             "version": None, "chunk_ref": f"page={chunk.page_number}",
+             "url": f"/api/documents/{chunk.document_id}/file" + (f"#page={chunk.page_number}" if Path(name).suffix.lower() == ".pdf" else "")}
+            for chunk, name, _ in rows
+        ]
         return "\n\n".join(
             (
                 f"[Nguồn {number}: [{name}](/api/documents/{chunk.document_id}/file#page={chunk.page_number}), trang {chunk.page_number}]\n{chunk.content}"
@@ -269,7 +283,7 @@ class KnowledgeService:
                 else f"[Nguồn {number}: [{name}](/api/documents/{chunk.document_id}/file), đoạn {chunk.page_number}]\n{chunk.content}"
             )
             for number, (chunk, name, _) in enumerate(rows, start=1)
-        )
+        ), traces
 
 
 def build_knowledge_tool(service: KnowledgeService, project_id: str | None = None, collection_id: str | None = None) -> ToolSpec | None:

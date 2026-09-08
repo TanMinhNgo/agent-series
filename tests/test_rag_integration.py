@@ -84,6 +84,12 @@ def test_real_pdf_is_indexed_and_retrieved_from_pgvector(integration_database: D
     result = tool.func("Where is the Mekong Delta source?", 4)
     assert "Mekong Delta source" in result
     assert f"/api/documents/{document.id}/file#page=1" in result
+    traced_result, traces = service.search_with_trace("Where is the Mekong Delta source?", 4, project.id, collection.id)
+    assert "Mekong Delta source" in traced_result
+    assert traces == [{
+        "source_kind": "document", "source_id": document.id, "source_name": "rag-integration.pdf",
+        "version": None, "chunk_ref": "page=1", "url": f"/api/documents/{document.id}/file#page=1",
+    }]
 
     global_document, created = service.upload(
         "global-rag-integration.pdf",

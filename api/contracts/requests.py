@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -65,6 +65,32 @@ class ProjectRequest(BaseModel):
     status: Literal["active", "paused", "completed"] = "active"
     instructions: str | None = Field(default=None, max_length=10_000)
     memory_mode: Literal["default", "project_only"] = Field(default="default", alias="memoryMode")
+
+    model_config = {"populate_by_name": True}
+
+
+class ProjectConnectorScopeRequest(BaseModel):
+    connector_slug: Literal["google-workspace", "github"] = Field(alias="connectorSlug")
+    config: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"populate_by_name": True}
+
+    @field_validator("config")
+    @classmethod
+    def validate_config(cls, value: dict[str, Any], info) -> dict[str, Any]:
+        key = "repositories" if info.data.get("connector_slug") == "github" else "fileIds"
+        values = value.get(key, [])
+        if not isinstance(values, list) or any(not isinstance(item, str) or not item.strip() for item in values):
+            raise ValueError(f"{key} phải là danh sách ID hợp lệ.")
+        if len(values) > 100:
+            raise ValueError(f"{key} tối đa 100 mục.")
+        return {key: list(dict.fromkeys(item.strip() for item in values))}
+
+
+class ExternalActionProposalRequest(BaseModel):
+    action_type: Literal["google_drive_upload"] = Field(alias="actionType")
+    asset_id: str = Field(alias="assetId", min_length=1, max_length=36)
+    folder_id: str | None = Field(default=None, alias="folderId", max_length=128)
 
     model_config = {"populate_by_name": True}
 

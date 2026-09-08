@@ -17,6 +17,7 @@ import { LoginPage } from '@/src/pages/login-page';
 import { PublicSharePage } from '@/src/pages/public-share-page';
 import { SettingsPage } from '@/src/pages/settings-page';
 import { WorkspacePage } from '@/src/pages/workspace-page';
+import { ProjectOverviewPage } from '@/src/pages/project-overview-page';
 
 function LoadingPage() {
   return (
@@ -96,6 +97,7 @@ function ProtectedRoutes() {
       <Route path="chat/:chatId" element={<ChatRoute {...props} />} />
       <Route path="library" element={<LibraryPage {...props} />} />
       <Route path="projects" element={<WorkspacePage {...props} view="projects" />} />
+      <Route path="projects/:projectId" element={<ProjectOverviewPage />} />
       <Route path="schedules" element={<WorkspacePage {...props} view="schedules" />} />
       <Route path="plugins" element={<WorkspacePage {...props} view="plugins" />} />
       <Route path="members" element={<WorkspacePage {...props} view="members" />} />

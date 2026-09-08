@@ -29,6 +29,8 @@ GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
 DRIVE_DOWNLOAD_URL = "https://www.googleapis.com/drive/v3/files/{file_id}"
+DRIVE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files?uploadType=media"
+DRIVE_WRITE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
 SCOPES = (
@@ -76,15 +78,16 @@ class GoogleWorkspaceService:
             "expiresAt": item.expires_at.isoformat() if item and item.expires_at else None,
         }
 
-    def authorization_url(self) -> str:
+    def authorization_url(self, allow_drive_write: bool = False) -> str:
         self._fernet()
         state = token_urlsafe(32)
-        self.repository.create_oauth_state(state, GOOGLE_WORKSPACE_SLUG, datetime.now(UTC) + timedelta(minutes=10))
+        state_slug = f"{GOOGLE_WORKSPACE_SLUG}:drive-write" if allow_drive_write else GOOGLE_WORKSPACE_SLUG
+        self.repository.create_oauth_state(state, state_slug, datetime.now(UTC) + timedelta(minutes=10))
         params = {
             "client_id": self.settings.google_oauth_client_id,
             "redirect_uri": self.settings.google_oauth_redirect_uri,
             "response_type": "code",
-            "scope": " ".join(SCOPES),
+            "scope": " ".join((*SCOPES, *((DRIVE_WRITE_SCOPE,) if allow_drive_write else ()))),
             "state": state,
             "access_type": "offline",
             "prompt": "consent",
@@ -93,7 +96,7 @@ class GoogleWorkspaceService:
 
     def complete_authorization(self, code: str, state: str) -> dict[str, Any]:
         consumed = self.repository.consume_oauth_state(state, datetime.now(UTC))
-        if consumed is None or consumed.connector_slug != GOOGLE_WORKSPACE_SLUG:
+        if consumed is None or not consumed.connector_slug.startswith(GOOGLE_WORKSPACE_SLUG):
             raise GoogleConnectorError("Phiên kết nối đã hết hạn hoặc không hợp lệ. Hãy bắt đầu lại từ trang Plugin.")
         try:
             token = self._request_token({
@@ -261,6 +264,30 @@ class GoogleWorkspaceService:
             raise
         self.repository.audit(GOOGLE_WORKSPACE_SLUG, "tool_invoked", connection.id, "read_google_drive_file", f"Đọc nội dung Drive: {metadata.get('name', file_id)}.")
         return text[:20_000] if text else "File không có nội dung văn bản để đọc."
+
+    def upload_drive_file(self, name: str, data: bytes, mime_type: str, folder_id: str | None = None) -> dict[str, Any]:
+        """Write is deliberately callable only after a persisted server-side approval."""
+        token, connection = self._access_token()
+        if DRIVE_WRITE_SCOPE not in (connection.scopes or []):
+            raise GoogleConnectorError("Google chưa cấp quyền xuất file Drive. Hãy kết nối lại và đồng ý quyền xuất file đã xác nhận.")
+        metadata = {"name": name}
+        if folder_id: metadata["parents"] = [folder_id]
+        boundary = "agent-series-upload"
+        body = (
+            f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{json.dumps(metadata)}\r\n"
+            f"--{boundary}\r\nContent-Type: {mime_type or 'application/octet-stream'}\r\n\r\n"
+        ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
+        request = Request(
+            "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+            data=body, method="POST", headers={"Authorization": f"Bearer {token}", "Content-Type": f"multipart/related; boundary={boundary}", "Accept": "application/json"},
+        )
+        try:
+            with urlopen(request, timeout=30) as response:  # noqa: S310 - fixed Google upload endpoint.
+                result = json.loads(response.read().decode())
+        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+            raise GoogleConnectorError("Không thể upload file lên Google Drive lúc này.") from exc
+        self.repository.audit(GOOGLE_WORKSPACE_SLUG, "write_confirmed", connection.id, "upload_google_drive_file", f"Đã upload {name} sau xác nhận.")
+        return {"id": result.get("id"), "name": result.get("name", name), "webViewLink": result.get("webViewLink")}
 
     def search_gmail_messages(self, query: str, limit: int = 10) -> str:
         query = query.strip()

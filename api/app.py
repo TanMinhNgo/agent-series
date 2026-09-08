@@ -38,7 +38,7 @@ from agent_core.knowledge.personalization import PersonalizationService
 from agent_core.integrations.google_workspace import GOOGLE_WORKSPACE_SLUG, GoogleConnectorError, GoogleWorkspaceExecutor, GoogleWorkspaceService
 from agent_core.integrations.github_app import GITHUB_SLUG, GitHubAppExecutor, GitHubAppService, GitHubConnectorError
 from agent_core.integrations.plugin_catalog import CATALOG, catalog_json, find_catalog_plugin
-from agent_core.integrations.plugin_execution import EXECUTORS, connected_read_tools
+from agent_core.integrations.plugin_execution import EXECUTORS, connected_read_tools, project_scoped_read_tools
 from agent_core.ai.prompts import DEFAULT_SYSTEM_PROMPT, OLLAMA_SYSTEM_PROMPT
 from agent_core.ai.providers import build_client
 from agent_core.persistence.store import ArtifactChunk, AuthRepository, BackgroundJob, BackgroundJobRepository, Chat, ChatMessage, ChatRepository, ChatShare, ConnectorRepository, Database, Document, KnowledgeCollection, LibraryAsset, MediaAttachment, MediaRepository, ModelRegistryRepository, Plugin, Project, PromptTemplate, Schedule, ScheduleRepository, ScheduleRun, User, Workspace, WorkspaceInvitation, WorkspaceMember, WorkspaceRepository, current_user_id, current_workspace_id
@@ -108,7 +108,7 @@ from api.contracts.requests import (
     AdminModelStatusRequest, AdminUserStatusRequest, ApiKeyRequest, BranchChatRequest,
     ChatRequest, CollectionDocumentsRequest, CreateChatRequest, DeleteProjectRequest,
     FeedbackRequest, KnowledgeCollectionRequest, PinMessageRequest, PluginRequest,
-    PluginUpdateRequest, ProjectRequest, PromptTemplateRequest, ScheduleProposalPayload,
+    ExternalActionProposalRequest, PluginUpdateRequest, ProjectConnectorScopeRequest, ProjectRequest, PromptTemplateRequest, ScheduleProposalPayload,
     ScheduleRequest, ScheduleUpdateRequest, ShareRequest, UpdateArtifactRequest,
     UpdateChatRequest, WorkspaceInvitationRequest, WorkspaceMemberRoleRequest, WorkspaceRequest,
 )
@@ -229,6 +229,21 @@ def schedule_run_json(item: ScheduleRun) -> dict[str, Any]:
 
 def library_asset_json(item: LibraryAsset) -> dict[str, Any]:
     return {"id": item.id, "artifactId": item.artifact_id, "name": item.name, "version": item.version, "mimeType": item.mime_type, "sizeBytes": item.size_bytes, "source": item.source, "projectId": item.project_id, "isProjectSource": item.is_project_source, "indexStatus": item.index_status, "indexError": item.index_error, "createdAt": item.created_at.isoformat(), "url": f"/api/library/assets/{item.id}/file"}
+
+
+def retrieval_trace_json(item: Any) -> dict[str, Any]:
+    return {"sourceKind": item.source_kind, "sourceId": item.source_id, "sourceName": item.source_name, "version": item.version, "chunkRef": item.chunk_ref, "url": item.url}
+
+
+def project_activity_json(item: Any) -> dict[str, Any]:
+    return {"id": item.id, "eventType": item.event_type, "subjectType": item.subject_type, "subjectId": item.subject_id, "summary": item.summary, "metadata": item.metadata_json or {}, "createdAt": item.created_at.isoformat()}
+
+
+def record_project_activity(project_id: str | None, event_type: str, subject_type: str, subject_id: str | None, summary: str) -> None:
+    """Keep endpoint behavior compatible with lightweight service doubles in tests."""
+    writer = getattr(getattr(services(), "workspace", None), "add_project_activity", None)
+    if project_id and writer is not None:
+        writer(project_id, event_type, subject_type, subject_id, summary)
 
 
 def plugin_json(item: Plugin) -> dict[str, Any]:
@@ -1160,6 +1175,8 @@ async def upload_library_assets(
             asset = services().library.upload(name, file.content_type or "", await file.read(), project_id=project_id)
             enqueue_artifact_index(asset)
             uploaded.append(library_asset_json(asset))
+            if project_id:
+                record_project_activity(project_id, "artifact.uploaded", "artifact", asset.id, f"Đã thêm file {asset.name}.")
         except ValueError as exc:
             errors.append({"name": name, "message": str(exc)})
     return {"items": uploaded, "errors": errors}
@@ -1183,6 +1200,9 @@ def update_library_asset(asset_id: str, payload: UpdateArtifactRequest) -> dict[
     if item is None:
         raise HTTPException(status_code=404, detail=ARTIFACT_NOT_FOUND_ERROR)
     enqueue_artifact_index(item)
+    if getattr(item, "project_id", None):
+        event = "project_source.updated" if values.get("is_project_source") is not None else "artifact.updated"
+        record_project_activity(item.project_id, event, "artifact", item.id, f"Đã cập nhật file {item.name}.")
     return library_asset_json(item)
 
 
@@ -1193,6 +1213,8 @@ async def create_library_asset_version(asset_id: str, file: UploadFile = File(..
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     enqueue_artifact_index(item)
+    if getattr(item, "project_id", None):
+        record_project_activity(item.project_id, "artifact.version_created", "artifact", item.id, f"Đã tạo version {item.version} của {item.name}.")
     return library_asset_json(item)
 
 
@@ -1205,6 +1227,8 @@ def restore_library_asset_version(asset_id: str) -> dict[str, Any]:
         message = str(exc)
         raise HTTPException(status_code=404 if NOT_FOUND_MARKER in message else 422, detail=message) from exc
     enqueue_artifact_index(item)
+    if getattr(item, "project_id", None):
+        record_project_activity(item.project_id, "artifact.restored", "artifact", item.id, f"Đã khôi phục {item.name} thành version {item.version}.")
     return library_asset_json(item)
 
 
@@ -1302,11 +1326,16 @@ def messages(chat_id: str) -> list[dict[str, Any]]:
     feedback = services().personalization.feedback_by_message_ids(
         [item["message_id"] for item in history if item["role"] == "assistant" and item.get("message_id")]
     )
+    trace_lookup = getattr(getattr(services(), "workspace", None), "retrieval_traces", None)
+    traces_by_message = trace_lookup(
+        [item["message_id"] for item in history if item["role"] == "assistant" and item.get("message_id")]
+    ) if trace_lookup is not None else {}
     return [
         message_json({
             **item,
             "feedback_kind": feedback.get(item.get("message_id")),
             "artifacts": [library_asset_json(asset) for asset in artifacts_by_message.get(item.get("message_id", ""), [])],
+            "retrievalTrace": [retrieval_trace_json(trace) for trace in traces_by_message.get(item.get("message_id", ""), [])],
         } if item["role"] == "assistant" else item)
         for item in history
     ]
@@ -1599,7 +1628,9 @@ def list_projects() -> list[dict[str, Any]]:
 
 @app.post("/api/projects", status_code=201, tags=["Projects"], responses=API_ERROR_RESPONSES)
 def create_project(payload: ProjectRequest) -> dict[str, Any]:
-    return project_json(services().workspace.create(Project, **payload.model_dump()))
+    project = services().workspace.create(Project, **payload.model_dump())
+    record_project_activity(project.id, "project.created", "project", project.id, f"Đã tạo Project {project.name}.")
+    return project_json(project)
 
 
 @app.get("/api/projects/{project_id}", tags=["Projects"], responses=API_ERROR_RESPONSES)
@@ -1613,7 +1644,61 @@ def get_project(project_id: str) -> dict[str, Any]:
         project_assets = list(session.scalars(select(LibraryAsset).where(LibraryAsset.project_id == project_id).order_by(LibraryAsset.created_at.desc())))
         project_schedules = list(session.scalars(select(Schedule).where(Schedule.project_id == project_id).order_by(Schedule.starts_at.desc())))
     jobs = BackgroundJobRepository(services().chats.database)
-    return {"project": project_json(project), "chats": [chat_json(item) for item in project_chats], "documents": [document_json(item, jobs.latest_for_document(item.id)) for item in project_documents], "assets": [library_asset_json(item) for item in project_assets], "schedules": [schedule_json(item) for item in project_schedules]}
+    scopes = services().workspace.connector_scopes(project_id)
+    return {"project": project_json(project), "chats": [chat_json(item) for item in project_chats[:8]], "documents": [document_json(item, jobs.latest_for_document(item.id)) for item in project_documents], "assets": [library_asset_json(item) for item in project_assets[:12]], "projectSources": [library_asset_json(item) for item in project_assets if item.is_project_source], "schedules": [schedule_json(item) for item in project_schedules[:8]], "activity": [project_activity_json(item) for item in services().workspace.project_activity(project_id)], "connectorScopes": [{"connectorSlug": item.connector_slug, "config": item.config} for item in scopes]}
+
+
+@app.put("/api/projects/{project_id}/connector-scopes", tags=["Projects"], responses=API_ERROR_RESPONSES)
+def save_project_connector_scope(project_id: str, payload: ProjectConnectorScopeRequest) -> dict[str, Any]:
+    if services().workspace.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail=PROJECT_NOT_FOUND_ERROR)
+    scope = services().workspace.save_connector_scope(project_id, payload.connector_slug, payload.config)
+    record_project_activity(project_id, "connector.scope_updated", "connector", scope.id, f"Đã cập nhật nguồn {payload.connector_slug} cho Project.")
+    return {"connectorSlug": scope.connector_slug, "config": scope.config}
+
+
+@app.get("/api/workflow-recipes", tags=["Workflows"], responses=API_ERROR_RESPONSES)
+def workflow_recipes() -> list[dict[str, Any]]:
+    return [
+        {"id": "daily-ai-digest", "title": "Daily AI digest", "prompt": "Tìm nguồn web mới, tổng hợp tin AI quan trọng hôm nay, nêu nguồn và tạo báo cáo Markdown.", "recurrence": "daily", "requireWebSource": True, "notifyEmail": True},
+        {"id": "github-weekly-summary", "title": "GitHub weekly summary", "prompt": "Dùng GitHub đã chọn cho Project để tổng hợp issue, PR và workflow trong tuần; tạo báo cáo Markdown có nguồn.", "recurrence": "weekly", "requireWebSource": False, "notifyEmail": True},
+        {"id": "project-report", "title": "Project report", "prompt": "Tổng hợp tiến độ Project, nguồn đã ghim, chat và artifact gần đây; tạo báo cáo Markdown.", "recurrence": "weekly", "requireWebSource": False, "notifyEmail": True},
+    ]
+
+
+@app.post("/api/external-action-proposals", status_code=201, tags=["Connectors"], responses=API_ERROR_RESPONSES)
+def create_external_action_proposal(payload: ExternalActionProposalRequest) -> dict[str, Any]:
+    asset = services().library.ensure_remote(payload.asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail=ARTIFACT_NOT_FOUND_ERROR)
+    proposal = services().workspace.create_external_proposal(payload.action_type, {"assetId": asset.id, "name": asset.name, "folderId": payload.folder_id}, asset.project_id)
+    record_project_activity(asset.project_id, "external_action.proposed", "artifact", asset.id, f"Đang chờ xác nhận upload {asset.name} lên Google Drive.")
+    return {"proposalId": proposal.id, "status": proposal.status, "actionType": proposal.action_type, "assetId": asset.id, "name": asset.name, "folderId": payload.folder_id, "expiresAt": proposal.expires_at.isoformat()}
+
+
+@app.post("/api/external-action-proposals/{proposal_id}/confirm", tags=["Connectors"], responses=API_ERROR_RESPONSES)
+def confirm_external_action_proposal(proposal_id: str) -> dict[str, Any]:
+    proposal = services().workspace.claim_external_proposal(proposal_id)
+    if proposal is None:
+        raise HTTPException(status_code=409, detail="Đề xuất đã hết hạn hoặc đã được xử lý.")
+    if proposal.action_type != "google_drive_upload":
+        raise HTTPException(status_code=422, detail="Loại action chưa hỗ trợ.")
+    asset_id = str(proposal.config.get("assetId") or "")
+    asset = services().library.ensure_remote(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail=ARTIFACT_NOT_FOUND_ERROR)
+    try:
+        data = services().library.storage.read(asset.storage_provider, asset.stored_name, asset.storage_file_id)
+        result = services().google_workspace.upload_drive_file(asset.name, data, asset.mime_type, proposal.config.get("folderId"))
+    except GoogleConnectorError as exc:
+        services().workspace.finish_external_proposal(proposal.id, str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        services().workspace.finish_external_proposal(proposal.id, str(exc))
+        raise HTTPException(status_code=502, detail="Không thể upload lên Google Drive.") from exc
+    services().workspace.finish_external_proposal(proposal.id)
+    record_project_activity(asset.project_id, "external_action.completed", "artifact", asset.id, f"Đã upload {asset.name} lên Google Drive sau xác nhận.")
+    return {"proposalId": proposal.id, "status": "completed", "result": result}
 
 
 @app.patch("/api/projects/{project_id}", tags=["Projects"], responses=API_ERROR_RESPONSES)
@@ -1621,6 +1706,7 @@ def update_project(project_id: str, payload: ProjectRequest) -> dict[str, Any]:
     item = services().workspace.update(Project, project_id, **payload.model_dump())
     if item is None:
         raise HTTPException(status_code=404, detail=PROJECT_NOT_FOUND_ERROR)
+    record_project_activity(project_id, "project.updated", "project", project_id, f"Đã cập nhật Project {item.name}.")
     return project_json(item)
 
 
@@ -1680,7 +1766,10 @@ def create_schedule(payload: ScheduleRequest) -> dict[str, Any]:
     except (ValueError, CredentialError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     values["next_run_at"] = values["next_run_at"] or values["starts_at"]
-    return schedule_json(services().workspace.create(Schedule, **values))
+    schedule = services().workspace.create(Schedule, **values)
+    if schedule.project_id:
+        record_project_activity(schedule.project_id, "schedule.created", "schedule", schedule.id, f"Đã tạo lịch {schedule.title}.")
+    return schedule_json(schedule)
 
 
 def _schedule_proposal_block(session, chat_id: str, proposal_id: str):
@@ -1784,13 +1873,18 @@ def update_schedule(schedule_id: str, payload: ScheduleUpdateRequest) -> dict[st
     item = services().workspace.update(Schedule, schedule_id, **values)
     if item and {"provider", "model"}.intersection(values) and item.chat_id:
         services().chats.update(item.chat_id, provider=item.provider, model=item.model)
+    if item and item.project_id:
+        record_project_activity(item.project_id, "schedule.updated", "schedule", item.id, f"Đã cập nhật lịch {item.title}.")
     return schedule_json(item)
 
 
 @app.delete("/api/schedules/{schedule_id}", status_code=204, tags=["Schedules"], responses=API_ERROR_RESPONSES)
 def delete_schedule(schedule_id: str) -> None:
-    if not services().workspace.delete(Schedule, schedule_id):
+    current = services().workspace.get(Schedule, schedule_id)
+    if current is None or not services().workspace.delete(Schedule, schedule_id):
         raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND_ERROR)
+    if current.project_id:
+        record_project_activity(current.project_id, "schedule.deleted", "schedule", schedule_id, f"Đã xóa lịch {current.title}.")
 
 
 @app.get("/api/schedules/{schedule_id}/runs", tags=["Schedules"], responses=API_ERROR_RESPONSES)
@@ -1897,11 +1991,11 @@ def google_connector_audit(limit: int = Query(default=12, ge=1, le=50)) -> list[
 
 
 @app.post("/api/connectors/google/authorize", tags=["Connectors"], responses=API_ERROR_RESPONSES)
-def google_authorize() -> dict[str, str]:
+def google_authorize(drive_write: bool = Query(default=False, alias="driveWrite")) -> dict[str, str]:
     if services().workspace.get_plugin_by_catalog_slug(GOOGLE_WORKSPACE_SLUG) is None:
         raise HTTPException(status_code=422, detail="Hãy thêm Google Workspace từ catalog trước khi kết nối.")
     try:
-        return {"authorizationUrl": services().google_workspace.authorization_url()}
+        return {"authorizationUrl": services().google_workspace.authorization_url(drive_write)}
     except GoogleConnectorError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -2055,12 +2149,13 @@ class ChatGenerationContext:
     personalization: str = ""
     web: str = ""
     web_sources: list[dict[str, str]] = field(default_factory=list)
+    retrieval_traces: list[dict[str, Any]] = field(default_factory=list)
 
 
 def load_generation_context(app_services: Services, chat: Chat, content: str, chat_id: str, history: list[dict[str, Any]], events: Queue) -> ChatGenerationContext:
     context = ChatGenerationContext(history=history)
     context.memory = load_memory_context(app_services, chat, content, chat_id, events)
-    context.knowledge = load_knowledge_context(app_services, chat, content, events)
+    context.knowledge, context.retrieval_traces = load_knowledge_context(app_services, chat, content, events)
     context.web, context.web_sources = load_web_context(app_services, chat, content, events)
     context.personalization = load_personalization_context(app_services, chat, content)
     return context
@@ -2076,16 +2171,20 @@ def load_memory_context(app_services: Services, chat: Chat, content: str, chat_i
         return ""
 
 
-def load_knowledge_context(app_services: Services, chat: Chat, content: str, events: Queue) -> str:
-    if chat.project_id is not None and not chat.collection_id: return ""
+def load_knowledge_context(app_services: Services, chat: Chat, content: str, events: Queue) -> tuple[str, list[dict[str, Any]]]:
+    if chat.project_id is not None and not chat.collection_id: return "", []
     try:
         events.put(("status", {"message": "Đang tìm trong Thư viện..."}))
         options = {"max_distance": OLLAMA_RAG_MAX_DISTANCE} if chat.provider == "ollama" else {}
-        result = app_services.knowledge.search(content, project_id=chat.project_id, collection_id=chat.collection_id, **options)
-        return "" if result == NO_DOCUMENTS_RESULT else result
+        traced_search = getattr(app_services.knowledge, "search_with_trace", None)
+        if traced_search is None:
+            result, traces = app_services.knowledge.search(content, project_id=chat.project_id, collection_id=chat.collection_id, **options), []
+        else:
+            result, traces = traced_search(content, project_id=chat.project_id, collection_id=chat.collection_id, **options)
+        return ("", []) if result == NO_DOCUMENTS_RESULT else (result, traces)
     except Exception:  # noqa: BLE001
         events.put(("status", {"message": "Không thể tìm Thư viện RAG, vẫn tiếp tục trả lời..."}))
-        return ""
+        return "", []
 
 
 def load_web_context(app_services: Services, chat: Chat, content: str, events: Queue) -> tuple[str, list[dict[str, str]]]:
@@ -2109,7 +2208,7 @@ def load_personalization_context(app_services: Services, chat: Chat, content: st
         return ""
 
 
-def persist_generation(app_services: Services, chat: Chat, chat_id: str, full_history: list[dict[str, Any]], agent: Agent, initial_history_length: int, result: Any, schedule_proposals: list[dict[str, Any]], web_sources: list[dict[str, str]], events: Queue) -> None:
+def persist_generation(app_services: Services, chat: Chat, chat_id: str, full_history: list[dict[str, Any]], agent: Agent, initial_history_length: int, result: Any, schedule_proposals: list[dict[str, Any]], web_sources: list[dict[str, str]], retrieval_traces: list[dict[str, Any]], events: Queue) -> None:
     if schedule_proposals:
         result.content_blocks = [*result.content_blocks, *schedule_proposals]
     if result.content_blocks:
@@ -2137,6 +2236,9 @@ def persist_generation(app_services: Services, chat: Chat, chat_id: str, full_hi
         assets = app_services.chats.link_artifacts_to_turn(chat_id, user_message["message_id"], assistant_message["message_id"], artifact_ids)
         if assets:
             assistant_message["artifacts"] = [library_asset_json(asset) for asset in assets]
+    if assistant_message and retrieval_traces:
+        app_services.workspace.save_retrieval_traces(assistant_message["message_id"], chat.project_id, retrieval_traces)
+        assistant_message["retrievalTrace"] = retrieval_traces
     BackgroundJobRepository(app_services.chats.database).enqueue("memory_index", {"chat_id": chat_id})
     completed_message = next(
         (item for item in reversed(saved_history) if item["role"] == "assistant"),
@@ -2165,14 +2267,22 @@ def run_agent_turn(app_services: Services, chat: Chat, chat_id: str, content: st
     agent = make_agent(
         app_services, chat, context.memory, context.knowledge,
         personalization_context=context.personalization,
-        plugin_tools=connected_read_tools(app_services.workspace.list_plugins()),
+        plugin_tools=project_connector_tools(app_services, chat),
         history=full_history, schedule_proposals=schedule_proposals,
         artifact_edit=artifact_edit, web_context=context.web,
     )
     initial_history_length = len(agent.history)
     result = agent.run(content, attachments, on_step=lambda item: events.put((item["type"], item)), cancel_event=cancel_event)
     if cancel_event.is_set(): raise AgentCancelled()
-    persist_generation(app_services, chat, chat_id, full_history, agent, initial_history_length, result, schedule_proposals, context.web_sources, events)
+    persist_generation(app_services, chat, chat_id, full_history, agent, initial_history_length, result, schedule_proposals, context.web_sources, context.retrieval_traces, events)
+
+
+def project_connector_tools(app_services: Services, chat: Chat) -> list[ToolSpec]:
+    """Expose connector reads only where a Project has explicitly scoped them."""
+    if not chat.project_id:
+        return connected_read_tools(app_services.workspace.list_plugins())
+    scopes = {item.connector_slug: item.config or {} for item in app_services.workspace.connector_scopes(chat.project_id)}
+    return project_scoped_read_tools(app_services.workspace.list_plugins(), scopes)
 
 
 def stream_chat(
