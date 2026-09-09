@@ -260,7 +260,7 @@ export function MessageList({
               </span>
               <div
                 className={cn(
-                  'min-w-0 max-w-[85%]',
+                  'min-w-0 max-w-[92%] sm:max-w-[88%]',
                   message.role === 'user' ? 'flex flex-col items-end' : 'pt-0.5',
                 )}
               >

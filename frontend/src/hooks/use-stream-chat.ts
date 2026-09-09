@@ -58,7 +58,7 @@ export const useStreamChat = () => {
         if (activeRequest.current?.runId === runId) activeRequest.current = null;
       }
     },
-    onMutate: ({
+    onMutate: async ({
       chatId,
       content,
       attachments = [],
@@ -66,6 +66,10 @@ export const useStreamChat = () => {
       skipOptimisticUser,
       replaceAssistantMessageId,
     }) => {
+      // A messages refetch can finish while the SSE request is still waiting
+      // for its first event. Cancel it before inserting the local user turn so
+      // the loading phase cannot erase the optimistic message.
+      await queryClient.cancelQueries({ queryKey: queryKeys.messages(chatId) });
       queryClient.setQueryData<Message[]>(queryKeys.messages(chatId), (items = []) => [
         ...items.filter((item) => item.messageId !== replaceAssistantMessageId),
         ...(skipOptimisticUser

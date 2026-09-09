@@ -32,7 +32,7 @@ function Get-WorkerLogFile {
 while ($true) {
     $logFile = Get-WorkerLogFile
     "$(Get-Date -Format o) Starting Agent Series worker" | Tee-Object -FilePath $logFile -Append
-    & $python -m agent_core.worker 2>&1 | Tee-Object -FilePath $logFile -Append
+    & $python -m agent_core.jobs.worker 2>&1 | Tee-Object -FilePath $logFile -Append
     $exitCode = $LASTEXITCODE
     "$(Get-Date -Format o) Worker exited with code $exitCode; restarting in $RestartDelaySeconds seconds" | Tee-Object -FilePath (Get-WorkerLogFile) -Append
     Start-Sleep -Seconds $RestartDelaySeconds

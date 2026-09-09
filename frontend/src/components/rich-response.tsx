@@ -29,7 +29,7 @@ function CodeBlock({ children, className }: { children?: ReactNode; className?: 
       >
         {copied ? <Check size={15} /> : <Copy size={15} />}
       </button>
-      <code className={`${className} block overflow-x-auto p-4 pr-12 font-mono text-sm leading-6`}>
+      <code className={`${className} block overflow-x-auto whitespace-pre-wrap break-words p-4 pr-12 font-mono text-sm leading-7`}>
         {children}
       </code>
     </span>
@@ -87,7 +87,7 @@ export function RichResponse({
   // fraction so labels such as "Cạnh đối" and "Cạnh kề" have readable clearance.
   const spaciousFractions = content.replace(/\\frac(?=\s*\{)/g, '\\dfrac');
   return (
-    <div className="rich-response min-w-0 text-[.95rem] leading-7">
+    <div className="rich-response min-w-0 break-words text-[.95rem] leading-7">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}

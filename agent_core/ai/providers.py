@@ -299,7 +299,11 @@ class OpenAIClient:
         # GPT-5.6 uses the current completion-token field. Keep the older field
         # for gpt-4o-mini so existing configurations remain compatible.
         if self._model.startswith("gpt-5.6"):
-            request["max_completion_tokens"] = self._max_tokens
+            # Tool arguments contain the generated file content. A normal
+            # chat can fit in the configured budget, but a JSON/CSV/code file
+            # can make the arguments much larger and otherwise get truncated
+            # into invalid JSON before create_file is called.
+            request["max_completion_tokens"] = max(self._max_tokens, 8192) if tools else self._max_tokens
             # /v1/chat/completions currently rejects GPT-5.6 function tools
             # when reasoning is enabled.  This agent owns the tool loop, so
             # disable model reasoning explicitly for this compatible path.

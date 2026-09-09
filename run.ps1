@@ -92,7 +92,7 @@ $workerStartupTimeoutSeconds = 90
 $workerOnline = $false
 for ($attempt = 0; $attempt -lt $workerStartupTimeoutSeconds; $attempt++) {
     Start-Sleep -Seconds 1
-    $workerOnline = & .\.venv\Scripts\python.exe -c "from datetime import UTC, datetime; from agent_core.config import load_settings; from agent_core.storage import BackgroundJobRepository, Database; print(BackgroundJobRepository(Database(load_settings().database_url)).worker_status(datetime.now(UTC))['online'])"
+    $workerOnline = & .\.venv\Scripts\python.exe -c "from datetime import UTC, datetime; from agent_core.runtime.config import load_settings; from agent_core.persistence.store import BackgroundJobRepository, Database; print(BackgroundJobRepository(Database(load_settings().database_url)).worker_status(datetime.now(UTC))['online'])"
     if ($workerOnline -eq "True") { break }
     if (($attempt + 1) % 10 -eq 0) {
         Write-Host "Worker dang khoi dong ($($attempt + 1)/$workerStartupTimeoutSeconds giay)..." -ForegroundColor Yellow

@@ -241,6 +241,7 @@ export function ChatWorkspace({
   };
   const handleStreamEvent = (name: string, data: Record<string, unknown>) => {
     if (name === 'status') setStatus(String(data.message));
+    if (name === 'done' || name === 'cancelled') setStatus(null);
     if (name === 'tool_call') setStatus(`Đang dùng ${String(data.name)}...`);
     if (name === 'tool_result') {
       setStatus(`Đã nhận kết quả từ ${String(data.name)}.`);
@@ -631,7 +632,7 @@ export function ChatWorkspace({
             <div className="flex min-h-0 flex-1">
               <div className="flex min-w-0 flex-1 flex-col">
                 <div ref={transcriptRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-                  <div className="mx-auto min-h-full w-full max-w-3xl px-4 sm:px-7 lg:px-10">
+                  <div className="mx-auto min-h-full w-full max-w-5xl px-4 sm:px-8 lg:px-12">
                     {pins.data?.length ? (
                       <div className="sticky top-0 z-10 flex gap-2 overflow-x-auto border-b bg-background/95 py-2.5 backdrop-blur">
                         <span className="shrink-0 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
@@ -678,7 +679,7 @@ export function ChatWorkspace({
                     />
                   </div>
                 </div>
-                <div className="mx-auto w-full max-w-3xl px-4 sm:px-7 lg:px-10">
+                <div className="mx-auto w-full max-w-5xl px-4 sm:px-8 lg:px-12">
                   <ChatComposer
                     key={activeChat?.id || 'new-chat'}
                     prompt={prompt}

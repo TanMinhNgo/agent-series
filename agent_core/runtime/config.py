@@ -17,8 +17,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Thư mục gốc của project agent = lùi 1 cấp từ file này: agent_core/config.py -> <root>
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+# Thư mục gốc của project agent: agent_core/runtime/config.py -> <root>
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Nạp biến môi trường từ .env ở gốc project agent (nếu có).
 load_dotenv(PROJECT_ROOT / ".env")
