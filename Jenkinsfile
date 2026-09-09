@@ -133,12 +133,48 @@ pipeline {
     stage('Wait for SonarQube gate') {
       steps { timeout(time: 10, unit: 'MINUTES') { waitForQualityGate abortPipeline: true } }
     }
+    stage('Prepare Trivy database') {
+      steps {
+        sh '''#!/usr/bin/env bash
+          set -euo pipefail
+          trivy_cache_volume=agent-series-trivy-cache
+          trivy_cache_dir=/root/.cache/trivy
+          ready_marker="$trivy_cache_dir/.agent-series-vuln-db-ready"
+          docker volume create "$trivy_cache_volume" >/dev/null
+
+          cache_is_verified() {
+            docker run --rm --entrypoint /bin/sh \
+              -v "$trivy_cache_volume:$trivy_cache_dir" \
+              aquasec/trivy:0.74.0 \
+              -c "test -f '$ready_marker' && test -f '$trivy_cache_dir/db/trivy.db'"
+          }
+
+          if docker run --rm \
+            -v "$trivy_cache_volume:$trivy_cache_dir" \
+            aquasec/trivy:0.74.0 image \
+            --db-repository ghcr.io/aquasecurity/trivy-db:2 \
+            --db-repository mirror.gcr.io/aquasec/trivy-db:2 \
+            --download-db-only; then
+            docker run --rm --entrypoint /bin/sh \
+              -v "$trivy_cache_volume:$trivy_cache_dir" \
+              aquasec/trivy:0.74.0 \
+              -c "touch '$ready_marker'"
+          elif cache_is_verified; then
+            echo 'Trivy DB update is temporarily unavailable; scanning with the last verified DB cache.' >&2
+          else
+            echo 'Trivy DB update failed before a verified cache was available; refusing an incomplete vulnerability scan.' >&2
+            exit 1
+          fi
+        '''
+      }
+    }
     stage('Trivy source and config') {
       steps {
         sh '''#!/usr/bin/env bash
           set -euo pipefail
           mkdir -p "$REPORTS_DIR/trivy"
-          scan_container="$(docker create --entrypoint /bin/sh aquasec/trivy:0.74.0 -c 'mkdir -p /src /report; tail -f /dev/null')"
+          trivy_cache_volume=agent-series-trivy-cache
+          scan_container="$(docker create --entrypoint /bin/sh -v "$trivy_cache_volume:/root/.cache/trivy" aquasec/trivy:0.74.0 -c 'mkdir -p /src /report; tail -f /dev/null')"
           cleanup_scan_container() {
             if [[ -n "${scan_container:-}" ]]; then docker rm -f "$scan_container" >/dev/null 2>&1 || true; fi
           }
@@ -147,7 +183,7 @@ pipeline {
           git archive --format=tar HEAD | docker cp - "$scan_container:/src"
 
           scan_status=0
-          docker exec "$scan_container" trivy fs --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --format json --output /report/fs.json /src || scan_status=$?
+          docker exec "$scan_container" trivy fs --skip-db-update --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --format json --output /report/fs.json /src || scan_status=$?
           docker exec "$scan_container" trivy config --exit-code 1 --severity HIGH,CRITICAL --format json --output /report/config.json /src || scan_status=$?
           docker cp "$scan_container:/report/." "$REPORTS_DIR/trivy"
           exit "$scan_status"
@@ -191,7 +227,8 @@ pipeline {
         sh '''#!/usr/bin/env bash
           set -euo pipefail
           mkdir -p "$REPORTS_DIR/trivy"
-          scan_container="$(docker create --entrypoint /bin/sh -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 -c 'mkdir -p /report; tail -f /dev/null')"
+          trivy_cache_volume=agent-series-trivy-cache
+          scan_container="$(docker create --entrypoint /bin/sh -v /var/run/docker.sock:/var/run/docker.sock -v "$trivy_cache_volume:/root/.cache/trivy" aquasec/trivy:0.74.0 -c 'mkdir -p /report; tail -f /dev/null')"
           cleanup_scan_container() {
             if [[ -n "${scan_container:-}" ]]; then docker rm -f "$scan_container" >/dev/null 2>&1 || true; fi
           }
@@ -201,7 +238,7 @@ pipeline {
           scan_status=0
           for image in agent-series-api:$IMAGE_TAG agent-series-worker:$IMAGE_TAG agent-series-frontend:$IMAGE_TAG; do
             safe_name=$(echo "$image" | tr ':/' '__')
-            docker exec "$scan_container" trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --format json --output "/report/${safe_name}.json" "$image" || scan_status=$?
+            docker exec "$scan_container" trivy image --skip-db-update --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --format json --output "/report/${safe_name}.json" "$image" || scan_status=$?
           done
           docker cp "$scan_container:/report/." "$REPORTS_DIR/trivy"
           exit "$scan_status"
