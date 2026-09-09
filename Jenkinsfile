@@ -48,6 +48,7 @@ pipeline {
           npm ci --ignore-scripts
           npm run format:check
           npm run lint
+          npm run test:coverage
           npm run build
         '''
       }

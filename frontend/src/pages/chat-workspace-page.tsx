@@ -25,6 +25,7 @@ import { useChatWorkspaceData } from '@/src/hooks/use-chat-workspace-data';
 import { request } from '@/src/hooks/client';
 import type { Chat, LibraryAsset, Message, Theme } from '@/src/types';
 import { SettingsApiKeysPage } from '@/src/pages/settings-api-keys-page';
+import { statusForStreamEvent } from '@/src/pages/chat-stream-status';
 import { useQueryClient } from '@tanstack/react-query';
 
 const WorkspacePanel = lazy(() =>
@@ -240,11 +241,9 @@ export function ChatWorkspace({
     setUiError(null);
   };
   const handleStreamEvent = (name: string, data: Record<string, unknown>) => {
-    if (name === 'status') setStatus(String(data.message));
-    if (name === 'done' || name === 'cancelled') setStatus(null);
-    if (name === 'tool_call') setStatus(`Đang dùng ${String(data.name)}...`);
+    const nextStatus = statusForStreamEvent(name, data);
+    if (nextStatus !== undefined) setStatus(nextStatus);
     if (name === 'tool_result') {
-      setStatus(`Đã nhận kết quả từ ${String(data.name)}.`);
       if (data.name === 'create_file' || data.name === 'create_artifact_version') {
         try {
           const result = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;

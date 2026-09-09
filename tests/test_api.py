@@ -87,6 +87,126 @@ def test_project_activity_json_includes_an_actor_without_exposing_email() -> Non
     }
 
 
+def test_project_activity_endpoint_mutations_are_recorded(monkeypatch) -> None:
+    activities: list[tuple] = []
+    timestamp = datetime(2026, 9, 9, tzinfo=UTC)
+    asset = SimpleNamespace(id="asset-1", artifact_id="artifact-1", name="brief.md", version=1, mime_type="text/markdown", size_bytes=10, source="upload", project_id="project-1", is_project_source=True, index_status="ready", index_error=None, created_at=timestamp)
+    chat = SimpleNamespace(
+        id="chat-1", title="Kế hoạch", provider="openai", model="gpt-test", project_id=None,
+        created_at=timestamp, updated_at=timestamp, pinned=False, archived=False, is_unread=False,
+        context_source_chat_id=None, parent_chat_id=None, branch_from_position=None, collection_id=None,
+    )
+    share = SimpleNamespace(token="token-1", title=chat.title, provider=chat.provider, model=chat.model, messages=[], created_at=timestamp, updated_at=timestamp, expires_at=None)
+
+    class Workspace:
+        def get(self, _entity, _id): return SimpleNamespace(id="project-1")
+        def add_project_activity(self, *args): activities.append(args)
+
+    class Library:
+        def update(self, *_args, **_kwargs): return asset
+
+    class Chats:
+        def get(self, _id): return chat
+        def update(self, _id, **values):
+            for key, value in values.items(): setattr(chat, key, value)
+            return chat
+        def create_or_update_share(self, *_args): return share
+        def revoke_share(self, _id): return True
+
+    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(workspace=Workspace(), library=Library(), chats=Chats()))
+    monkeypatch.setattr(main_module, "enqueue_artifact_index", lambda *_args: None)
+    monkeypatch.setattr(main_module, "selected_settings", lambda *_args: None)
+
+    main_module.update_library_asset("asset-1", main_module.UpdateArtifactRequest(isProjectSource=True))
+    updated = main_module.update_chat("chat-1", main_module.UpdateChatRequest(projectId="project-1"))
+    main_module.share_chat("chat-1")
+    main_module.revoke_share("chat-1")
+    main_module.record_workspace_activity("workspace.invitation_created", "workspace_invitation", "invite-1", "Đã mời thành viên.")
+
+    assert updated["projectId"] == "project-1"
+    assert [item[1] for item in activities] == [
+        "project_source.pinned", "chat.added", "chat.shared", "chat.share_revoked", "workspace.invitation_created",
+    ]
+
+
+def test_project_collections_and_overview_record_and_return_project_data(monkeypatch) -> None:
+    activities: list[tuple] = []
+    timestamp = datetime(2026, 9, 9, tzinfo=UTC)
+    project = SimpleNamespace(id="project-1", name="Roadmap", description=None, status="active", instructions=None, memory_mode="default", created_at=timestamp, updated_at=timestamp)
+    collection = SimpleNamespace(id="collection-1", project_id="project-1", name="Nguồn", description=None, created_at=timestamp, updated_at=timestamp)
+
+    activity = SimpleNamespace(
+        id="activity-1", event_type="project.updated", subject_type="project", subject_id="project-1",
+        summary="Đã cập nhật Project.", metadata_json=None, actor_user_id="user-1", created_at=timestamp,
+    )
+
+    class Result(list):
+        def all(self): return list(self)
+
+    class Session:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def scalars(self, _statement):
+            return Result([SimpleNamespace(id="user-1", display_name="Minh")]) if "users" in str(_statement) else Result()
+
+    class Workspace:
+        def get(self, _entity, _id): return project
+        def add_project_activity(self, *args): activities.append(args)
+        def project_activity(self, _id): return [activity]
+        def connector_scopes(self, _id): return []
+
+    class Knowledge:
+        def create_collection(self, *_args): return collection
+        def get_collection(self, _id): return collection
+        def update_collection(self, *_args): return collection
+        def collection_documents(self, _id): return []
+        def set_collection_documents(self, *_args): return []
+        def delete_collection(self, _id): return True
+
+    database = SimpleNamespace(session=lambda: Session())
+    service = SimpleNamespace(workspace=Workspace(), knowledge=Knowledge(), chats=SimpleNamespace(database=database))
+    monkeypatch.setattr(main_module, "services", lambda: service)
+
+    payload = main_module.KnowledgeCollectionRequest(name="Nguồn")
+    assert main_module.create_collection("project-1", payload)["id"] == "collection-1"
+    assert main_module.update_collection("collection-1", payload)["id"] == "collection-1"
+    assert main_module.set_collection_documents("collection-1", main_module.CollectionDocumentsRequest(documentIds=[]))["documentIds"] == []
+    main_module.delete_collection("collection-1")
+    detail = main_module.get_project("project-1")
+
+    assert detail["project"]["id"] == "project-1"
+    assert detail["activity"][0]["actorDisplayName"] == "Minh"
+    assert [item[1] for item in activities] == ["collection.created", "collection.updated", "collection.documents_updated", "collection.deleted"]
+
+
+def test_workspace_invitation_activity_is_recorded(monkeypatch) -> None:
+    activities: list[tuple] = []
+    invitation = SimpleNamespace(id="invite-1", email="member@example.com", role="viewer", expires_at=datetime(2026, 9, 16, tzinfo=UTC), created_at=datetime(2026, 9, 9, tzinfo=UTC))
+
+    class Workspace:
+        def invite(self, *_args): return invitation
+        def cancel_invitation(self, *_args): return True
+        def add_project_activity(self, *args): activities.append(args)
+
+    service = SimpleNamespace(
+        workspace=Workspace(),
+        settings=SimpleNamespace(app_web_url="http://localhost:5173"),
+        email=SimpleNamespace(enabled=False),
+    )
+    monkeypatch.setattr(main_module, "services", lambda: service)
+    monkeypatch.setattr(main_module, "require_workspace_owner", lambda _request: None)
+    token = main_module.current_workspace_id.set("workspace-1")
+    try:
+        request = SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id="owner-1")))
+        result = main_module.create_workspace_invitation(main_module.WorkspaceInvitationRequest(email="member@example.com"), request)
+        main_module.cancel_workspace_invitation("invite-1", request)
+    finally:
+        main_module.current_workspace_id.reset(token)
+
+    assert result["id"] == "invite-1"
+    assert [item[1] for item in activities] == ["workspace.invitation_created", "workspace.invitation_revoked"]
+
+
 def test_message_json_keeps_artifacts_attached_to_assistant_response() -> None:
     artifacts = [{"id": "asset-1", "name": "ke-hoach.md", "version": 1}]
 
