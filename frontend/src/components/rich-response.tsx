@@ -29,7 +29,9 @@ function CodeBlock({ children, className }: { children?: ReactNode; className?: 
       >
         {copied ? <Check size={15} /> : <Copy size={15} />}
       </button>
-      <code className={`${className} block overflow-x-auto whitespace-pre-wrap break-words p-4 pr-12 font-mono text-sm leading-7`}>
+      <code
+        className={`${className} block overflow-x-auto whitespace-pre-wrap break-words p-4 pr-12 font-mono text-sm leading-7`}
+      >
         {children}
       </code>
     </span>

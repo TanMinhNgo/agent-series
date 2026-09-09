@@ -235,8 +235,15 @@ def retrieval_trace_json(item: Any) -> dict[str, Any]:
     return {"sourceKind": item.source_kind, "sourceId": item.source_id, "sourceName": item.source_name, "version": item.version, "chunkRef": item.chunk_ref, "url": item.url}
 
 
-def project_activity_json(item: Any) -> dict[str, Any]:
-    return {"id": item.id, "eventType": item.event_type, "subjectType": item.subject_type, "subjectId": item.subject_id, "summary": item.summary, "metadata": item.metadata_json or {}, "createdAt": item.created_at.isoformat()}
+def project_activity_json(item: Any, actor: User | None = None) -> dict[str, Any]:
+    """Serialize an activity without exposing users outside its workspace."""
+    return {
+        "id": item.id, "eventType": item.event_type, "subjectType": item.subject_type,
+        "subjectId": item.subject_id, "summary": item.summary, "metadata": item.metadata_json or {},
+        "actorUserId": item.actor_user_id,
+        "actorDisplayName": actor.display_name if actor else None,
+        "createdAt": item.created_at.isoformat(),
+    }
 
 
 def record_project_activity(project_id: str | None, event_type: str, subject_type: str, subject_id: str | None, summary: str) -> None:
@@ -244,6 +251,13 @@ def record_project_activity(project_id: str | None, event_type: str, subject_typ
     writer = getattr(getattr(services(), "workspace", None), "add_project_activity", None)
     if project_id and writer is not None:
         writer(project_id, event_type, subject_type, subject_id, summary)
+
+
+def record_workspace_activity(event_type: str, subject_type: str, subject_id: str | None, summary: str) -> None:
+    """Workspace-wide events are shown in every Project activity feed."""
+    writer = getattr(getattr(services(), "workspace", None), "add_project_activity", None)
+    if writer is not None:
+        writer(None, event_type, subject_type, subject_id, summary)
 
 
 def plugin_json(item: Plugin) -> dict[str, Any]:
@@ -716,6 +730,7 @@ def create_workspace_invitation(payload: WorkspaceInvitationRequest, request: Re
     if "@" not in email:
         raise HTTPException(status_code=422, detail="Email lời mời không hợp lệ.")
     item = services().workspace.invite(current_workspace_id.get(), email, payload.role, request.state.user.id, datetime.now(UTC) + timedelta(days=7))
+    record_workspace_activity("workspace.invitation_created", "workspace_invitation", item.id, f"Đã mời {email} vào workspace với quyền {payload.role}.")
     result = invitation_json(item)
     invite_url = f"{services().settings.app_web_url}/?invite={item.id}"
     if services().email.enabled:
@@ -735,6 +750,7 @@ def cancel_workspace_invitation(invitation_id: str, request: Request) -> None:
     require_workspace_owner(request)
     if not services().workspace.cancel_invitation(current_workspace_id.get(), invitation_id):
         raise HTTPException(status_code=404, detail="Không tìm thấy lời mời.")
+    record_workspace_activity("workspace.invitation_revoked", "workspace_invitation", invitation_id, "Đã thu hồi lời mời vào workspace.")
 
 
 @app.patch("/api/workspaces/current/members/{user_id}", tags=["Workspaces"], responses=API_ERROR_RESPONSES)
@@ -1201,8 +1217,12 @@ def update_library_asset(asset_id: str, payload: UpdateArtifactRequest) -> dict[
         raise HTTPException(status_code=404, detail=ARTIFACT_NOT_FOUND_ERROR)
     enqueue_artifact_index(item)
     if getattr(item, "project_id", None):
-        event = "project_source.updated" if values.get("is_project_source") is not None else "artifact.updated"
-        record_project_activity(item.project_id, event, "artifact", item.id, f"Đã cập nhật file {item.name}.")
+        if "is_project_source" in values:
+            event = "project_source.pinned" if item.is_project_source else "project_source.unpinned"
+            summary = f"Đã {'ghim' if item.is_project_source else 'bỏ ghim'} file {item.name} làm nguồn Project."
+        else:
+            event, summary = "artifact.updated", f"Đã cập nhật file {item.name}."
+        record_project_activity(item.project_id, event, "artifact", item.id, summary)
     return library_asset_json(item)
 
 
@@ -1292,6 +1312,7 @@ def delete_library_asset(asset_id: str) -> None:
         if asset is None:
             raise HTTPException(status_code=404, detail="Không tìm thấy file trong Thư viện.")
         versions = session.scalars(select(LibraryAsset).where(LibraryAsset.artifact_id == asset.artifact_id)).all()
+        project_id, asset_name = asset.project_id, asset.name
         queue_file_cleanup(
             session,
             [{"storage": "media", "stored_name": item.stored_name, "storage_provider": item.storage_provider, "storage_file_id": item.storage_file_id} for item in versions],
@@ -1300,6 +1321,8 @@ def delete_library_asset(asset_id: str) -> None:
         for item in versions:
             session.delete(item)
         session.commit()
+    if project_id:
+        record_project_activity(project_id, "artifact.deleted", "artifact", asset_id, f"Đã xóa file {asset_name}.")
 
 
 @app.get(CHAT_DETAIL_PATH, tags=["Chats"], responses=API_ERROR_RESPONSES)
@@ -1430,6 +1453,7 @@ def update_chat(chat_id: str, payload: UpdateChatRequest) -> dict[str, Any]:
         if chat is None:
             raise HTTPException(status_code=404, detail=CHAT_NOT_FOUND_ERROR)
         provider, model = payload.provider or chat.provider, payload.model or chat.model
+        previous_project_id = chat.project_id
         selected_settings(provider, model, current_user_id.get())
         if payload.project_id and services().workspace.get(Project, payload.project_id) is None:
             raise HTTPException(status_code=422, detail=SELECTED_PROJECT_NOT_FOUND_ERROR)
@@ -1449,6 +1473,11 @@ def update_chat(chat_id: str, payload: UpdateChatRequest) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if chat is None:
         raise HTTPException(status_code=404, detail=CHAT_NOT_FOUND_ERROR)
+    if "project_id" in payload.model_fields_set and previous_project_id != chat.project_id:
+        if previous_project_id:
+            record_project_activity(previous_project_id, "chat.removed", "chat", chat.id, f"Đã chuyển chat {chat.title} ra khỏi Project.")
+        if chat.project_id:
+            record_project_activity(chat.project_id, "chat.added", "chat", chat.id, f"Đã thêm chat {chat.title} vào Project.")
     return chat_json(chat)
 
 
@@ -1466,13 +1495,19 @@ def share_chat(chat_id: str, payload: ShareRequest | None = None) -> dict[str, A
     share = services().chats.create_or_update_share(chat_id, expires_at)
     if share is None:
         raise HTTPException(status_code=404, detail=CHAT_NOT_FOUND_ERROR)
+    chat = services().chats.get(chat_id)
+    if chat and chat.project_id:
+        record_project_activity(chat.project_id, "chat.shared", "chat", chat.id, f"Đã tạo hoặc cập nhật liên kết chia sẻ cho chat {chat.title}.")
     return share_json(share)
 
 
 @app.delete("/api/chats/{chat_id}/share", status_code=204, tags=["Shared chats"], responses=API_ERROR_RESPONSES)
 def revoke_share(chat_id: str) -> None:
+    chat = services().chats.get(chat_id)
     if not services().chats.revoke_share(chat_id):
         raise HTTPException(status_code=404, detail="Chat chưa có liên kết chia sẻ.")
+    if chat and chat.project_id:
+        record_project_activity(chat.project_id, "chat.share_revoked", "chat", chat.id, f"Đã thu hồi liên kết chia sẻ của chat {chat.title}.")
 
 
 @app.get("/api/public/shares/{token}", tags=["Shared chats"], responses=API_ERROR_RESPONSES)
@@ -1501,7 +1536,9 @@ def create_collection(project_id: str, payload: KnowledgeCollectionRequest) -> d
     if services().workspace.get(Project, project_id) is None:
         raise HTTPException(status_code=404, detail="Không tìm thấy Project.")
     try:
-        return collection_json(services().knowledge.create_collection(project_id, payload.name, payload.description), [])
+        item = services().knowledge.create_collection(project_id, payload.name, payload.description)
+        record_project_activity(project_id, "collection.created", "collection", item.id, f"Đã tạo collection {item.name}.")
+        return collection_json(item, [])
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -1514,6 +1551,7 @@ def update_collection(collection_id: str, payload: KnowledgeCollectionRequest) -
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if item is None:
         raise HTTPException(status_code=404, detail=COLLECTION_NOT_FOUND_ERROR)
+    record_project_activity(item.project_id, "collection.updated", "collection", item.id, f"Đã cập nhật collection {item.name}.")
     return collection_json(item, services().knowledge.collection_documents(item.id))
 
 
@@ -1523,15 +1561,19 @@ def set_collection_documents(collection_id: str, payload: CollectionDocumentsReq
         item = services().knowledge.get_collection(collection_id)
         if item is None:
             raise HTTPException(status_code=404, detail=COLLECTION_NOT_FOUND_ERROR)
-        return collection_json(item, services().knowledge.set_collection_documents(collection_id, payload.document_ids))
+        documents = services().knowledge.set_collection_documents(collection_id, payload.document_ids)
+        record_project_activity(item.project_id, "collection.documents_updated", "collection", item.id, f"Đã cập nhật tài liệu cho collection {item.name}.")
+        return collection_json(item, documents)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.delete("/api/collections/{collection_id}", status_code=204, tags=["Knowledge base"], responses=API_ERROR_RESPONSES)
 def delete_collection(collection_id: str) -> None:
-    if not services().knowledge.delete_collection(collection_id):
+    item = services().knowledge.get_collection(collection_id)
+    if item is None or not services().knowledge.delete_collection(collection_id):
         raise HTTPException(status_code=404, detail=COLLECTION_NOT_FOUND_ERROR)
+    record_project_activity(item.project_id, "collection.deleted", "collection", collection_id, f"Đã xóa collection {item.name}.")
 
 
 @app.get("/api/documents/{document_id}/file", tags=["Knowledge base"], responses=API_ERROR_RESPONSES)
@@ -1563,6 +1605,8 @@ async def upload_documents(files: list[UploadFile] = File(...), project_id: str 
             if created or document.status != "ready":
                 enqueue_document_index(document)
             uploaded.append(document)
+            if project_id:
+                record_project_activity(project_id, "document.uploaded", "document", document.id, f"Đã thêm tài liệu {document.original_name}.")
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     jobs = BackgroundJobRepository(services().chats.database)
@@ -1584,6 +1628,7 @@ def delete_document(document_id: str) -> None:
         document = session.get(Document, document_id)
         if document is None:
             raise HTTPException(status_code=404, detail=DOCUMENT_NOT_FOUND_ERROR)
+        project_id, document_name = document.project_id, document.original_name
         jobs = session.scalars(
             select(BackgroundJob).where(
                 BackgroundJob.type == "document_index",
@@ -1596,6 +1641,8 @@ def delete_document(document_id: str) -> None:
         queue_file_cleanup(session, [{"storage": "knowledge", "stored_name": document.stored_name, "storage_provider": document.storage_provider, "storage_file_id": document.storage_file_id}], f"document-cleanup:{document.id}")
         session.delete(document)
         session.commit()
+    if project_id:
+        record_project_activity(project_id, "document.deleted", "document", document_id, f"Đã xóa tài liệu {document_name}.")
 
 
 @app.post("/api/media", status_code=201, tags=["Media"], responses=API_ERROR_RESPONSES)
@@ -1645,7 +1692,11 @@ def get_project(project_id: str) -> dict[str, Any]:
         project_schedules = list(session.scalars(select(Schedule).where(Schedule.project_id == project_id).order_by(Schedule.starts_at.desc())))
     jobs = BackgroundJobRepository(services().chats.database)
     scopes = services().workspace.connector_scopes(project_id)
-    return {"project": project_json(project), "chats": [chat_json(item) for item in project_chats[:8]], "documents": [document_json(item, jobs.latest_for_document(item.id)) for item in project_documents], "assets": [library_asset_json(item) for item in project_assets[:12]], "projectSources": [library_asset_json(item) for item in project_assets if item.is_project_source], "schedules": [schedule_json(item) for item in project_schedules[:8]], "activity": [project_activity_json(item) for item in services().workspace.project_activity(project_id)], "connectorScopes": [{"connectorSlug": item.connector_slug, "config": item.config} for item in scopes]}
+    activity = services().workspace.project_activity(project_id)
+    actor_ids = [item.actor_user_id for item in activity if item.actor_user_id]
+    with services().chats.database.session() as session:
+        actors = {item.id: item for item in session.scalars(select(User).where(User.id.in_(actor_ids))).all()} if actor_ids else {}
+    return {"project": project_json(project), "chats": [chat_json(item) for item in project_chats[:8]], "documents": [document_json(item, jobs.latest_for_document(item.id)) for item in project_documents], "assets": [library_asset_json(item) for item in project_assets[:12]], "projectSources": [library_asset_json(item) for item in project_assets if item.is_project_source], "schedules": [schedule_json(item) for item in project_schedules[:8]], "activity": [project_activity_json(item, actors.get(item.actor_user_id)) for item in activity], "connectorScopes": [{"connectorSlug": item.connector_slug, "config": item.config} for item in scopes]}
 
 
 @app.put("/api/projects/{project_id}/connector-scopes", tags=["Projects"], responses=API_ERROR_RESPONSES)

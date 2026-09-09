@@ -13,6 +13,8 @@ type Activity = {
   subjectType: string;
   subjectId: string | null;
   summary: string;
+  actorUserId: string | null;
+  actorDisplayName: string | null;
   createdAt: string;
 };
 type Detail = {
@@ -127,6 +129,71 @@ export function ProjectOverviewPage() {
             )}
           </CardContent>
         </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Artifact mới</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {data.assets.length ? (
+              data.assets.slice(0, 6).map((item) => (
+                <a
+                  key={item.id}
+                  href={item.url}
+                  className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2 text-sm hover:bg-muted"
+                >
+                  <span className="truncate">{item.name}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">v{item.version}</span>
+                </a>
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground">Chưa có artifact trong Project.</p>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Lịch chạy gần đây</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {data.schedules.length ? (
+              data.schedules.slice(0, 6).map((item) => (
+                <Link
+                  key={item.id}
+                  to="/schedules"
+                  className="block rounded-lg bg-muted/50 px-3 py-2 text-sm hover:bg-muted"
+                >
+                  <p className="truncate font-medium">{item.title}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {item.nextRunAt ? `Chạy: ${time(item.nextRunAt)}` : item.status}
+                  </p>
+                </Link>
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground">Chưa có lịch chạy trong Project.</p>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Tài liệu</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {data.documents.length ? (
+              data.documents.slice(0, 6).map((item) => (
+                <a
+                  key={item.id}
+                  href={item.url}
+                  className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2 text-sm hover:bg-muted"
+                >
+                  <span className="truncate">{item.name}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{item.status}</span>
+                </a>
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground">Chưa có tài liệu trong Project.</p>
+            )}
+          </CardContent>
+        </Card>
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle>Hoạt động gần đây</CardTitle>
@@ -137,6 +204,9 @@ export function ProjectOverviewPage() {
               data.activity.map((item) => (
                 <div key={item.id} className="border-l-2 border-primary/40 pl-3">
                   <p className="text-sm">{item.summary}</p>
+                  {item.actorDisplayName ? (
+                    <p className="text-xs text-muted-foreground">{item.actorDisplayName}</p>
+                  ) : null}
                   <time className="text-xs text-muted-foreground">{time(item.createdAt)}</time>
                 </div>
               ))

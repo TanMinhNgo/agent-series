@@ -34,6 +34,7 @@ from api.main import (
     small_talk_response,
     prepare_chat_regeneration,
     persisted_history,
+    project_activity_json,
     recent_chat_history,
 )
 from agent_core.jobs.background import BackgroundWorker
@@ -57,6 +58,32 @@ def test_message_json_exposes_message_creation_time() -> None:
         "role": "user",
         "content": "Xin chào",
         "createdAt": created_at,
+    }
+
+
+def test_project_activity_json_includes_an_actor_without_exposing_email() -> None:
+    activity = SimpleNamespace(
+        id="activity-1",
+        event_type="artifact.deleted",
+        subject_type="artifact",
+        subject_id="asset-1",
+        summary="Đã xóa file brief.md.",
+        metadata_json=None,
+        actor_user_id="user-1",
+        created_at=datetime(2026, 9, 9, 9, 30, tzinfo=UTC),
+    )
+    actor = SimpleNamespace(display_name="Minh")
+
+    assert project_activity_json(activity, actor) == {
+        "id": "activity-1",
+        "eventType": "artifact.deleted",
+        "subjectType": "artifact",
+        "subjectId": "asset-1",
+        "summary": "Đã xóa file brief.md.",
+        "metadata": {},
+        "actorUserId": "user-1",
+        "actorDisplayName": "Minh",
+        "createdAt": "2026-09-09T09:30:00+00:00",
     }
 
 
