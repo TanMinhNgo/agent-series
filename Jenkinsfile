@@ -271,20 +271,20 @@ pipeline {
         }
       }
     }
-    stage('Deploy backend to OCI') {
+    stage('Deploy backend to AWS') {
       when { expression { params.GIT_REF == 'main' } }
       steps {
         withCredentials([
-          sshUserPrivateKey(credentialsId: 'aws-deploy-key', keyFileVariable: 'OCI_SSH_KEY', usernameVariable: 'OCI_SSH_USER'),
-          string(credentialsId: 'aws-deploy-host', variable: 'OCI_DEPLOY_HOST'),
-          file(credentialsId: 'aws-known-hosts', variable: 'OCI_KNOWN_HOSTS')
+          sshUserPrivateKey(credentialsId: 'aws-deploy-key', keyFileVariable: 'AWS_SSH_KEY', usernameVariable: 'AWS_SSH_USER'),
+          string(credentialsId: 'aws-deploy-host', variable: 'AWS_DEPLOY_HOST'),
+          file(credentialsId: 'aws-known-hosts', variable: 'AWS_KNOWN_HOSTS')
         ]) {
           sh '''#!/usr/bin/env bash
             set -euo pipefail
             remote_dir=agent-series
-            target="$OCI_SSH_USER@$OCI_DEPLOY_HOST"
-            ssh_args=(-i "$OCI_SSH_KEY" -o "UserKnownHostsFile=$OCI_KNOWN_HOSTS" -o StrictHostKeyChecking=yes)
-            scp_args=(-i "$OCI_SSH_KEY" -o "UserKnownHostsFile=$OCI_KNOWN_HOSTS" -o StrictHostKeyChecking=yes)
+            target="$AWS_SSH_USER@$AWS_DEPLOY_HOST"
+            ssh_args=(-i "$AWS_SSH_KEY" -o "UserKnownHostsFile=$AWS_KNOWN_HOSTS" -o StrictHostKeyChecking=yes)
+            scp_args=(-i "$AWS_SSH_KEY" -o "UserKnownHostsFile=$AWS_KNOWN_HOSTS" -o StrictHostKeyChecking=yes)
 
             ssh "${ssh_args[@]}" "$target" "install -d -m 700 '$remote_dir/backups'"
             scp "${scp_args[@]}" deploy/docker-compose.oci.yml deploy/Caddyfile "$target:$remote_dir/"
