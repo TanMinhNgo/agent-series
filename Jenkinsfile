@@ -277,7 +277,7 @@ pipeline {
         withCredentials([
           sshUserPrivateKey(credentialsId: 'aws-deploy-key', keyFileVariable: 'OCI_SSH_KEY', usernameVariable: 'OCI_SSH_USER'),
           string(credentialsId: 'aws-deploy-host', variable: 'OCI_DEPLOY_HOST'),
-          file(credentialsId: 'oci-known-hosts', variable: 'OCI_KNOWN_HOSTS')
+          file(credentialsId: 'aws-known-hosts', variable: 'OCI_KNOWN_HOSTS')
         ]) {
           sh '''#!/usr/bin/env bash
             set -euo pipefail
