@@ -195,17 +195,10 @@ pipeline {
       steps {
         sh '''#!/usr/bin/env bash
           set -euo pipefail
-          # OCI Always Free uses ARM. Load the ARM images locally so the existing
-          # Trivy stage can scan the exact artifacts before they reach Docker Hub.
-          docker run --privileged --rm tonistiigi/binfmt --install arm64
-          if docker buildx inspect agent-series-arm >/dev/null 2>&1; then
-            docker buildx use agent-series-arm
-          else
-            docker buildx create --name agent-series-arm --driver docker-container --use
-          fi
-          docker buildx inspect --bootstrap
-          docker buildx build --platform linux/arm64 --load --target api -t agent-series-api:$IMAGE_TAG -f Dockerfile.backend .
-          docker buildx build --platform linux/arm64 --load --target worker -t agent-series-worker:$IMAGE_TAG -f Dockerfile.backend .
+          # AWS t3.small is amd64; build the images natively so the exact
+          # artifacts scanned here run on the deployment VM.
+          docker build --target api -t agent-series-api:$IMAGE_TAG -f Dockerfile.backend .
+          docker build --target worker -t agent-series-worker:$IMAGE_TAG -f Dockerfile.backend .
           docker build -t agent-series-frontend:$IMAGE_TAG -f frontend/Dockerfile frontend
           printf 'POSTGRES_PASSWORD=validation-only\n' > .ci.env
           # The CI agent exposes only the Docker CLI, without the Compose plugin.

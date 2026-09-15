@@ -1,6 +1,6 @@
 # Deploy production: Vercel + OCI Always Free
 
-Frontend React/Vite chạy trên Vercel. OCI chỉ chạy FastAPI, worker và PostgreSQL; Caddy cấp HTTPS cho `api-*.duckdns.org`. Không kết nối Vercel trực tiếp với API: Vercel rewrite `/api/*`, nên session cookie, SSE và các link file tương đối vẫn cùng origin.
+Frontend React/Vite chạy trên Vercel. VM AWS EC2 chỉ chạy FastAPI, worker và PostgreSQL; Caddy cấp HTTPS cho `api-*.duckdns.org`. Không kết nối Vercel trực tiếp với API: Vercel rewrite `/api/*`, nên session cookie, SSE và các link file tương đối vẫn cùng origin.
 
 ## Provision một lần
 
