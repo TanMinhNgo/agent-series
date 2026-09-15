@@ -195,8 +195,17 @@ pipeline {
       steps {
         sh '''#!/usr/bin/env bash
           set -euo pipefail
-          docker build --target api -t agent-series-api:$IMAGE_TAG -f Dockerfile.backend .
-          docker build --target worker -t agent-series-worker:$IMAGE_TAG -f Dockerfile.backend .
+          # OCI Always Free uses ARM. Load the ARM images locally so the existing
+          # Trivy stage can scan the exact artifacts before they reach Docker Hub.
+          docker run --privileged --rm tonistiigi/binfmt --install arm64
+          if docker buildx inspect agent-series-arm >/dev/null 2>&1; then
+            docker buildx use agent-series-arm
+          else
+            docker buildx create --name agent-series-arm --driver docker-container --use
+          fi
+          docker buildx inspect --bootstrap
+          docker buildx build --platform linux/arm64 --load --target api -t agent-series-api:$IMAGE_TAG -f Dockerfile.backend .
+          docker buildx build --platform linux/arm64 --load --target worker -t agent-series-worker:$IMAGE_TAG -f Dockerfile.backend .
           docker build -t agent-series-frontend:$IMAGE_TAG -f frontend/Dockerfile frontend
           printf 'POSTGRES_PASSWORD=validation-only\n' > .ci.env
           # The CI agent exposes only the Docker CLI, without the Compose plugin.
@@ -266,6 +275,60 @@ pipeline {
               docker push "${remote_image}:latest"
             done
           '''
+        }
+      }
+    }
+    stage('Deploy backend to OCI') {
+      when { expression { params.GIT_REF == 'main' } }
+      steps {
+        withCredentials([
+          sshUserPrivateKey(credentialsId: 'oci-deploy-key', keyFileVariable: 'OCI_SSH_KEY', usernameVariable: 'OCI_SSH_USER'),
+          string(credentialsId: 'oci-deploy-host', variable: 'OCI_DEPLOY_HOST'),
+          file(credentialsId: 'oci-known-hosts', variable: 'OCI_KNOWN_HOSTS')
+        ]) {
+          sh '''#!/usr/bin/env bash
+            set -euo pipefail
+            remote_dir=/opt/agent-series
+            target="$OCI_SSH_USER@$OCI_DEPLOY_HOST"
+            ssh_args=(-i "$OCI_SSH_KEY" -o "UserKnownHostsFile=$OCI_KNOWN_HOSTS" -o StrictHostKeyChecking=yes)
+            scp_args=(-i "$OCI_SSH_KEY" -o "UserKnownHostsFile=$OCI_KNOWN_HOSTS" -o StrictHostKeyChecking=yes)
+
+            ssh "${ssh_args[@]}" "$target" "install -d -m 700 '$remote_dir/backups'"
+            scp "${scp_args[@]}" deploy/docker-compose.oci.yml deploy/Caddyfile "$target:$remote_dir/"
+            ssh "${ssh_args[@]}" "$target" "set -euo pipefail
+              cd '$remote_dir'
+              test -f .env
+              set -a; . ./.env; set +a
+              export IMAGE_TAG='sha-$GIT_SHA'
+              docker compose --env-file .env -f docker-compose.oci.yml pull api worker caddy
+              docker compose --env-file .env -f docker-compose.oci.yml up -d postgres
+              until docker compose --env-file .env -f docker-compose.oci.yml exec -T postgres pg_isready -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\"; do sleep 2; done
+              docker compose --env-file .env -f docker-compose.oci.yml exec -T postgres pg_dump -U \"\$POSTGRES_USER\" \"\$POSTGRES_DB\" | gzip > 'backups/pre-$GIT_SHA.sql.gz'
+              docker compose --env-file .env -f docker-compose.oci.yml run --rm api python -m alembic upgrade head
+              docker compose --env-file .env -f docker-compose.oci.yml up -d --remove-orphans
+              curl --fail --silent --show-error --retry 12 --retry-delay 5 \"https://\$BACKEND_DOMAIN/api/health\"
+              printf '%s\\n' 'sha-$GIT_SHA' > .deployed-sha"
+          '''
+        }
+      }
+    }
+    stage('Deploy frontend to Vercel') {
+      when { expression { params.GIT_REF == 'main' } }
+      steps {
+        withCredentials([
+          string(credentialsId: 'vercel-token', variable: 'VERCEL_TOKEN'),
+          string(credentialsId: 'vercel-org-id', variable: 'VERCEL_ORG_ID'),
+          string(credentialsId: 'vercel-project-id', variable: 'VERCEL_PROJECT_ID'),
+          string(credentialsId: 'vercel-backend-origin', variable: 'VERCEL_BACKEND_ORIGIN')
+        ]) {
+          dir('frontend') {
+            sh '''#!/usr/bin/env bash
+              set -euo pipefail
+              case "$VERCEL_BACKEND_ORIGIN" in https://*) ;; *) echo 'VERCEL_BACKEND_ORIGIN must be an HTTPS URL.' >&2; exit 1;; esac
+              node -e 'const fs = require("fs"); const origin = process.env.VERCEL_BACKEND_ORIGIN.replace(/\\/$/, ""); const template = fs.readFileSync("vercel.json.template", "utf8"); if (!origin || !template.includes("__BACKEND_ORIGIN__")) process.exit(1); fs.writeFileSync("vercel.json", template.replace("__BACKEND_ORIGIN__", origin));'
+              npx --yes vercel@59.17.0 --prod --yes --token "$VERCEL_TOKEN"
+            '''
+          }
         }
       }
     }

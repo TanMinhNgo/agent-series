@@ -184,6 +184,8 @@ Jenkins cần Docker daemon, Git credential ID `github-read-token`, secret text 
 
 Jenkins controller không chạy build trực tiếp. Tạo node inbound mang label `agent-series-ci`, rồi build `ci/jenkins-agent/Dockerfile`; agent này có Docker CLI, Python 3.12 và Node 22. Mount Docker socket của Docker Desktop vào agent để các stage build/scan tạo được container.
 
+Production có thể tách frontend Vercel khỏi backend OCI Always Free; Jenkins vẫn là release authority và chỉ deploy sau mọi gate. Xem [hướng dẫn Vercel + OCI](docs/deployment-vercel-oci.md).
+
 Tạo ba Docker Hub repository `<dockerhub-user>/agent-series-api`, `<dockerhub-user>/agent-series-worker`, `<dockerhub-user>/agent-series-frontend`. Chỉ build Jenkins được trigger từ nhánh `main` mới push image: mỗi image có tag bất biến `sha-<full-git-sha>` và `latest`. CD sau này phải pin vào tag `sha-...`, không deploy theo `latest`.
 
 Production compose dùng `docker-compose.prod.yml`. Tạo `.env` từ `.env.example`, đặt `POSTGRES_PASSWORD` mạnh và chạy `docker compose -f docker-compose.prod.yml up -d --build`. Frontend phục vụ ở `APP_PORT` (mặc định `8080`) và proxy `/api` vào API container.
