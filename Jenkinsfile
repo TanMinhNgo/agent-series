@@ -288,7 +288,7 @@ pipeline {
         ]) {
           sh '''#!/usr/bin/env bash
             set -euo pipefail
-            remote_dir=/opt/agent-series
+            remote_dir=agent-series
             target="$OCI_SSH_USER@$OCI_DEPLOY_HOST"
             ssh_args=(-i "$OCI_SSH_KEY" -o "UserKnownHostsFile=$OCI_KNOWN_HOSTS" -o StrictHostKeyChecking=yes)
             scp_args=(-i "$OCI_SSH_KEY" -o "UserKnownHostsFile=$OCI_KNOWN_HOSTS" -o StrictHostKeyChecking=yes)
