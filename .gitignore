@@ -46,3 +46,5 @@ frontend/vercel.json
 .vercel/
 
 /actions-runner/
+
+aws-known-hosts.txt
