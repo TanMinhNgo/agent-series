@@ -1,8 +1,8 @@
 """Stable ASGI entry point.
 
-Deployment commands intentionally keep using ``api.main:app``.  The application
-composition and HTTP handlers live in :mod:`api.app` so this module remains a
-small compatibility boundary rather than another place for route logic.
+Deployment commands intentionally keep using ``api.main:app``. Application
+composition is loaded through :mod:`api.app`; this module remains a stable
+compatibility boundary for tests and integrations.
 """
 
 import sys
