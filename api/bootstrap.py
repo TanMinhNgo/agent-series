@@ -586,60 +586,6 @@ def require_system_admin(request: Request):
     return user
 
 
-def list_workspaces(request: Request) -> list[dict[str, Any]]:
-    user = request.state.user
-    return [workspace_json(item, membership) for item, membership in services().workspace.list_for_user(user.id)]
-
-
-def create_workspace(payload: WorkspaceRequest, request: Request) -> dict[str, Any]:
-    item = services().workspace.create_workspace(request.state.user.id, payload.name.strip())
-    membership = services().workspace.membership(item.id, request.state.user.id)
-    return workspace_json(item, membership)
-
-
-def list_workspace_members(request: Request) -> list[dict[str, Any]]:
-    require_workspace_owner(request)
-    workspace_id = current_workspace_id.get()
-    with services().chats.database.session() as session:
-        rows = session.execute(select(WorkspaceMember, User).join(User).where(WorkspaceMember.workspace_id == workspace_id).execution_options(skip_user_scope=True)).all()
-    return [{"userId": member.user_id, "email": user.email, "displayName": user.display_name, "role": member.role} for member, user in rows]
-
-
-def list_workspace_invitations(request: Request) -> list[dict[str, Any]]:
-    require_workspace_owner(request)
-    return [invitation_json(item) for item in services().workspace.invitations(current_workspace_id.get())]
-
-
-def find_invitable_workspace_users(request: Request, q: str = Query(min_length=2, max_length=160)) -> list[dict[str, str | None]]:
-    """Return a deliberately small, owner-only autocomplete result set."""
-    require_workspace_owner(request)
-    workspace_id = current_workspace_id.get()
-    term = q.strip()
-    if len(term) < 2:
-        return []
-    with services().chats.database.session() as session:
-        existing_member_ids = select(WorkspaceMember.user_id).where(WorkspaceMember.workspace_id == workspace_id)
-        pending_emails = select(WorkspaceInvitation.email).where(WorkspaceInvitation.workspace_id == workspace_id)
-        statement = (
-            select(User)
-            .where(
-                User.is_active.is_(True),
-                User.id.not_in(existing_member_ids),
-                User.email.not_in(pending_emails),
-                or_(User.email.ilike(f"%{term}%"), User.display_name.ilike(f"%{term}%")),
-            )
-            .order_by(User.email)
-            .limit(10)
-            .execution_options(skip_user_scope=True)
-        )
-        admin_email = services().settings.system_admin_email.strip().lower() if services().settings.system_admin_email else ""
-        return [
-            {"id": user.id, "email": user.email, "displayName": user.display_name}
-            for user in session.scalars(statement)
-            if user.email.lower() != admin_email
-        ]
-
-
 def create_workspace_invitation(payload: WorkspaceInvitationRequest, request: Request) -> dict[str, Any]:
     require_workspace_owner(request)
     email = payload.email.strip().lower()
@@ -666,31 +612,6 @@ def cancel_workspace_invitation(invitation_id: str, request: Request) -> None:
     if not services().workspace.cancel_invitation(current_workspace_id.get(), invitation_id):
         raise HTTPException(status_code=404, detail="Không tìm thấy lời mời.")
     record_workspace_activity("workspace.invitation_revoked", "workspace_invitation", invitation_id, "Đã thu hồi lời mời vào workspace.")
-
-
-def update_workspace_member(user_id: str, payload: WorkspaceMemberRoleRequest, request: Request) -> dict[str, str]:
-    membership = require_workspace_owner(request)
-    if membership.user_id == user_id and payload.role != "owner":
-        raise HTTPException(status_code=422, detail="Owner hiện tại không thể tự hạ quyền.")
-    item = services().workspace.update_member_role(current_workspace_id.get(), user_id, payload.role)
-    if item is None:
-        raise HTTPException(status_code=404, detail="Không tìm thấy thành viên.")
-    return {"userId": item.user_id, "role": item.role}
-
-
-def remove_workspace_member(user_id: str, request: Request) -> None:
-    membership = require_workspace_owner(request)
-    if membership.user_id == user_id:
-        raise HTTPException(status_code=422, detail="Owner hiện tại không thể tự rời workspace.")
-    if not services().workspace.remove_member(current_workspace_id.get(), user_id):
-        raise HTTPException(status_code=404, detail="Không tìm thấy thành viên.")
-
-
-def accept_workspace_invitation(invitation_id: str, request: Request) -> dict[str, str]:
-    member = services().workspace.accept_invitation(invitation_id, request.state.user.id, request.state.user.email, datetime.now(UTC))
-    if member is None:
-        raise HTTPException(status_code=404, detail="Lời mời không tồn tại, đã hết hạn hoặc không dành cho tài khoản này.")
-    return {"workspaceId": member.workspace_id, "role": member.role}
 
 
 def selected_settings(provider: str, model: str, user_id: str | None) -> Settings:
