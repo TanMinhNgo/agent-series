@@ -1626,10 +1626,6 @@ def run_schedule_now(schedule_id: str) -> dict[str, str]:
     return {"status": "running", "chatId": chat.id, "runId": run_id}
 
 
-def list_plugins() -> list[dict[str, Any]]:
-    return [plugin_json(item) for item in services().workspace.list(Plugin)]
-
-
 def connector_audit_json(item) -> dict[str, Any]:
     return {
         "id": item.id,
@@ -1640,16 +1636,6 @@ def connector_audit_json(item) -> dict[str, Any]:
     }
 
 
-def set_google_plugin_connection(status: str, enabled: bool | None = None) -> None:
-    plugin = services().workspace.get_plugin_by_catalog_slug(GOOGLE_WORKSPACE_SLUG)
-    if plugin is None:
-        return
-    values: dict[str, Any] = {"connection_status": status}
-    if enabled is not None:
-        values["enabled"] = enabled
-    services().workspace.update(Plugin, plugin.id, **values)
-
-
 def set_plugin_connection(catalog_slug: str, status: str, enabled: bool | None = None) -> None:
     plugin = services().workspace.get_plugin_by_catalog_slug(catalog_slug)
     if plugin is None:
@@ -1658,152 +1644,6 @@ def set_plugin_connection(catalog_slug: str, status: str, enabled: bool | None =
     if enabled is not None:
         values["enabled"] = enabled
     services().workspace.update(Plugin, plugin.id, **values)
-
-
-def google_connector_status() -> dict[str, Any]:
-    return services().google_workspace.status()
-
-
-def google_connector_audit(limit: int = Query(default=12, ge=1, le=50)) -> list[dict[str, Any]]:
-    return [connector_audit_json(item) for item in services().google_workspace.repository.list_audit(GOOGLE_WORKSPACE_SLUG, limit)]
-
-
-def google_authorize(drive_write: bool = Query(default=False, alias="driveWrite")) -> dict[str, str]:
-    if services().workspace.get_plugin_by_catalog_slug(GOOGLE_WORKSPACE_SLUG) is None:
-        raise HTTPException(status_code=422, detail="Hãy thêm Google Workspace từ catalog trước khi kết nối.")
-    try:
-        return {"authorizationUrl": services().google_workspace.authorization_url(drive_write)}
-    except GoogleConnectorError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-
-def google_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None) -> RedirectResponse:
-    base_url = services().settings.app_web_url
-    if error or not code or not state:
-        return RedirectResponse(f"{base_url}/plugins?{urlencode({'google': 'cancelled'})}", status_code=303)
-    try:
-        services().google_workspace.complete_authorization(code, state)
-        set_google_plugin_connection("connected")
-        user = request.state.user
-        services().auth.repository.add_system_audit(
-            "plugin_connected",
-            actor_user_id=user.id,
-            subject_user_id=user.id,
-            summary="Đã kết nối Google Workspace (chỉ đọc).",
-        )
-        result = "connected"
-    except GoogleConnectorError:
-        result = "failed"
-    return RedirectResponse(f"{base_url}/plugins?{urlencode({'google': result})}", status_code=303)
-
-
-def google_disconnect(request: Request) -> None:
-    services().google_workspace.disconnect()
-    set_google_plugin_connection("not_connected", enabled=False)
-    user = request.state.user
-    services().auth.repository.add_system_audit(
-        "plugin_disconnected",
-        actor_user_id=user.id,
-        subject_user_id=user.id,
-        summary="Đã ngắt Google Workspace.",
-    )
-
-
-def github_connector_status() -> dict[str, Any]:
-    return services().github.status()
-
-
-def github_connector_audit(limit: int = Query(default=12, ge=1, le=50)) -> list[dict[str, Any]]:
-    return [connector_audit_json(item) for item in services().github.repository.list_audit(GITHUB_SLUG, limit)]
-
-
-def github_authorize() -> dict[str, str]:
-    if services().workspace.get_plugin_by_catalog_slug(GITHUB_SLUG) is None:
-        raise HTTPException(status_code=422, detail="Hãy thêm GitHub từ catalog trước khi kết nối.")
-    try:
-        return {"authorizationUrl": services().github.authorization_url()}
-    except GitHubConnectorError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-
-def github_callback(request: Request, installation_id: str | None = None, state: str | None = None, setup_action: str | None = None) -> RedirectResponse:
-    base_url = services().settings.app_web_url
-    if setup_action == "update" or not installation_id or not state:
-        return RedirectResponse(f"{base_url}/plugins?{urlencode({'github': 'cancelled'})}", status_code=303)
-    try:
-        services().github.complete_installation(installation_id, state)
-        set_plugin_connection(GITHUB_SLUG, "connected")
-        user = request.state.user
-        services().auth.repository.add_system_audit("plugin_connected", actor_user_id=user.id, subject_user_id=user.id, summary="Đã kết nối GitHub App (chỉ đọc).")
-        result = "connected"
-    except GitHubConnectorError:
-        result = "failed"
-    return RedirectResponse(f"{base_url}/plugins?{urlencode({'github': result})}", status_code=303)
-
-
-def github_disconnect(request: Request) -> None:
-    services().github.disconnect()
-    set_plugin_connection(GITHUB_SLUG, "not_connected", enabled=False)
-    user = request.state.user
-    services().auth.repository.add_system_audit("plugin_disconnected", actor_user_id=user.id, subject_user_id=user.id, summary="Đã ngắt GitHub App.")
-
-
-def plugin_catalog() -> list[dict[str, Any]]:
-    installed = services().workspace.catalog_plugin_ids()
-    return [catalog_json(item, installed.get(item.slug)) for item in CATALOG]
-
-
-def install_catalog_plugin(slug: str) -> dict[str, Any]:
-    item = find_catalog_plugin(slug)
-    if item is None:
-        raise HTTPException(status_code=404, detail="Không tìm thấy plugin trong catalog.")
-    existing = services().workspace.get_plugin_by_catalog_slug(slug)
-    if existing is not None:
-        return plugin_json(existing)
-    try:
-        plugin = services().workspace.create(
-            Plugin,
-            slug=item.slug,
-            name=item.name,
-            description=item.description,
-            enabled=False,
-            config={},
-            catalog_slug=item.slug,
-            category=item.category,
-            capabilities=list(item.capabilities),
-            connection_status="not_connected",
-        )
-    except IntegrityError:
-        plugin = services().workspace.get_plugin_by_catalog_slug(slug)
-        if plugin is None:
-            raise
-    return plugin_json(plugin)
-
-
-def create_plugin(payload: PluginRequest) -> dict[str, Any]:
-    try:
-        return plugin_json(services().workspace.create(Plugin, **payload.model_dump()))
-    except IntegrityError as exc:
-        raise HTTPException(status_code=422, detail="Slug plugin đã tồn tại.") from exc
-
-
-def update_plugin(plugin_id: str, payload: PluginUpdateRequest) -> dict[str, Any]:
-    current = services().workspace.get(Plugin, plugin_id)
-    if current is None:
-        raise HTTPException(status_code=404, detail="Không tìm thấy plugin.")
-    google_connected = services().google_workspace.status()["status"] == "connected" if current.catalog_slug == GOOGLE_WORKSPACE_SLUG else current.connection_status == "connected"
-    if payload.enabled and current.catalog_slug and not google_connected:
-        raise HTTPException(status_code=422, detail="Plugin catalog chưa được kết nối nên chưa thể bật.")
-    try:
-        item = services().workspace.update(Plugin, plugin_id, **payload.model_dump(exclude_unset=True))
-    except IntegrityError as exc:
-        raise HTTPException(status_code=422, detail="Slug plugin đã tồn tại.") from exc
-    return plugin_json(item)
-
-
-def delete_plugin(plugin_id: str) -> None:
-    if not services().workspace.delete(Plugin, plugin_id):
-        raise HTTPException(status_code=404, detail="Không tìm thấy plugin.")
 
 
 def prepare_generation_history(chat: Chat, agent: Agent, result: Any, schedule_proposals: list[dict[str, Any]], web_sources: list[dict[str, str]]) -> None:
