@@ -37,6 +37,11 @@ from api.modules.chats.runtime.history import (
     persisted_history as _persisted_history,
     recent_chat_history as _recent_chat_history,
 )
+from api.modules.chats.runtime.context import (
+    ChatGenerationContext as _ChatGenerationContext,
+    ContextDependencies as _ContextDependencies,
+    load_generation_context as _load_generation_context,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, RedirectResponse
@@ -2374,6 +2379,12 @@ created_artifact_ids = _created_artifact_ids
 ollama_recent_history = _ollama_recent_history
 persisted_history = _persisted_history
 recent_chat_history = _recent_chat_history
+ChatGenerationContext = _ChatGenerationContext
+_context_dependencies = _ContextDependencies(Project, NO_DOCUMENTS_RESULT, OLLAMA_RAG_MAX_DISTANCE, should_search_web, web_context_from_result)
+
+
+def load_generation_context(app_services, chat, content, chat_id, history, events, research_web=False):
+    return _load_generation_context(_context_dependencies, app_services, chat, content, chat_id, history, events, research_web)
 
 app.include_router(
     build_chat_stream_router(
