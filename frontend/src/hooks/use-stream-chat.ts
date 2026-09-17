@@ -12,6 +12,7 @@ type Variables = {
   attachments?: MediaAttachment[];
   editAssetId?: string | null;
   runId: string;
+  researchWeb?: boolean;
   skipOptimisticUser?: boolean;
   replaceAssistantMessageId?: string;
   onEvent: StreamEvent;
@@ -22,7 +23,15 @@ export const useStreamChat = () => {
   const queryClient = useQueryClient();
   const activeRequest = useRef<{ chatId: string; runId: string; controller: AbortController } | null>(null);
   const mutation = useMutation({
-    mutationFn: async ({ chatId, content, attachments = [], editAssetId, runId, onEvent }: Variables) => {
+    mutationFn: async ({
+      chatId,
+      content,
+      attachments = [],
+      editAssetId,
+      runId,
+      researchWeb = false,
+      onEvent,
+    }: Variables) => {
       const controller = new AbortController();
       activeRequest.current = { chatId, runId, controller };
       const response = await fetch(`${apiBaseUrl}/chats/${chatId}/stream`, {
@@ -36,6 +45,7 @@ export const useStreamChat = () => {
           content,
           attachmentIds: attachments.map((item) => item.id),
           runId,
+          researchWeb,
           ...(editAssetId ? { editAssetId } : {}),
         }),
       });

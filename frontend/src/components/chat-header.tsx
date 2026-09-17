@@ -32,6 +32,13 @@ export function ChatHeader({
 }: Props) {
   const selectedProvider = chat?.provider || provider;
   const selectedModel = chat?.model || model;
+  const modeLabels = {
+    standard: 'Thường',
+    plan: 'Lập kế hoạch',
+    deep: 'Suy nghĩ sâu',
+    research: 'Nghiên cứu',
+    image: 'Tạo ảnh',
+  } as const;
   const models = config && selectedProvider ? config.providers[selectedProvider] || [] : [];
   const [hasScrolled, setHasScrolled] = useState(() => window.scrollY > 0);
 
@@ -67,7 +74,7 @@ export function ChatHeader({
           </h1>
           <p className="text-xs text-muted-foreground">
             {selectedProvider && selectedModel
-              ? `${selectedProvider} · ${selectedModel}`
+              ? `${selectedProvider} · ${selectedModel} · ${modeLabels[chat?.mode || 'standard']}`
               : config
                 ? 'Chưa có model khả dụng'
                 : 'Đang tải cấu hình...'}

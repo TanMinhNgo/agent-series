@@ -35,3 +35,12 @@ def test_legacy_openai_model_keeps_max_tokens():
     client.complete("system", [], [])
     assert completions.kwargs["max_tokens"] == 99
     assert "reasoning_effort" not in completions.kwargs
+
+
+def test_gpt_54_uses_current_completion_token_parameter_without_gpt_56_override():
+    client, completions = _client("gpt-5.4-mini")
+    client.complete("system", [], [])
+
+    assert completions.kwargs["max_completion_tokens"] == 99
+    assert "max_tokens" not in completions.kwargs
+    assert "reasoning_effort" not in completions.kwargs

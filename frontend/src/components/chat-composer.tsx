@@ -22,6 +22,10 @@ type Props = {
   editingArtifact?: LibraryAsset | null;
   onCancelArtifactEdit?: () => void;
   onStop?: () => void;
+  mode: 'standard' | 'plan' | 'deep' | 'research' | 'image';
+  onModeChange: (mode: 'standard' | 'plan' | 'deep' | 'research' | 'image') => void;
+  researchWeb: boolean;
+  onResearchWebChange: (value: boolean) => void;
 };
 
 export function ChatComposer({
@@ -37,6 +41,10 @@ export function ChatComposer({
   editingArtifact,
   onCancelArtifactEdit,
   onStop,
+  mode,
+  onModeChange,
+  researchWeb,
+  onResearchWebChange,
 }: Props) {
   const composerRef = useRef<HTMLDivElement>(null);
 
@@ -46,6 +54,35 @@ export function ChatComposer({
 
   return (
     <div ref={composerRef} className="shrink-0 bg-background/95 pt-3 pb-4 backdrop-blur sm:pb-5">
+      <div className="mb-2 flex items-center gap-2 text-xs">
+        <label className="text-muted-foreground" htmlFor="chat-mode">
+          Chế độ
+        </label>
+        <select
+          id="chat-mode"
+          value={mode}
+          disabled={busy}
+          onChange={(event) => onModeChange(event.target.value as typeof mode)}
+          className="h-7 rounded-md border bg-background px-2"
+        >
+          <option value="standard">Thường</option>
+          <option value="plan">Lập kế hoạch</option>
+          <option value="deep">Suy nghĩ sâu</option>
+          <option value="research">Nghiên cứu</option>
+          <option value="image">Tạo ảnh</option>
+        </select>
+        {mode === 'plan' || mode === 'research' ? (
+          <label className="flex items-center gap-1 text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={researchWeb}
+              disabled={busy}
+              onChange={(event) => onResearchWebChange(event.target.checked)}
+            />
+            Tìm web cho tin nhắn này
+          </label>
+        ) : null}
+      </div>
       {templates.length ? (
         <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
           {templates.map((template) => (

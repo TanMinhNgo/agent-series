@@ -192,6 +192,7 @@ class Chat(UserOwned, Base):
     title: Mapped[str] = mapped_column(String(160), default="Cuộc trò chuyện mới")
     provider: Mapped[str] = mapped_column(String(32))
     model: Mapped[str] = mapped_column(String(160))
+    mode: Mapped[str] = mapped_column(String(16), default="standard")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     pinned: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -248,6 +249,7 @@ class ChatMessage(UserOwned, Base):
     attachments: Mapped[list | None] = mapped_column(JSON, nullable=True)
     content_blocks: Mapped[list | None] = mapped_column(JSON, nullable=True)
     sources: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    generated_asset_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     pinned: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
@@ -660,9 +662,9 @@ class ChatRepository:
     def __init__(self, database: Database):
         self.database = database
 
-    def create(self, provider: str, model: str, context_source_chat_id: str | None = None, project_id: str | None = None, collection_id: str | None = None) -> Chat:
+    def create(self, provider: str, model: str, context_source_chat_id: str | None = None, project_id: str | None = None, collection_id: str | None = None, mode: str = "standard") -> Chat:
         with self.database.session() as session:
-            chat = Chat(provider=provider, model=model, context_source_chat_id=context_source_chat_id, project_id=project_id, collection_id=collection_id)
+            chat = Chat(provider=provider, model=model, context_source_chat_id=context_source_chat_id, project_id=project_id, collection_id=collection_id, mode=mode)
             session.add(chat)
             session.commit()
             return chat
@@ -692,6 +694,7 @@ class ChatRepository:
                 title=user.content.strip()[:80] or "Nhánh hội thoại",
                 provider=parent.provider,
                 model=parent.model,
+                mode=parent.mode,
                 project_id=parent.project_id,
                 collection_id=parent.collection_id,
                 parent_chat_id=parent.id,
@@ -709,6 +712,7 @@ class ChatRepository:
                         attachments=source.attachments if source.role == "user" else None,
                         content_blocks=source.content_blocks if source.role == "assistant" else None,
                         sources=source.sources if source.role == "assistant" else None,
+                        generated_asset_ids=source.generated_asset_ids if source.role == "assistant" else None,
                     )
                 )
             session.commit()
@@ -806,6 +810,7 @@ class ChatRepository:
             "tool_call_id": item.get("id"), "tool_name": item.get("name"), "tool_calls": item.get("tool_calls"),
             "attachments": [{key: value for key, value in attachment.items() if key != "data"} for attachment in item.get("attachments", [])] or None,
             "content_blocks": item.get("content_blocks") or None, "sources": item.get("sources") or None,
+            "generated_asset_ids": item.get("generated_asset_ids") or None,
         }
 
     def _persist_history_message(self, session: Session, chat_id: str, message: ChatMessage | None, message_id: str, position: int, item: dict) -> None:
@@ -936,7 +941,7 @@ class ChatRepository:
             session.commit()
 
     def update(self, chat_id: str, **values) -> Chat | None:
-        allowed = {"title", "pinned", "archived", "provider", "model", "project_id", "collection_id"}
+        allowed = {"title", "pinned", "archived", "provider", "model", "project_id", "collection_id", "mode"}
         with self.database.session() as session:
             chat = session.get(Chat, chat_id)
             if chat is None:
@@ -1019,6 +1024,7 @@ class ChatRepository:
                     "attachments": message.attachments,
                     "content_blocks": message.content_blocks,
                     "sources": message.sources,
+                    "generated_asset_ids": message.generated_asset_ids,
                     "pinned": message.pinned,
                     "created_at": message.created_at.isoformat(),
                 }.items() if value is not None}

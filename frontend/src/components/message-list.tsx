@@ -296,6 +296,25 @@ export function MessageList({
                       ))}
                     </div>
                   ) : null}
+                  {message.generatedAssets?.length ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {message.generatedAssets.map((asset) => (
+                        <a
+                          key={asset.id}
+                          href={asset.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="overflow-hidden rounded-lg border bg-muted"
+                        >
+                          <img
+                            src={asset.url}
+                            alt={asset.name}
+                            className="max-h-80 max-w-full object-cover"
+                          />
+                        </a>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
                 {message.messageId && message.role === 'assistant' && onBranch && onRegenerate ? (
                   <AssistantMessageActions

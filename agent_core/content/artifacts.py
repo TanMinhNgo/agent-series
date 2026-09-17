@@ -19,7 +19,7 @@ from ..tools.base import ToolSpec
 
 PREVIEW_LIMIT = 30_000
 ARTIFACT_NOT_FOUND = "Không tìm thấy artifact."
-EDITABLE_ARTIFACT_SUFFIXES = {".md", ".txt", ".json", ".py", ".ts", ".tsx"}
+EDITABLE_ARTIFACT_SUFFIXES = {".md", ".txt", ".json", ".py", ".ts", ".tsx", ".html", ".css", ".js"}
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,7 @@ def extract_artifact_text(data: bytes | Path, suffix: str) -> str:
     if isinstance(data, Path):
         data = data.read_bytes()
     suffix = suffix.lower()
-    if suffix in {".md", ".txt", ".csv", ".json", ".py", ".ts", ".tsx"}:
+    if suffix in {".md", ".txt", ".csv", ".json", ".py", ".ts", ".tsx", ".html", ".css", ".js"}:
         return data.decode("utf-8", errors="replace")
     if suffix == ".pdf":
         return "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(data)).pages)

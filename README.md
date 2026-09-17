@@ -85,6 +85,7 @@ Các biến quan trọng trong `.env`:
 | `KNOWLEDGE_DIR` | Thư mục lưu PDF gốc |
 | `MEDIA_DIR` | Thư mục lưu media người dùng upload |
 | `IMAGEKIT_PRIVATE_KEY`, `IMAGEKIT_URL_ENDPOINT` | ImageKit private storage và signed URL (tuỳ chọn) |
+| `OPENAI_IMAGE_MODEL` | Model OpenAI dùng riêng cho chế độ Tạo ảnh, mặc định `gpt-image-1.5` |
 | `GOOGLE_OAUTH_*` | OAuth Web Client cho Google Workspace connector (tuỳ chọn) |
 | `CONNECTOR_ENCRYPTION_KEY` | Fernet key mã hóa token connector trong PostgreSQL |
 

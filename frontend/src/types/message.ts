@@ -36,6 +36,7 @@ export type Message = {
   content: string;
   attachments?: MediaAttachment[];
   artifacts?: LibraryAsset[];
+  generatedAssets?: LibraryAsset[];
   contentBlocks?: ResponseBlock[];
   sources?: { name: string; url: string; kind?: 'library' | 'external' }[];
   retrievalTrace?: {

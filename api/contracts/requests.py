@@ -15,6 +15,7 @@ class CreateChatRequest(BaseModel):
     context_source_chat_id: str | None = Field(default=None, alias="contextSourceChatId")
     project_id: str | None = Field(default=None, alias="projectId")
     collection_id: str | None = Field(default=None, alias="collectionId")
+    mode: Literal["standard", "plan", "deep", "research", "image"] = "standard"
 
     model_config = {"populate_by_name": True}
 
@@ -27,6 +28,7 @@ class UpdateChatRequest(BaseModel):
     archived: bool | None = None
     project_id: str | None = Field(default=None, alias="projectId")
     collection_id: str | None = Field(default=None, alias="collectionId")
+    mode: Literal["standard", "plan", "deep", "research", "image"] | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -36,6 +38,7 @@ class ChatRequest(BaseModel):
     attachment_ids: list[str] = Field(default_factory=list, alias="attachmentIds")
     edit_asset_id: str | None = Field(default=None, alias="editAssetId")
     run_id: str | None = Field(default=None, alias="runId", min_length=1, max_length=100)
+    research_web: bool = Field(default=False, alias="researchWeb")
 
     model_config = {"populate_by_name": True}
 

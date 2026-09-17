@@ -3,6 +3,7 @@ export type Chat = {
   title: string;
   provider: string;
   model: string;
+  mode: 'standard' | 'plan' | 'deep' | 'research' | 'image';
   updatedAt: string;
   pinned: boolean;
   archived: boolean;

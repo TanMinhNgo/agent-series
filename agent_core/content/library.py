@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+from zipfile import ZIP_DEFLATED, ZipFile
 from io import BytesIO, StringIO
 from pathlib import Path
 from uuid import uuid4
@@ -14,14 +15,14 @@ from ..persistence.store import Database, LibraryAsset, current_user_id
 from .file_storage import FileStorageService
 
 ALLOWED_SUFFIXES = {
-    ".pdf", ".docx", ".xlsx", ".pptx", ".md", ".csv", ".json", ".txt", ".py", ".ts", ".tsx",
+    ".pdf", ".docx", ".xlsx", ".pptx", ".md", ".csv", ".json", ".txt", ".py", ".ts", ".tsx", ".html", ".css", ".js", ".zip",
     ".png", ".jpg", ".jpeg", ".webp", ".gif",
 }
 MAX_FILE_BYTES = 25 * 1024 * 1024
-EXPORT_FORMATS = {"docx", "xlsx", "pptx", "md", "csv", "pdf", "json", "txt", "py", "ts", "tsx"}
+EXPORT_FORMATS = {"docx", "xlsx", "pptx", "md", "csv", "pdf", "json", "txt", "py", "ts", "tsx", "html", "css", "js"}
 TEXT_EXPORT_MIME_TYPES = {
     "md": "text/markdown", "csv": "text/csv", "json": "application/json", "txt": "text/plain",
-    "py": "text/x-python", "ts": "text/typescript", "tsx": "text/tsx",
+    "py": "text/x-python", "ts": "text/typescript", "tsx": "text/tsx", "html": "text/html", "css": "text/css", "js": "text/javascript",
 }
 
 
@@ -42,6 +43,10 @@ class LibraryService:
             elif scope == "project" and project_id:
                 statement = statement.where(LibraryAsset.project_id == project_id)
             return list(session.scalars(statement))
+
+    def get(self, asset_id: str) -> LibraryAsset | None:
+        with self.database.session() as session:
+            return session.get(LibraryAsset, asset_id)
 
     def upload(
         self,
@@ -185,6 +190,22 @@ class LibraryService:
         filename = f"{Path(name).stem or 'tai-lieu'}.{format}"
         payload, mime = self._export_payload(format, content)
         return self.upload(filename, mime, payload, source="generated", project_id=project_id)
+
+    def create_web_bundle(self, name: str, html: str, css: str, js: str, include_zip: bool, project_id: str | None = None) -> list[LibraryAsset]:
+        stem = Path(name).stem or "website"
+        assets = [
+            self.upload(f"{stem}-index.html", "text/html", html.encode("utf-8"), source="generated", project_id=project_id),
+            self.upload(f"{stem}-style.css", "text/css", css.encode("utf-8"), source="generated", project_id=project_id),
+            self.upload(f"{stem}-app.js", "text/javascript", js.encode("utf-8"), source="generated", project_id=project_id),
+        ]
+        if include_zip:
+            stream = BytesIO()
+            with ZipFile(stream, "w", ZIP_DEFLATED) as archive:
+                archive.writestr("index.html", html)
+                archive.writestr("style.css", css)
+                archive.writestr("app.js", js)
+            assets.append(self.upload(f"{stem}.zip", "application/zip", stream.getvalue(), source="generated", project_id=project_id))
+        return assets
 
     @staticmethod
     def _export_payload(format: str, content: str) -> tuple[bytes, str]:

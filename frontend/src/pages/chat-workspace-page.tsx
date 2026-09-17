@@ -63,7 +63,7 @@ const ARTIFACT_PANEL_OPEN_KEY = 'agent-series.artifact-panel.open';
 const SELECTED_ARTIFACT_KEY = 'agent-series.artifact-panel.selected-artifact';
 const SIDEBAR_COLLAPSED_KEY = 'agent-series.sidebar.collapsed';
 
-type DraftSelection = { provider: string; model: string };
+type DraftSelection = { provider: string; model: string; mode: Chat['mode'] };
 type TemplateDraft = {
   id?: string;
   name: string;
@@ -74,7 +74,7 @@ type TemplateDraft = {
 function savedNewChatSelection(): DraftSelection {
   try {
     const value = sessionStorage.getItem(NEW_CHAT_SELECTION_KEY);
-    if (!value) return { provider: '', model: '' };
+    if (!value) return { provider: '', model: '', mode: 'standard' };
     const selection: unknown = JSON.parse(value);
     if (
       typeof selection === 'object' &&
@@ -82,12 +82,12 @@ function savedNewChatSelection(): DraftSelection {
       typeof (selection as DraftSelection).provider === 'string' &&
       typeof (selection as DraftSelection).model === 'string'
     ) {
-      return selection as DraftSelection;
+      return { ...(selection as DraftSelection), mode: (selection as DraftSelection).mode || 'standard' };
     }
   } catch {
     // A malformed browser value should fall back to the configured default.
   }
-  return { provider: '', model: '' };
+  return { provider: '', model: '', mode: 'standard' };
 }
 
 function savedArtifactPanelState() {
@@ -125,6 +125,7 @@ export function ChatWorkspace({
   );
   const [prompt, setPrompt] = useState('');
   const [draftSelection, setDraftSelection] = useState(savedNewChatSelection);
+  const [researchWeb, setResearchWeb] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [isResponding, setIsResponding] = useState(false);
   const [uiError, setUiError] = useState<string | null>(null);
@@ -204,6 +205,7 @@ export function ChatWorkspace({
   const draftModel = draftModels.includes(draftSelection.model)
     ? draftSelection.model
     : draftModels[0] || config.data?.defaultModel || draftSelection.model;
+  const activeMode = activeChat?.mode || draftSelection.mode;
 
   useEffect(() => {
     if (activeChat?.isUnread && !chatActions.markRead.isPending) {
@@ -314,7 +316,7 @@ export function ChatWorkspace({
     setStatus(null);
     setRunwayChatId(null);
     if (activeChat) {
-      const selection = { provider: activeChat.provider, model: activeChat.model };
+      const selection = { provider: activeChat.provider, model: activeChat.model, mode: activeChat.mode };
       sessionStorage.setItem(NEW_CHAT_SELECTION_KEY, JSON.stringify(selection));
       setDraftSelection(selection);
     }
@@ -337,7 +339,7 @@ export function ChatWorkspace({
     if (!activeChat) {
       const model = config.data?.providers[provider]?.[0];
       if (!model) return;
-      setDraftSelection({ provider, model });
+      setDraftSelection((selection) => ({ ...selection, provider, model }));
       return;
     }
     if (provider === activeChat.provider) return;
@@ -440,6 +442,7 @@ export function ChatWorkspace({
         (await createChat.mutateAsync({
           provider: draftProvider || undefined,
           model: draftModel || undefined,
+          mode: draftSelection.mode,
         }));
       if (!activeChat) navigate(`/chat/${chat.id}`);
       const knowledgeFiles = files.filter((file) => /\.(pdf|docx|md)$/i.test(file.name));
@@ -456,6 +459,7 @@ export function ChatWorkspace({
         runId: crypto.randomUUID(),
         attachments: uploadedImages,
         editAssetId: artifactEdit?.id,
+        researchWeb,
         onEvent: handleStreamEvent,
         onUserMessageQueued: () => {
           setRunwayChatId(chat.id);
@@ -701,6 +705,14 @@ export function ChatWorkspace({
                     editingArtifact={editingArtifact}
                     onCancelArtifactEdit={() => setEditingArtifact(null)}
                     onStop={() => void stopResponse()}
+                    mode={activeMode}
+                    onModeChange={(mode) => {
+                      setResearchWeb(false);
+                      if (activeChat) chatActions.update.mutate({ chatId: activeChat.id, values: { mode } });
+                      else setDraftSelection((selection) => ({ ...selection, mode }));
+                    }}
+                    researchWeb={researchWeb}
+                    onResearchWebChange={setResearchWeb}
                   />
                 </div>
               </div>

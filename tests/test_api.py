@@ -61,6 +61,23 @@ def test_message_json_exposes_message_creation_time() -> None:
     }
 
 
+def test_chat_request_accepts_a_per_message_research_web_toggle() -> None:
+    request = ChatRequest.model_validate({"content": "Tìm tài liệu mới", "researchWeb": True})
+
+    assert request.research_web is True
+
+
+def test_created_artifact_ids_keeps_all_web_bundle_files() -> None:
+    steps = [
+        SimpleNamespace(
+            tool="create_web_bundle",
+            result=json.dumps({"items": [{"id": "html"}, {"id": "css"}, {"id": "js"}, {"id": "zip"}]}),
+        )
+    ]
+
+    assert created_artifact_ids(steps) == ["html", "css", "js", "zip"]
+
+
 def test_project_activity_json_includes_an_actor_without_exposing_email() -> None:
     activity = SimpleNamespace(
         id="activity-1",

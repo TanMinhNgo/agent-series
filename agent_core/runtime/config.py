@@ -38,6 +38,7 @@ class Settings:
     anthropic_model: str
     openai_api_key: str
     openai_model: str
+    openai_image_model: str
     ollama_base_url: str
     ollama_model: str
 
@@ -165,6 +166,7 @@ def load_settings() -> Settings:
         # OpenAI (Codex/GPT): mặc định model gọn nhẹ; bạn tự đổi theo model mình có.
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-5.6-terra").strip(),
+        openai_image_model=os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1.5").strip(),
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip().rstrip("/"),
         ollama_model=os.getenv("OLLAMA_MODEL", "").strip(),
         temperature=float(os.getenv("AGENT_TEMPERATURE", "0.2")),
