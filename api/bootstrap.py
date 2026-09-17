@@ -140,53 +140,6 @@ from api.contracts.requests import (
 )
 from api.modules.chats.image_service import run_image_turn
 
-def chat_json(chat: Chat) -> dict[str, Any]:
-    return {
-        "id": chat.id,
-        "title": chat.title,
-        "provider": chat.provider,
-        "model": chat.model,
-        "mode": getattr(chat, "mode", "standard"),
-        "createdAt": chat.created_at.isoformat(),
-        "updatedAt": chat.updated_at.isoformat(),
-        "pinned": chat.pinned,
-        "archived": chat.archived,
-        "isUnread": bool(getattr(chat, "is_unread", False)),
-        "contextSourceChatId": chat.context_source_chat_id,
-        "projectId": getattr(chat, "project_id", None),
-        "parentChatId": getattr(chat, "parent_chat_id", None),
-        "branchFromPosition": getattr(chat, "branch_from_position", None),
-        "collectionId": getattr(chat, "collection_id", None),
-    }
-
-
-def share_json(share: ChatShare) -> dict[str, Any]:
-    return {"token": share.token, "title": share.title, "provider": share.provider, "model": share.model, "messages": share.messages, "createdAt": share.created_at.isoformat(), "updatedAt": share.updated_at.isoformat(), "expiresAt": share.expires_at.isoformat() if share.expires_at else None}
-
-
-def document_json(document: Document, job: BackgroundJob | None = None) -> dict[str, Any]:
-    return {
-        "id": document.id,
-        "name": document.original_name,
-        "status": document.status,
-        "pageCount": document.page_count,
-        "error": document.error,
-        "jobAttempts": job.attempts if job else 0,
-        "jobMaxAttempts": job.max_attempts if job else 3,
-        "jobError": job.last_error if job else None,
-        "projectId": document.project_id,
-        "url": f"/api/documents/{document.id}/file",
-    }
-
-
-def collection_json(item: KnowledgeCollection, documents: list[Document] | None = None) -> dict[str, Any]:
-    return {
-        "id": item.id, "projectId": item.project_id, "name": item.name, "description": item.description,
-        "documentIds": [document.id for document in documents] if documents is not None else None,
-        "createdAt": item.created_at.isoformat(), "updatedAt": item.updated_at.isoformat(),
-    }
-
-
 def media_json(media: MediaAttachment) -> dict[str, Any]:
     return {"id": media.id, "name": media.original_name, "mimeType": media.mime_type, "url": services().media.url_for(media), "sizeBytes": media.size_bytes}
 
@@ -242,41 +195,6 @@ def detach_response_sources(content: str, external_sources: list[dict[str, str]]
     return cleaned or "Đã sử dụng nguồn để trả lời.", sources
 
 
-def template_json(item: PromptTemplate) -> dict[str, Any]:
-    return {"id": item.id, "name": item.name, "content": item.content, "projectId": item.project_id, "createdAt": item.created_at.isoformat(), "updatedAt": item.updated_at.isoformat()}
-
-
-def project_json(item: Project) -> dict[str, Any]:
-    return {"id": item.id, "name": item.name, "description": item.description, "status": item.status, "instructions": item.instructions, "memoryMode": item.memory_mode, "createdAt": item.created_at.isoformat(), "updatedAt": item.updated_at.isoformat()}
-
-
-def schedule_json(item: Schedule) -> dict[str, Any]:
-    return {"id": item.id, "title": item.title, "startsAt": item.starts_at.isoformat(), "endsAt": item.ends_at.isoformat() if item.ends_at else None, "notes": item.notes, "projectId": item.project_id, "chatId": item.chat_id, "provider": item.provider, "model": item.model, "prompt": item.prompt, "requireWebSource": item.require_web_source, "notifyEmail": item.notify_email, "recurrence": item.recurrence, "status": item.status, "nextRunAt": item.next_run_at.isoformat() if item.next_run_at else None, "lastRunAt": item.last_run_at.isoformat() if item.last_run_at else None, "timezone": item.timezone, "createdAt": item.created_at.isoformat(), "updatedAt": item.updated_at.isoformat()}
-
-
-def schedule_run_json(item: ScheduleRun) -> dict[str, Any]:
-    return {"id": item.id, "scheduleId": item.schedule_id, "scheduledFor": item.scheduled_for.isoformat(), "status": item.status, "retryCount": item.retry_count, "retryAt": item.retry_at.isoformat() if item.retry_at else None, "summary": item.summary, "error": item.error, "emailStatus": item.email_status, "emailSentAt": item.email_sent_at.isoformat() if item.email_sent_at else None, "emailError": item.email_error, "startedAt": item.started_at.isoformat(), "finishedAt": item.finished_at.isoformat() if item.finished_at else None}
-
-
-def library_asset_json(item: LibraryAsset) -> dict[str, Any]:
-    return {"id": item.id, "artifactId": item.artifact_id, "name": item.name, "version": item.version, "mimeType": item.mime_type, "sizeBytes": item.size_bytes, "source": item.source, "projectId": item.project_id, "isProjectSource": item.is_project_source, "indexStatus": item.index_status, "indexError": item.index_error, "createdAt": item.created_at.isoformat(), "url": f"/api/library/assets/{item.id}/file"}
-
-
-def retrieval_trace_json(item: Any) -> dict[str, Any]:
-    return {"sourceKind": item.source_kind, "sourceId": item.source_id, "sourceName": item.source_name, "version": item.version, "chunkRef": item.chunk_ref, "url": item.url}
-
-
-def project_activity_json(item: Any, actor: User | None = None) -> dict[str, Any]:
-    """Serialize an activity without exposing users outside its workspace."""
-    return {
-        "id": item.id, "eventType": item.event_type, "subjectType": item.subject_type,
-        "subjectId": item.subject_id, "summary": item.summary, "metadata": item.metadata_json or {},
-        "actorUserId": item.actor_user_id,
-        "actorDisplayName": actor.display_name if actor else None,
-        "createdAt": item.created_at.isoformat(),
-    }
-
-
 def record_project_activity(project_id: str | None, event_type: str, subject_type: str, subject_id: str | None, summary: str) -> None:
     """Keep endpoint behavior compatible with lightweight service doubles in tests."""
     writer = getattr(getattr(services(), "workspace", None), "add_project_activity", None)
@@ -289,10 +207,6 @@ def record_workspace_activity(event_type: str, subject_type: str, subject_id: st
     writer = getattr(getattr(services(), "workspace", None), "add_project_activity", None)
     if writer is not None:
         writer(None, event_type, subject_type, subject_id, summary)
-
-
-def plugin_json(item: Plugin) -> dict[str, Any]:
-    return {"id": item.id, "slug": item.slug, "name": item.name, "description": item.description, "enabled": item.enabled, "config": item.config, "catalogSlug": item.catalog_slug, "category": item.category, "capabilities": item.capabilities, "connectionStatus": item.connection_status, "createdAt": item.created_at.isoformat(), "updatedAt": item.updated_at.isoformat()}
 
 
 def sse(event: str, payload: dict[str, Any]) -> str:
@@ -311,65 +225,6 @@ def model_error_message(chat: Chat, error: Exception) -> str:
     if "model" in normalized and ("not found" in normalized or "does not exist" in normalized):
         return f"Model {label} không khả dụng với API key hiện tại. Hãy chọn model khác trong danh sách."
     return f"Không thể gọi model {label}: {raw}"
-
-
-RECENT_USER_TURNS = 10
-OLLAMA_RECENT_USER_TURNS = 4
-OLLAMA_HISTORY_CHAR_LIMIT = 6_000
-
-
-def recent_chat_history(history: list[dict[str, Any]], max_user_turns: int = RECENT_USER_TURNS) -> list[dict[str, Any]]:
-    """Return whole turns from the oldest of the requested recent user prompts."""
-    user_positions = [index for index, item in enumerate(history) if item.get("role") == "user"]
-    if len(user_positions) <= max_user_turns:
-        return history
-    return history[user_positions[-max_user_turns]:]
-
-
-def ollama_recent_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep the local small-model prompt focused without altering stored history."""
-    recent = recent_chat_history(history, max_user_turns=OLLAMA_RECENT_USER_TURNS)
-    selected: list[dict[str, Any]] = []
-    remaining = OLLAMA_HISTORY_CHAR_LIMIT
-    for item in reversed(recent):
-        content = str(item.get("content") or "")
-        if not content:
-            selected.append(dict(item))
-            continue
-        if remaining <= 0:
-            continue
-        clipped = content[-remaining:]
-        copy = dict(item)
-        copy["content"] = clipped
-        selected.append(copy)
-        remaining -= len(clipped)
-    return list(reversed(selected))
-
-
-def persisted_history(full_history: list[dict[str, Any]], agent_history: list[dict[str, Any]], initial_length: int) -> list[dict[str, Any]]:
-    """Keep archived turns while appending only messages generated for this request."""
-    return [*full_history, *agent_history[initial_length:]]
-
-
-def created_artifact_ids(steps: list[Any]) -> list[str]:
-    """Return generated Library asset IDs from successful file-write tool results."""
-    asset_ids: list[str] = []
-    for step in steps:
-        if getattr(step, "tool", None) not in {"create_file", "create_artifact_version", "create_web_bundle"}:
-            continue
-        try:
-            payload = json.loads(getattr(step, "result", ""))
-        except (TypeError, ValueError):
-            continue
-        values = payload.get("items", []) if isinstance(payload, dict) else []
-        values = list(values) if isinstance(values, list) else []
-        if isinstance(payload, dict):
-            values.append(payload)
-        for value in values:
-            asset_id = value.get("id") if isinstance(value, dict) else None
-            if isinstance(asset_id, str) and asset_id not in asset_ids:
-                asset_ids.append(asset_id)
-    return asset_ids
 
 
 FRESH_WEB_PATTERNS = (
@@ -2028,75 +1883,6 @@ def update_plugin(plugin_id: str, payload: PluginUpdateRequest) -> dict[str, Any
 def delete_plugin(plugin_id: str) -> None:
     if not services().workspace.delete(Plugin, plugin_id):
         raise HTTPException(status_code=404, detail="Không tìm thấy plugin.")
-
-
-@dataclass
-class ChatGenerationContext:
-    history: list[dict[str, Any]]
-    memory: str = ""
-    knowledge: str = ""
-    personalization: str = ""
-    web: str = ""
-    web_sources: list[dict[str, str]] = field(default_factory=list)
-    retrieval_traces: list[dict[str, Any]] = field(default_factory=list)
-
-
-def load_generation_context(app_services: Services, chat: Chat, content: str, chat_id: str, history: list[dict[str, Any]], events: Queue, research_web: bool = False) -> ChatGenerationContext:
-    context = ChatGenerationContext(history=history)
-    context.memory = load_memory_context(app_services, chat, content, chat_id, events)
-    context.knowledge, context.retrieval_traces = load_knowledge_context(app_services, chat, content, events)
-    context.web, context.web_sources = load_web_context(app_services, chat, content, events, research_web)
-    context.personalization = load_personalization_context(app_services, chat, content)
-    return context
-
-
-def load_memory_context(app_services: Services, chat: Chat, content: str, chat_id: str, events: Queue) -> str:
-    if chat.provider == "ollama": return ""
-    try:
-        project = app_services.workspace.get(Project, chat.project_id) if chat.project_id else None
-        return app_services.memory.recall(content, chat_id, chat.context_source_chat_id, project_id=chat.project_id, project_only=bool(project and project.memory_mode == "project_only"))
-    except Exception:  # noqa: BLE001
-        events.put(("status", {"message": "Không thể đọc Memory, vẫn tiếp tục trả lời..."}))
-        return ""
-
-
-def load_knowledge_context(app_services: Services, chat: Chat, content: str, events: Queue) -> tuple[str, list[dict[str, Any]]]:
-    if chat.project_id is not None and not chat.collection_id: return "", []
-    try:
-        events.put(("status", {"message": "Đang tìm trong Thư viện..."}))
-        options = {"max_distance": OLLAMA_RAG_MAX_DISTANCE} if chat.provider == "ollama" else {}
-        traced_search = getattr(app_services.knowledge, "search_with_trace", None)
-        if traced_search is None:
-            result, traces = app_services.knowledge.search(content, project_id=chat.project_id, collection_id=chat.collection_id, **options), []
-        else:
-            result, traces = traced_search(content, project_id=chat.project_id, collection_id=chat.collection_id, **options)
-        return ("", []) if result == NO_DOCUMENTS_RESULT else (result, traces)
-    except Exception:  # noqa: BLE001
-        events.put(("status", {"message": "Không thể tìm Thư viện RAG, vẫn tiếp tục trả lời..."}))
-        return "", []
-
-
-def load_web_context(app_services: Services, chat: Chat, content: str, events: Queue, research_web: bool = False) -> tuple[str, list[dict[str, str]]]:
-    mode = getattr(chat, "mode", "standard")
-    if chat.provider == "ollama" or mode == "image" or (mode in {"plan", "research"} and not research_web): return "", []
-    if mode not in {"plan", "research"} and not should_search_web(content): return "", []
-    try:
-        events.put(("status", {"message": "Đang tìm nguồn web mới..."}))
-        context, sources = web_context_from_result(app_services.web_search.search(content))
-        if not context: events.put(("status", {"message": "Không thể tìm web, đang trả lời theo kiến thức sẵn có..."}))
-        return context, sources
-    except Exception:  # noqa: BLE001
-        events.put(("status", {"message": "Không thể tìm web, đang trả lời theo kiến thức sẵn có..."}))
-        return "", []
-
-
-def load_personalization_context(app_services: Services, chat: Chat, content: str) -> str:
-    if chat.provider == "ollama": return ""
-    try:
-        app_services.personalization.observe_user_message(content)
-        return app_services.personalization.context()
-    except Exception:  # noqa: BLE001
-        return ""
 
 
 def prepare_generation_history(chat: Chat, agent: Agent, result: Any, schedule_proposals: list[dict[str, Any]], web_sources: list[dict[str, str]]) -> None:
