@@ -770,38 +770,6 @@ def create_chat(payload: CreateChatRequest) -> dict[str, Any]:
     return chat_json(services().chats.create(selected.provider, selected.active_model, source_id, payload.project_id, payload.collection_id, payload.mode))
 
 
-def list_library_assets(
-    query: str = "",
-    scope: Literal["all", "global", "project"] = "all",
-    project_id: str | None = Query(default=None, alias="projectId"),
-) -> list[dict[str, Any]]:
-    if scope == "project" and not project_id:
-        raise HTTPException(status_code=422, detail="Cần chọn Project để lọc file.")
-    return [library_asset_json(item) for item in services().library.list(query, project_id, scope)]
-
-
-async def upload_library_assets(
-    files: list[UploadFile] = File(...),
-    project_id: str | None = Form(default=None, alias="projectId"),
-) -> dict[str, list[dict[str, Any]]]:
-    """Accept a batch without discarding valid files because one entry is invalid."""
-    uploaded: list[dict[str, Any]] = []
-    errors: list[dict[str, str]] = []
-    if project_id and services().workspace.get(Project, project_id) is None:
-        raise HTTPException(status_code=422, detail=SELECTED_PROJECT_NOT_FOUND_ERROR)
-    for file in files:
-        name = file.filename or "file"
-        try:
-            asset = services().library.upload(name, file.content_type or "", await file.read(), project_id=project_id)
-            enqueue_artifact_index(asset)
-            uploaded.append(library_asset_json(asset))
-            if project_id:
-                record_project_activity(project_id, "artifact.uploaded", "artifact", asset.id, f"Đã thêm file {asset.name}.")
-        except ValueError as exc:
-            errors.append({"name": name, "message": str(exc)})
-    return {"items": uploaded, "errors": errors}
-
-
 def update_library_asset(asset_id: str, payload: UpdateArtifactRequest) -> dict[str, Any]:
     values = payload.model_dump(exclude_unset=True)
     project_id = values.get("project_id")
@@ -829,17 +797,6 @@ def update_library_asset(asset_id: str, payload: UpdateArtifactRequest) -> dict[
     return library_asset_json(item)
 
 
-async def create_library_asset_version(asset_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
-    try:
-        item = services().library.create_version(asset_id, file.filename or "artifact", file.content_type or "", await file.read())
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    enqueue_artifact_index(item)
-    if getattr(item, "project_id", None):
-        record_project_activity(item.project_id, "artifact.version_created", "artifact", item.id, f"Đã tạo version {item.version} của {item.name}.")
-    return library_asset_json(item)
-
-
 def restore_library_asset_version(asset_id: str) -> dict[str, Any]:
     """Restore a chosen version by copying it into a new latest version."""
     try:
@@ -851,73 +808,6 @@ def restore_library_asset_version(asset_id: str) -> dict[str, Any]:
     if getattr(item, "project_id", None):
         record_project_activity(item.project_id, "artifact.restored", "artifact", item.id, f"Đã khôi phục {item.name} thành version {item.version}.")
     return library_asset_json(item)
-
-
-def list_library_asset_versions(asset_id: str) -> list[dict[str, Any]]:
-    items = services().library.versions(asset_id)
-    if not items:
-        raise HTTPException(status_code=404, detail=ARTIFACT_NOT_FOUND_ERROR)
-    return [library_asset_json(item) for item in items]
-
-
-def preview_library_asset(asset_id: str) -> dict[str, Any]:
-    try:
-        return services().artifacts.preview(asset_id)
-    except ValueError as exc:
-        message = str(exc)
-        raise HTTPException(status_code=404 if NOT_FOUND_MARKER in message else 422, detail=message) from exc
-
-
-def diff_library_asset(asset_id: str) -> dict[str, Any]:
-    try:
-        return services().artifacts.diff(asset_id)
-    except ValueError as exc:
-        message = str(exc)
-        raise HTTPException(status_code=404 if NOT_FOUND_MARKER in message else 422, detail=message) from exc
-
-
-def library_asset_file(asset_id: str) -> Response:
-    asset = services().library.ensure_remote(asset_id)
-    if asset is None:
-        raise HTTPException(status_code=404, detail=ARTIFACT_NOT_FOUND_ERROR)
-    if asset.storage_provider == "imagekit":
-        return RedirectResponse(services().library.storage.signed_url(asset.storage_provider, asset.stored_name, asset.storage_file_id), status_code=307)
-    path = Path(services().settings.media_dir) / asset.stored_name
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Không tìm thấy file artifact.")
-    return FileResponse(path, media_type=asset.mime_type, filename=asset.name, content_disposition_type="inline")
-
-
-def reindex_library_asset(asset_id: str) -> dict[str, Any]:
-    with services().chats.database.session() as session:
-        asset = session.get(LibraryAsset, asset_id)
-        if asset is None:
-            raise HTTPException(status_code=404, detail=ARTIFACT_NOT_FOUND_ERROR)
-        if not asset.is_project_source:
-            raise HTTPException(status_code=422, detail="Chỉ Project Source mới cần index.")
-        asset.index_status, asset.index_error = "queued", None
-        session.commit()
-    enqueue_artifact_index(asset)
-    return library_asset_json(asset)
-
-
-def delete_library_asset(asset_id: str) -> None:
-    with services().chats.database.session() as session:
-        asset = session.get(LibraryAsset, asset_id)
-        if asset is None:
-            raise HTTPException(status_code=404, detail="Không tìm thấy file trong Thư viện.")
-        versions = session.scalars(select(LibraryAsset).where(LibraryAsset.artifact_id == asset.artifact_id)).all()
-        project_id, asset_name = asset.project_id, asset.name
-        queue_file_cleanup(
-            session,
-            [{"storage": "media", "stored_name": item.stored_name, "storage_provider": item.storage_provider, "storage_file_id": item.storage_file_id} for item in versions],
-            f"artifact-cleanup:{asset.artifact_id}",
-        )
-        for item in versions:
-            session.delete(item)
-        session.commit()
-    if project_id:
-        record_project_activity(project_id, "artifact.deleted", "artifact", asset_id, f"Đã xóa file {asset_name}.")
 
 
 def get_chat(chat_id: str) -> dict[str, Any]:
