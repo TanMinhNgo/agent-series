@@ -42,6 +42,11 @@ from api.modules.chats.runtime.context import (
     ContextDependencies as _ContextDependencies,
     load_generation_context as _load_generation_context,
 )
+from api.modules.chats.runtime.persistence import (
+    PersistenceDependencies as _PersistenceDependencies,
+    persist_generation as _persist_generation,
+    persist_static_response as _persist_static_response,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, RedirectResponse
@@ -1456,35 +1461,6 @@ def attach_generation_evidence(app_services: Services, chat: Chat, chat_id: str,
         assistant_message["retrievalTrace"] = retrieval_traces
 
 
-def persist_generation(app_services: Services, chat: Chat, chat_id: str, full_history: list[dict[str, Any]], agent: Agent, initial_history_length: int, result: Any, schedule_proposals: list[dict[str, Any]], web_sources: list[dict[str, str]], retrieval_traces: list[dict[str, Any]], events: Queue) -> None:
-    prepare_generation_history(chat, agent, result, schedule_proposals, web_sources)
-    saved_history = persisted_history(full_history, agent.history, initial_history_length)
-    turn_created_at = datetime.now(UTC).isoformat()
-    for item in saved_history[len(full_history):]:
-        item.setdefault("created_at", turn_created_at)
-    app_services.chats.replace_history(chat_id, saved_history)
-    attach_generation_evidence(app_services, chat, chat_id, saved_history[len(full_history):], result, retrieval_traces)
-    BackgroundJobRepository(app_services.chats.database).enqueue("memory_index", {"chat_id": chat_id})
-    completed_message = next(
-        (item for item in reversed(saved_history) if item["role"] == "assistant"),
-        {"role": "assistant", "content": result.text, "content_blocks": result.content_blocks},
-    )
-    events.put(("message", message_json(completed_message)))
-    events.put(("done", {}))
-
-
-def persist_static_response(app_services: Services, chat_id: str, full_history: list[dict[str, Any]], content: str, response: str, events: Queue) -> None:
-    created_at = datetime.now(UTC).isoformat()
-    saved_history = [
-        *full_history,
-        {"role": "user", "content": content, "created_at": created_at},
-        {"role": "assistant", "content": response, "created_at": created_at},
-    ]
-    app_services.chats.replace_history(chat_id, saved_history)
-    events.put(("message", message_json(saved_history[-1])))
-    events.put(("done", {}))
-
-
 def run_agent_turn(app_services: Services, chat: Chat, chat_id: str, content: str, attachments: list[dict], artifact_edit: ArtifactEditContext | None, cancel_event: Event, full_history: list[dict[str, Any]], events: Queue, research_web: bool = False) -> None:
     context = load_generation_context(app_services, chat, content, chat_id, full_history, events, research_web)
     if cancel_event.is_set(): raise AgentCancelled()
@@ -1710,6 +1686,26 @@ _context_dependencies = _ContextDependencies(Project, NO_DOCUMENTS_RESULT, OLLAM
 
 def load_generation_context(app_services, chat, content, chat_id, history, events, research_web=False):
     return _load_generation_context(_context_dependencies, app_services, chat, content, chat_id, history, events, research_web)
+
+
+_persistence_dependencies = _PersistenceDependencies(
+    detach_response_sources,
+    sources_from_web_steps,
+    is_ollama_tool_echo,
+    persisted_history,
+    created_artifact_ids,
+    library_asset_json,
+    message_json,
+    lambda database: BackgroundJobRepository(database),
+)
+
+
+def persist_generation(app_services, chat, chat_id, full_history, agent, initial_history_length, result, schedule_proposals, web_sources, retrieval_traces, events):
+    return _persist_generation(_persistence_dependencies, app_services, chat, chat_id, full_history, agent, initial_history_length, result, schedule_proposals, web_sources, retrieval_traces, events)
+
+
+def persist_static_response(app_services, chat_id, full_history, content, response, events):
+    return _persist_static_response(_persistence_dependencies, app_services, chat_id, full_history, content, response, events)
 
 app.include_router(
     build_chat_stream_router(
