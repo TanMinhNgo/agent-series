@@ -351,6 +351,18 @@ export function ChatWorkspace({
       values: { provider, model },
     });
   };
+  const changeSelection = async (provider: string, model: string) => {
+    if (!activeChat) {
+      setDraftSelection((selection) => ({ ...selection, provider, model }));
+      return;
+    }
+    if (provider === activeChat.provider && model === activeChat.model) return;
+    setUiError(null);
+    await chatActions.update.mutateAsync({
+      chatId: activeChat.id,
+      values: { provider, model },
+    });
+  };
   const updateChat = async (
     chat: Chat,
     values: { pinned?: boolean; archived?: boolean; projectId?: string | null },
@@ -611,6 +623,7 @@ export function ChatWorkspace({
               onOpenSidebar={() => setSidebarOpen(true)}
               onProviderChange={(event) => void changeProvider(event)}
               onModelChange={(event) => void changeModel(event)}
+              onSelectionChange={(provider, model) => void changeSelection(provider, model)}
               collections={collections.data || []}
               onCollectionChange={(collectionId) =>
                 activeChat && chatActions.update.mutate({ chatId: activeChat.id, values: { collectionId } })

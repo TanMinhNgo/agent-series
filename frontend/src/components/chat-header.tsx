@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Menu } from 'lucide-react';
 
 import { Separator } from '@/components/ui/separator';
+import { ModelPicker, type ModelPickerProvider } from '@/components/ui/model-picker';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { Chat, Config } from '@/src/types';
 
@@ -14,6 +15,7 @@ type Props = {
   onOpenSidebar?: () => void;
   onProviderChange: (provider: string) => void;
   onModelChange: (model: string) => void;
+  onSelectionChange?: (provider: string, model: string) => void;
   collections?: { id: string; name: string }[];
   onCollectionChange?: (collectionId: string | null) => void;
 };
@@ -27,6 +29,7 @@ export function ChatHeader({
   onOpenSidebar,
   onProviderChange,
   onModelChange,
+  onSelectionChange,
   collections = [],
   onCollectionChange,
 }: Props) {
@@ -39,7 +42,24 @@ export function ChatHeader({
     research: 'Nghiên cứu',
     image: 'Tạo ảnh',
   } as const;
-  const models = config && selectedProvider ? config.providers[selectedProvider] || [] : [];
+  const pickerProviders = useMemo<ModelPickerProvider[]>(() => {
+    if (!config) return [];
+    return Object.entries(config.providers).map(([providerId, models]) => ({
+      id: providerId,
+      name: providerId === 'openai' ? 'OpenAI' : providerId === 'anthropic' ? 'Anthropic' : providerId === 'gemini' ? 'Google' : providerId === 'ollama' ? 'Ollama' : providerId,
+      models: models.map((modelId) => {
+        const imageModel = modelId.toLowerCase().includes('image');
+        const reasoningModel = /^(gpt-|claude-|gemini-|grok-)/i.test(modelId) && !imageModel;
+        return {
+          id: modelId,
+          name: modelId,
+          capabilities: imageModel ? ['image'] : reasoningModel ? ['reasoning'] : undefined,
+          thinking: reasoningModel ? ['low', 'medium', 'high'] : undefined,
+          defaultThinking: reasoningModel ? 'medium' : undefined,
+        };
+      }),
+    }));
+  }, [config]);
   const [hasScrolled, setHasScrolled] = useState(() => window.scrollY > 0);
 
   useEffect(() => {
@@ -85,65 +105,25 @@ export function ChatHeader({
         </div>
       </div>
       {config && selectedProvider && selectedModel && (
-        <div className="hidden items-center gap-1.5 sm:flex">
-          <Select
-            value={selectedProvider}
-            disabled={busy}
-            onValueChange={(value) => {
-              if (value) onProviderChange(value);
-            }}
-          >
-            <SelectTrigger className="h-8 max-w-32 rounded-lg border-transparent bg-muted/60 text-xs shadow-none hover:border-border hover:bg-muted">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {Object.keys(config.providers).map((name) => (
-                <SelectItem key={name} value={name}>
-                  {name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {chat?.projectId ? (
-            <Select
-              value={chat.collectionId || ''}
-              disabled={busy}
-              onValueChange={(value) => onCollectionChange?.(value || null)}
-            >
-              <SelectTrigger
-                className="h-8 max-w-40 rounded-lg border-transparent bg-muted/60 text-xs shadow-none hover:border-border hover:bg-muted"
-                aria-label="Collection tài liệu"
-              >
-                <SelectValue placeholder="Chưa chọn tài liệu" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="">Chưa chọn tài liệu</SelectItem>
-                {collections.map((collection) => (
-                  <SelectItem key={collection.id} value={collection.id}>
-                    {collection.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : null}
-          <Select
+        <div className="flex items-center gap-1.5">
+          <ModelPicker
+            providers={pickerProviders}
             value={selectedModel}
             disabled={busy}
-            onValueChange={(value) => {
-              if (value) onModelChange(value);
+            onValueChange={(modelId, providerId) => {
+              if (onSelectionChange) onSelectionChange(providerId, modelId);
+              else {
+                if (providerId !== selectedProvider) onProviderChange(providerId);
+                onModelChange(modelId);
+              }
             }}
-          >
-            <SelectTrigger className="h-8 max-w-48 rounded-lg border-transparent bg-muted/60 text-xs shadow-none hover:border-border hover:bg-muted">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {models.map((model) => (
-                <SelectItem key={model} value={model}>
-                  {model}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          />
+          {chat?.projectId ? (
+            <Select value={chat.collectionId || ''} disabled={busy} onValueChange={(value) => onCollectionChange?.(value || null)}>
+              <SelectTrigger className="h-9 max-w-40 rounded-lg border-transparent bg-muted/60 text-xs shadow-none hover:border-border hover:bg-muted" aria-label="Collection tài liệu"><SelectValue placeholder="Chưa chọn tài liệu" /></SelectTrigger>
+              <SelectContent><SelectItem value="">Chưa chọn tài liệu</SelectItem>{collections.map((collection) => <SelectItem key={collection.id} value={collection.id}>{collection.name}</SelectItem>)}</SelectContent>
+            </Select>
+          ) : null}
         </div>
       )}
       <Separator

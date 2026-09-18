@@ -1,7 +1,8 @@
-import { FilePenLine, X } from 'lucide-react';
+import { Brain, FilePenLine, ImageIcon, ListChecks, Search, Sparkles, X } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 
 import { PromptInput } from '@/components/ui/ai-chat-input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { LibraryAsset } from '@/src/types';
 
 type Props = {
@@ -47,6 +48,14 @@ export function ChatComposer({
   onResearchWebChange,
 }: Props) {
   const composerRef = useRef<HTMLDivElement>(null);
+  const modeOptions = [
+    { value: 'standard', label: 'Thường', description: 'Trả lời cân bằng', icon: Sparkles },
+    { value: 'plan', label: 'Lập kế hoạch', description: 'Chỉ lập kế hoạch', icon: ListChecks },
+    { value: 'deep', label: 'Suy nghĩ sâu', description: 'Phân tích kỹ hơn', icon: Brain },
+    { value: 'research', label: 'Nghiên cứu', description: 'Ưu tiên nguồn kiểm chứng', icon: Search },
+    { value: 'image', label: 'Tạo ảnh', description: 'Tạo hoặc chỉnh sửa ảnh', icon: ImageIcon },
+  ] as const;
+  const selectedMode = modeOptions.find((item) => item.value === mode) ?? modeOptions[0];
 
   useEffect(() => {
     if (editingArtifact) composerRef.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus();
@@ -54,26 +63,34 @@ export function ChatComposer({
 
   return (
     <div ref={composerRef} className="shrink-0 bg-background/95 pt-3 pb-4 backdrop-blur sm:pb-5">
-      <div className="mb-2 flex items-center gap-2 text-xs">
-        <label className="text-muted-foreground" htmlFor="chat-mode">
-          Chế độ
-        </label>
-        <select
-          id="chat-mode"
-          value={mode}
-          disabled={busy}
-          onChange={(event) => onModeChange(event.target.value as typeof mode)}
-          className="h-7 rounded-md border bg-background px-2"
-        >
-          <option value="standard">Thường</option>
-          <option value="plan">Lập kế hoạch</option>
-          <option value="deep">Suy nghĩ sâu</option>
-          <option value="research">Nghiên cứu</option>
-          <option value="image">Tạo ảnh</option>
-        </select>
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-muted-foreground">Chế độ</span>
+        <Select value={mode} disabled={busy} onValueChange={(value) => onModeChange(value as typeof mode)}>
+          <SelectTrigger id="chat-mode" className="h-9 w-auto min-w-36 gap-2 rounded-full border-border/80 bg-background px-3 text-xs shadow-sm hover:bg-muted/60">
+            <selectedMode.icon className="size-3.5 text-primary" />
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent align="start" className="w-64 rounded-xl p-1.5">
+            {modeOptions.map((item) => {
+              const Icon = item.icon;
+              return (
+                <SelectItem key={item.value} value={item.value} className="rounded-lg py-2.5 pl-9 pr-2">
+                  <span className="flex items-center gap-2">
+                    <Icon className="size-4 text-primary" />
+                    <span className="flex flex-col text-left">
+                      <span className="text-sm font-medium">{item.label}</span>
+                      <span className="text-[11px] text-muted-foreground">{item.description}</span>
+                    </span>
+                  </span>
+                </SelectItem>
+              );
+            })}
+          </SelectContent>
+        </Select>
         {mode === 'plan' || mode === 'research' ? (
-          <label className="flex items-center gap-1 text-muted-foreground">
+          <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-full border border-border/80 bg-background px-3 text-xs text-muted-foreground shadow-sm transition-colors hover:bg-muted/60 has-[:checked]:border-primary/40 has-[:checked]:bg-primary/5 has-[:checked]:text-foreground">
             <input
+              className="size-3.5 accent-primary"
               type="checkbox"
               checked={researchWeb}
               disabled={busy}
