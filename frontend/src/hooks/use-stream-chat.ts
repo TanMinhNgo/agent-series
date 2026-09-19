@@ -13,6 +13,7 @@ type Variables = {
   editAssetId?: string | null;
   runId: string;
   researchWeb?: boolean;
+  optimisticMessageId?: string;
   skipOptimisticUser?: boolean;
   replaceAssistantMessageId?: string;
   onEvent: StreamEvent;
@@ -75,18 +76,19 @@ export const useStreamChat = () => {
       onUserMessageQueued,
       skipOptimisticUser,
       replaceAssistantMessageId,
+      optimisticMessageId,
     }) => {
       // A messages refetch can finish while the SSE request is still waiting
       // for its first event. Cancel it before inserting the local user turn so
       // the loading phase cannot erase the optimistic message.
       await queryClient.cancelQueries({ queryKey: queryKeys.messages(chatId) });
       queryClient.setQueryData<Message[]>(queryKeys.messages(chatId), (items = []) => [
-        ...items.filter((item) => item.messageId !== replaceAssistantMessageId),
+        ...items.filter((item) => item.messageId !== replaceAssistantMessageId && item.messageId !== optimisticMessageId),
         ...(skipOptimisticUser
           ? []
           : [
               {
-                messageId: `optimistic-${crypto.randomUUID()}`,
+                messageId: optimisticMessageId ?? `optimistic-${crypto.randomUUID()}`,
                 role: 'user' as const,
                 content,
                 attachments,

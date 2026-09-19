@@ -42,4 +42,22 @@ describe('useStreamChat', () => {
       { role: 'user', content: 'Xin chào', optimistic: true },
     ]);
   });
+
+  it('reuses the first message seeded before navigating to the created chat', async () => {
+    const client = new QueryClient();
+    client.setQueryData(queryKeys.messages('new-chat'), [
+      { messageId: 'optimistic-first', role: 'user', content: 'Hello', optimistic: true },
+    ]);
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useStreamChat(), { wrapper });
+    await result.current.mutateAsync({
+      chatId: 'new-chat', content: 'Hello', runId: 'run-first',
+      optimisticMessageId: 'optimistic-first', onEvent: vi.fn(),
+    });
+    expect(client.getQueryData(queryKeys.messages('new-chat'))).toEqual([
+      expect.objectContaining({ messageId: 'optimistic-first', role: 'user', content: 'Hello' }),
+    ]);
+  });
 });

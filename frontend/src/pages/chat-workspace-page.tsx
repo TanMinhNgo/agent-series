@@ -23,6 +23,7 @@ import { useWorkspace } from '@/src/hooks/use-workspace';
 import { useAuth } from '@/src/hooks/use-auth';
 import { useChatWorkspaceData } from '@/src/hooks/use-chat-workspace-data';
 import { request } from '@/src/hooks/client';
+import { queryKeys } from '@/src/hooks/query-keys';
 import type { Chat, LibraryAsset, Message, Theme } from '@/src/types';
 import { SettingsApiKeysPage } from '@/src/pages/settings-api-keys-page';
 import { statusForStreamEvent } from '@/src/pages/chat-stream-status';
@@ -128,6 +129,7 @@ export function ChatWorkspace({
   const [researchWeb, setResearchWeb] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [isResponding, setIsResponding] = useState(false);
+  const [pendingUser, setPendingUser] = useState<Message | null>(null);
   const [uiError, setUiError] = useState<string | null>(null);
   const [userScrollRequest, setUserScrollRequest] = useState(0);
   const [runwayChatId, setRunwayChatId] = useState<string | null>(null);
@@ -440,13 +442,15 @@ export function ChatWorkspace({
     sendLock.current = true;
     setIsResponding(true);
     const content = contentValue.trim() || 'Hãy phân tích các tệp đính kèm này.';
+    const outgoing: Message = {
+      messageId: `optimistic-${crypto.randomUUID()}`,
+      role: 'user', content, optimistic: true, createdAt: new Date().toISOString(),
+    };
+    setPendingUser(outgoing);
     const artifactEdit = editingArtifact;
     setPrompt('');
     setEditingArtifact(null);
-    // Show the thinking state immediately. Waiting for the first SSE event
-    // leaves a noticeable blank period while uploads, retrieval, or the API
-    // connection is still being established.
-    setStatus('Agent đang suy nghĩ...');
+    setStatus(activeChat ? 'Agent đang suy nghĩ...' : 'Đang tạo cuộc trò chuyện...');
     setUiError(null);
     try {
       const chat =
@@ -456,7 +460,14 @@ export function ChatWorkspace({
           model: draftModel || undefined,
           mode: draftSelection.mode,
         }));
-      if (!activeChat) navigate(`/chat/${chat.id}`);
+      if (!activeChat) {
+        // Seed the route caches before starting uploads/SSE so the new chat
+        // frame renders first instead of waiting for the first AI event.
+        queryClient.setQueryData(queryKeys.chat(chat.id), chat);
+        queryClient.setQueryData(queryKeys.messages(chat.id), [outgoing]);
+        navigate(`/chat/${chat.id}`);
+      }
+      setStatus('Agent đang suy nghĩ...');
       const knowledgeFiles = files.filter((file) => /\.(pdf|docx|md)$/i.test(file.name));
       const images = files.filter((file) => file.type.startsWith('image/'));
       const [uploadedImages] = await Promise.all([
@@ -472,8 +483,10 @@ export function ChatWorkspace({
         attachments: uploadedImages,
         editAssetId: artifactEdit?.id,
         researchWeb,
+        optimisticMessageId: outgoing.messageId,
         onEvent: handleStreamEvent,
         onUserMessageQueued: () => {
+          setPendingUser(null);
           setRunwayChatId(chat.id);
           setUserScrollRequest((request) => request + 1);
         },
@@ -485,6 +498,7 @@ export function ChatWorkspace({
     } finally {
       sendLock.current = false;
       setIsResponding(false);
+      setPendingUser(null);
     }
   };
 
@@ -617,6 +631,9 @@ export function ChatWorkspace({
             <ChatHeader
               chat={activeChat}
               config={config.data || null}
+              onRefreshModels={() => { void config.refetch(); }}
+              refreshingModels={config.isFetching}
+              modelsRefreshFailed={config.isRefetchError}
               provider={draftProvider}
               model={draftModel}
               busy={createChat.isPending || chatActions.update.isPending || streamChat.isPending}
@@ -672,7 +689,8 @@ export function ChatWorkspace({
                     <MessageList
                       key={activeChat?.id || 'new-chat'}
                       chatId={activeChat?.id}
-                      messages={messages.data || []}
+                      messages={pendingUser && !(messages.data || []).some((item) => item.messageId === pendingUser.messageId)
+                        ? [...(messages.data || []), pendingUser] : messages.data || []}
                       status={status}
                       isResponding={isResponding}
                       error={error}

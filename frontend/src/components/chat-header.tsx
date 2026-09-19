@@ -12,6 +12,9 @@ type Props = {
   provider?: string;
   model?: string;
   busy?: boolean;
+  onRefreshModels?: () => void;
+  refreshingModels?: boolean;
+  modelsRefreshFailed?: boolean;
   onOpenSidebar?: () => void;
   onProviderChange: (provider: string) => void;
   onModelChange: (model: string) => void;
@@ -26,6 +29,9 @@ export function ChatHeader({
   provider,
   model,
   busy = false,
+  onRefreshModels,
+  refreshingModels = false,
+  modelsRefreshFailed = false,
   onOpenSidebar,
   onProviderChange,
   onModelChange,
@@ -44,9 +50,16 @@ export function ChatHeader({
   } as const;
   const pickerProviders = useMemo<ModelPickerProvider[]>(() => {
     if (!config) return [];
-    return Object.entries(config.providers).map(([providerId, models]) => ({
+    return Object.entries({ ...config.providers, ollama: config.providers.ollama ?? [] }).map(([providerId, models]) => ({
       id: providerId,
       name: providerId === 'openai' ? 'OpenAI' : providerId === 'anthropic' ? 'Anthropic' : providerId === 'gemini' ? 'Google' : providerId === 'ollama' ? 'Ollama' : providerId,
+      notice: providerId === 'ollama' ? (
+        <div className="space-y-2" role="status">
+          <p>{models.length ? 'Ollama đang kết nối.' : config.providerStatus?.ollama?.available ? 'Ollama chưa có model local. Hãy tải model trong Ollama rồi kiểm tra lại.' : 'Ollama chưa kết nối. Bạn có thể tắt để tiết kiệm RAM, mở khi cần rồi kiểm tra lại.'}</p>
+          {modelsRefreshFailed && <p className="text-destructive">Không tải được cấu hình. Vui lòng thử lại.</p>}
+          {onRefreshModels && <button type="button" disabled={refreshingModels} onClick={onRefreshModels} className="rounded-md border px-2.5 py-1.5 text-foreground hover:bg-muted disabled:opacity-50">{refreshingModels ? 'Đang kiểm tra…' : 'Kiểm tra lại Ollama'}</button>}
+        </div>
+      ) : undefined,
       models: models.map((modelId) => {
         const imageModel = modelId.toLowerCase().includes('image');
         const reasoningModel = /^(gpt-|claude-|gemini-|grok-)/i.test(modelId) && !imageModel;
@@ -59,7 +72,7 @@ export function ChatHeader({
         };
       }),
     }));
-  }, [config]);
+  }, [config, onRefreshModels, refreshingModels, modelsRefreshFailed]);
   const [hasScrolled, setHasScrolled] = useState(() => window.scrollY > 0);
 
   useEffect(() => {
@@ -104,7 +117,7 @@ export function ChatHeader({
           ) : null}
         </div>
       </div>
-      {config && selectedProvider && selectedModel && (
+      {config && (
         <div className="flex items-center gap-1.5">
           <ModelPicker
             providers={pickerProviders}

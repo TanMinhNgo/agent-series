@@ -270,37 +270,6 @@ app.add_middleware(
 )
 
 
-# Legacy implementation retained for direct compatibility; runtime middleware is installed from api.http.auth_middleware.
-async def require_authenticated_api_user(request: Request, call_next):
-    path = request.url.path
-    public_prefixes = ("/api/health", "/api/config", "/api/auth/", "/api/public/shares/", "/docs", "/openapi.json")
-    if not path.startswith("/api/") or path.startswith(public_prefixes) or request.method == "OPTIONS":
-        return await call_next(request)
-    user = services().auth.session_user(request.cookies.get(SESSION_COOKIE))
-    if user is None:
-        return Response(content=json.dumps({"detail": "Cần đăng nhập để truy cập workspace."}, ensure_ascii=False), status_code=401, media_type=JSON_MEDIA_TYPE)
-    requested_workspace_id = request.headers.get("X-Workspace-ID")
-    membership = services().workspace.membership(requested_workspace_id, user.id) if requested_workspace_id else services().workspace.default_for_user(user.id)
-    # Workspace bootstrap and invitation acceptance are the only private routes
-    # that can legitimately run before a selected membership exists.
-    bootstrap_paths = ("/api/workspaces",)
-    accepting_invitation = request.url.path.endswith("/accept")
-    if membership is None and not (request.url.path in bootstrap_paths or accepting_invitation):
-        return Response(content=json.dumps({"detail": "Không tìm thấy workspace bạn có quyền truy cập."}, ensure_ascii=False), status_code=403, media_type=JSON_MEDIA_TYPE)
-    if membership and request.method in {"POST", "PATCH", "PUT", "DELETE"} and membership.role == "viewer" and not accepting_invitation and request.url.path != "/api/workspaces":
-        return Response(content=json.dumps({"detail": "Bạn chỉ có quyền xem trong workspace này."}, ensure_ascii=False), status_code=403, media_type=JSON_MEDIA_TYPE)
-    token = current_user_id.set(user.id)
-    workspace_token = current_workspace_id.set(membership.workspace_id) if membership else None
-    request.state.user = user
-    request.state.workspace_membership = membership
-    try:
-        return await call_next(request)
-    finally:
-        if workspace_token is not None:
-            current_workspace_id.reset(workspace_token)
-        current_user_id.reset(token)
-
-
 def services() -> Services:
     return app.state.services
 

@@ -93,7 +93,7 @@ function ProtectedRoutes() {
   const props = { isSystemAdmin: auth.session.user.role === 'system_admin', navigate };
   return (
     <Routes>
-      <Route index element={<ChatPage {...props} />} />
+      <Route index element={<ChatRoute {...props} />} />
       <Route path="chat/:chatId" element={<ChatRoute {...props} />} />
       <Route path="library" element={<LibraryPage {...props} />} />
       <Route path="projects" element={<WorkspacePage {...props} view="projects" />} />

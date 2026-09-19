@@ -70,7 +70,7 @@ export function ChatComposer({
             <selectedMode.icon className="size-3.5 text-primary" />
             <SelectValue />
           </SelectTrigger>
-          <SelectContent align="start" className="w-64 rounded-xl p-1.5">
+          <SelectContent side="right" align="start" sideOffset={8} alignItemWithTrigger={false} className="w-64 rounded-xl p-1.5">
             {modeOptions.map((item) => {
               const Icon = item.icon;
               return (
