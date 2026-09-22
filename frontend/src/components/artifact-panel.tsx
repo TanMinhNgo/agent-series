@@ -441,18 +441,18 @@ export function ArtifactPanel({
     ...(versions.data ?? []).map((asset) => asset.version),
   );
 
-  const startResize = (event: PointerEvent<HTMLDivElement>) => {
+  const startResize = (event: PointerEvent<HTMLButtonElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
     resizeStart.current = { x: event.clientX, width: panelWidth };
     setIsResizing(true);
   };
 
-  const resizePanel = (event: PointerEvent<HTMLDivElement>) => {
+  const resizePanel = (event: PointerEvent<HTMLButtonElement>) => {
     if (!resizeStart.current) return;
     updatePanelWidth(resizeStart.current.width + resizeStart.current.x - event.clientX);
   };
 
-  const finishResize = (event: PointerEvent<HTMLDivElement>) => {
+  const finishResize = (event: PointerEvent<HTMLButtonElement>) => {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -525,7 +525,8 @@ export function ArtifactPanel({
             className="relative hidden shrink-0 border-l bg-background lg:flex lg:min-h-0 lg:flex-col"
             style={{ width: panelWidth }}
           >
-            <div
+            <button
+              type="button"
               className={`absolute inset-y-0 -left-1 z-10 hidden w-2 cursor-col-resize touch-none lg:block ${
                 isResizing ? 'bg-primary/30' : 'hover:bg-primary/20'
               }`}
@@ -535,7 +536,6 @@ export function ArtifactPanel({
               aria-valuemin={MIN_PANEL_WIDTH}
               aria-valuemax={MAX_PANEL_WIDTH}
               aria-valuenow={Math.round(panelWidth)}
-              tabIndex={0}
               onPointerDown={startResize}
               onPointerMove={resizePanel}
               onPointerUp={finishResize}

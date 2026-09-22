@@ -181,15 +181,7 @@ function SharePointLogo() {
   );
 }
 
-export function PluginBrandIcon({
-  slug,
-  name,
-  size = 'sm',
-}: {
-  slug?: string;
-  name: string;
-  size?: 'sm' | 'md';
-}) {
+export function PluginBrandIcon({ slug, name }: { slug?: string; name: string }) {
   const initials = name
     .split(/\s+/)
     .slice(0, 2)
@@ -207,7 +199,7 @@ export function PluginBrandIcon({
     ) : null;
   return (
     <span
-      className={`grid ${size === 'md' ? 'size-10' : 'size-10'} shrink-0 place-items-center rounded-lg bg-muted font-semibold text-muted-foreground`}
+      className="grid size-10 shrink-0 place-items-center rounded-lg bg-muted font-semibold text-muted-foreground"
       aria-hidden="true"
     >
       {icon ? (

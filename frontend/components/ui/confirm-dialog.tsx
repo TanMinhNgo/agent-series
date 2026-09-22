@@ -52,18 +52,20 @@ export function ConfirmDialog({
   };
 
   return createPortal(
-    <div
-      className="fixed inset-0 z-[60] grid place-items-center bg-black/70 p-4 backdrop-blur-sm"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) close();
-      }}
-    >
+    <div className="fixed inset-0 z-[60] grid place-items-center bg-black/70 p-4 backdrop-blur-sm">
+      <button
+        type="button"
+        className="absolute inset-0"
+        aria-label="Đóng hộp thoại"
+        onClick={close}
+        disabled={confirming}
+      />
       <section
         role="alertdialog"
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
-        className="w-full max-w-md rounded-2xl border bg-card p-5 shadow-2xl sm:p-6"
+        className="relative w-full max-w-md rounded-2xl border bg-card p-5 shadow-2xl sm:p-6"
       >
         <div className="flex gap-3">
           <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-destructive/10 text-destructive">

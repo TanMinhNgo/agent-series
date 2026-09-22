@@ -337,7 +337,6 @@ export function LibraryPage() {
               {pinningAssetId === item.id ? (
                 <select
                   className="mt-3 w-full rounded-md border bg-background px-2 py-1 text-xs"
-                  autoFocus
                   defaultValue=""
                   onChange={(event) => {
                     if (event.target.value)
@@ -678,7 +677,6 @@ export function LibraryPage() {
             </label>
             <input
               id="asset-name"
-              autoFocus
               className="mt-2 w-full rounded-lg border bg-background px-3 py-2 text-sm"
               value={assetName}
               onChange={(event) => setAssetName(event.target.value)}

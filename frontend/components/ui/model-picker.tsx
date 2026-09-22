@@ -164,7 +164,6 @@ export function ModelPicker({
             <div className="flex shrink-0 items-center gap-2 rounded-lg bg-muted/60 px-2.5 py-2">
               <Search className="size-4 text-muted-foreground" />
               <input
-                autoFocus
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Tìm model"

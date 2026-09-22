@@ -467,7 +467,6 @@ function DeleteProjectDialog({
             className="workspace-input"
             value={confirmation}
             onChange={(event) => setConfirmation(event.target.value)}
-            autoFocus
           />
           {error ? <FormError message={error} /> : null}
           <div className="flex justify-end gap-2">
@@ -1368,7 +1367,7 @@ function PluginsView() {
                   className="group rounded-xl border border-border bg-card p-1.5 transition-colors hover:border-foreground/25"
                   title={`Quản lý ${item.name}`}
                 >
-                  <PluginBrandIcon name={item.name} slug={catalogItem?.slug || item.slug} size="md" />
+                  <PluginBrandIcon name={item.name} slug={catalogItem?.slug || item.slug} />
                 </button>
               );
             })}
@@ -1508,7 +1507,7 @@ function GoogleWorkspaceCard({
     <section className="mb-10 rounded-2xl border border-border bg-card p-5 shadow-sm">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex gap-3">
-          <PluginBrandIcon name="Google Workspace" slug="google-workspace" size="md" />
+          <PluginBrandIcon name="Google Workspace" slug="google-workspace" />
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="font-semibold">Google Workspace</h2>
@@ -1665,7 +1664,7 @@ function GitHubCard({
     <section className="mb-10 rounded-2xl border border-border bg-card p-5 shadow-sm">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex gap-3">
-          <PluginBrandIcon name="GitHub" slug="github" size="md" />
+          <PluginBrandIcon name="GitHub" slug="github" />
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="font-semibold">GitHub</h2>
