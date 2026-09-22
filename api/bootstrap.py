@@ -181,11 +181,25 @@ def message_json(message: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-SOURCE_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\((/api/documents/[^)#]+(?:#[^)]+)?)\)")
-SOURCE_LABEL_ONLY_PATTERN = re.compile(
-    r"^\s*(?:nguồn(?:\s+\d+)?|sources?|tham\s+khảo)\s*[:\-–—]?\s*$",
-    re.IGNORECASE,
-)
+SOURCE_LINK_PATTERN = re.compile(r"\[([^\[\]\n]+)\]\((/api/documents/[^)#]+(?:#[^)]+)?)\)")
+
+
+def _source_label_only(line: str) -> bool:
+    label = line.strip().rstrip(":-–—").strip().casefold()
+    parts = label.split()
+    if parts in (["nguồn"], ["source"], ["sources"], ["tham", "khảo"]):
+        return True
+    return len(parts) == 2 and parts[0] == "nguồn" and parts[1].isdecimal()
+
+
+def _tighten_punctuation(line: str) -> str:
+    result: list[str] = []
+    for character in line:
+        if character in ",.;:!?":
+            while result and result[-1].isspace():
+                result.pop()
+        result.append(character)
+    return "".join(result)
 
 
 def detach_response_sources(content: str, external_sources: list[dict[str, str]] | None = None) -> tuple[str, list[dict[str, str]]]:
@@ -208,8 +222,8 @@ def detach_response_sources(content: str, external_sources: list[dict[str, str]]
     lines = []
     for line in content.splitlines():
         cleaned_line = SOURCE_LINK_PATTERN.sub("", line).rstrip()
-        cleaned_line = re.sub(r"\s+([,.;:!?])", r"\1", cleaned_line)
-        if SOURCE_LABEL_ONLY_PATTERN.fullmatch(cleaned_line):
+        cleaned_line = _tighten_punctuation(cleaned_line)
+        if _source_label_only(cleaned_line):
             continue
         lines.append(cleaned_line)
     cleaned = "\n".join(lines).strip()

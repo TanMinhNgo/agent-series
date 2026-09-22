@@ -847,6 +847,15 @@ def test_detach_response_sources_keeps_inline_answer_text_and_deduplicates_sourc
     assert sources == [{"name": "rag.md", "url": "/api/documents/rag/file#đoạn-1", "kind": "library"}]
 
 
+def test_detach_response_sources_handles_spaced_labels_and_punctuation() -> None:
+    visible, sources = detach_response_sources(
+        "Đúng   , xem [rag.md](/api/documents/rag/file).\nTham   khảo : [rag.md](/api/documents/rag/file)"
+    )
+
+    assert visible == "Đúng, xem."
+    assert sources == [{"name": "rag.md", "url": "/api/documents/rag/file", "kind": "library"}]
+
+
 def test_detach_response_sources_combines_safe_web_sources() -> None:
     visible, sources = detach_response_sources(
         "Nội dung từ web.",

@@ -48,7 +48,7 @@ type FeedbackState = {
 
 function sourcesIn(content: string): Source[] {
   const seen = new Set<string>();
-  const matches = [...content.matchAll(/\[([^\]]+)\]\((\/api\/documents\/[^)#]+(?:#[^)]+)?)\)/g)];
+  const matches = [...content.matchAll(/\[([^\]\n[]+)\]\((\/api\/documents\/[^)#\s]+(?:#[^)\s]+)?)\)/g)];
   return matches
     .map((match) => ({ name: match[1], url: match[2], kind: 'library' as const }))
     .filter((source) => (seen.has(source.url) ? false : (seen.add(source.url), true)));

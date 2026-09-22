@@ -17,3 +17,12 @@ def test_parse_response_keeps_invalid_block_as_markdown() -> None:
 
     assert parsed.markdown == source
     assert parsed.blocks == []
+
+
+def test_parse_response_skips_unclosed_and_preserves_invalid_blocks() -> None:
+    valid = '```agent-block\r\n{"type":"chart","config":{}}```'
+    invalid = '```agent-block\n{"type":"script","config":{}}```'
+    parsed = parse_response(f"{invalid}\n{valid}\n```agent-block\n{{")
+
+    assert parsed.blocks == [{"type": "chart", "config": {}}]
+    assert parsed.markdown == f"{invalid}\n\n```agent-block\n{{"
