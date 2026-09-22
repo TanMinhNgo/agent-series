@@ -5,7 +5,21 @@ import type { Config } from '@/src/types';
 
 it('renders provider logos instead of text while preserving accessible names and selection', () => {
   const select = vi.fn();
-  render(<ChatHeader chat={null} config={{ providers: { openai: ['gpt-test'], anthropic: ['claude-test'], gemini: ['gemini-test'] }, defaultProvider: 'openai', defaultModel: 'gpt-test' }} provider="openai" model="gpt-test" onProviderChange={vi.fn()} onModelChange={vi.fn()} onSelectionChange={select} />);
+  render(
+    <ChatHeader
+      chat={null}
+      config={{
+        providers: { openai: ['gpt-test'], anthropic: ['claude-test'], gemini: ['gemini-test'] },
+        defaultProvider: 'openai',
+        defaultModel: 'gpt-test',
+      }}
+      provider="openai"
+      model="gpt-test"
+      onProviderChange={vi.fn()}
+      onModelChange={vi.fn()}
+      onSelectionChange={select}
+    />,
+  );
   fireEvent.click(screen.getByRole('button', { name: 'gpt-test' }));
   const rail = within(screen.getByRole('group', { name: 'Nhà cung cấp model' }));
   const paths = ['OpenAI', 'Anthropic', 'Google', 'Ollama'].map((name) => {
@@ -26,10 +40,19 @@ it('keeps offline Ollama visible without a selected model and loads models after
   const refresh = vi.fn();
   const select = vi.fn();
   const config: Config = {
-    providers: {}, defaultProvider: 'ollama', defaultModel: '',
+    providers: {},
+    defaultProvider: 'ollama',
+    defaultModel: '',
     providerStatus: { ollama: { available: false, message: 'Offline', models: [] } },
   };
-  const props = { chat: null, config, onProviderChange: vi.fn(), onModelChange: vi.fn(), onSelectionChange: select, onRefreshModels: refresh };
+  const props = {
+    chat: null,
+    config,
+    onProviderChange: vi.fn(),
+    onModelChange: vi.fn(),
+    onSelectionChange: select,
+    onRefreshModels: refresh,
+  };
   const { rerender } = render(<ChatHeader {...props} />);
   fireEvent.click(screen.getByRole('button', { name: 'Chọn model' }));
   expect(await screen.findByRole('button', { name: 'Ollama' })).toBeInTheDocument();
@@ -39,9 +62,23 @@ it('keeps offline Ollama visible without a selected model and loads models after
   expect(refresh).toHaveBeenCalledTimes(1);
   rerender(<ChatHeader {...props} refreshingModels />);
   expect(screen.getByRole('button', { name: 'Đang kiểm tra…' })).toBeDisabled();
-  rerender(<ChatHeader {...props} config={{ ...config, providerStatus: { ollama: { available: true, message: null, models: [] } } }} />);
+  rerender(
+    <ChatHeader
+      {...props}
+      config={{ ...config, providerStatus: { ollama: { available: true, message: null, models: [] } } }}
+    />,
+  );
   expect(screen.getByText(/Ollama chưa có model local/)).toBeInTheDocument();
-  rerender(<ChatHeader {...props} config={{ ...config, providers: { ollama: ['llama3.2:1b'] }, providerStatus: { ollama: { available: true, message: null, models: ['llama3.2:1b'] } } }} />);
+  rerender(
+    <ChatHeader
+      {...props}
+      config={{
+        ...config,
+        providers: { ollama: ['llama3.2:1b'] },
+        providerStatus: { ollama: { available: true, message: null, models: ['llama3.2:1b'] } },
+      }}
+    />,
+  );
   fireEvent.click(screen.getByRole('button', { name: /llama3.2:1b/ }));
   expect(select).toHaveBeenCalledWith('ollama', 'llama3.2:1b');
 });

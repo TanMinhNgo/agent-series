@@ -3,18 +3,29 @@ import { useState } from 'react';
 import { expect, it, vi } from 'vitest';
 import { AppRouter } from './app-router';
 
-vi.mock('@/src/hooks/use-auth', () => ({ useAuth: () => ({
-  status: { isLoading: false, refetch: vi.fn() },
-  session: { checked: true, user: { id: 'user-1', role: 'user' } },
-}) }));
+vi.mock('@/src/hooks/use-auth', () => ({
+  useAuth: () => ({
+    status: { isLoading: false, refetch: vi.fn() },
+    session: { checked: true, user: { id: 'user-1', role: 'user' } },
+  }),
+}));
 vi.mock('@/src/pages/chat-page', () => ({
   ChatPage: ({ chatId, navigate }: { chatId?: string; navigate: (to: string) => void }) => {
     const [pending, setPending] = useState(false);
-    return <div>
-      <button onClick={() => { setPending(true); navigate('/chat/created'); }}>Send</button>
-      <span>{chatId || 'draft'}</span>
-      {pending && <span>AI loading</span>}
-    </div>;
+    return (
+      <div>
+        <button
+          onClick={() => {
+            setPending(true);
+            navigate('/chat/created');
+          }}
+        >
+          Send
+        </button>
+        <span>{chatId || 'draft'}</span>
+        {pending && <span>AI loading</span>}
+      </div>
+    );
   },
 }));
 vi.mock('@/src/pages/admin-page', () => ({ AdminPage: () => null }));

@@ -50,28 +50,57 @@ export function ChatHeader({
   } as const;
   const pickerProviders = useMemo<ModelPickerProvider[]>(() => {
     if (!config) return [];
-    return Object.entries({ ...config.providers, ollama: config.providers.ollama ?? [] }).map(([providerId, models]) => ({
-      id: providerId,
-      name: providerId === 'openai' ? 'OpenAI' : providerId === 'anthropic' ? 'Anthropic' : providerId === 'gemini' ? 'Google' : providerId === 'ollama' ? 'Ollama' : providerId,
-      notice: providerId === 'ollama' ? (
-        <div className="space-y-2" role="status">
-          <p>{models.length ? 'Ollama đang kết nối.' : config.providerStatus?.ollama?.available ? 'Ollama chưa có model local. Hãy tải model trong Ollama rồi kiểm tra lại.' : 'Ollama chưa kết nối. Bạn có thể tắt để tiết kiệm RAM, mở khi cần rồi kiểm tra lại.'}</p>
-          {modelsRefreshFailed && <p className="text-destructive">Không tải được cấu hình. Vui lòng thử lại.</p>}
-          {onRefreshModels && <button type="button" disabled={refreshingModels} onClick={onRefreshModels} className="rounded-md border px-2.5 py-1.5 text-foreground hover:bg-muted disabled:opacity-50">{refreshingModels ? 'Đang kiểm tra…' : 'Kiểm tra lại Ollama'}</button>}
-        </div>
-      ) : undefined,
-      models: models.map((modelId) => {
-        const imageModel = modelId.toLowerCase().includes('image');
-        const reasoningModel = /^(gpt-|claude-|gemini-|grok-)/i.test(modelId) && !imageModel;
-        return {
-          id: modelId,
-          name: modelId,
-          capabilities: imageModel ? ['image'] : reasoningModel ? ['reasoning'] : undefined,
-          thinking: reasoningModel ? ['low', 'medium', 'high'] : undefined,
-          defaultThinking: reasoningModel ? 'medium' : undefined,
-        };
+    return Object.entries({ ...config.providers, ollama: config.providers.ollama ?? [] }).map(
+      ([providerId, models]) => ({
+        id: providerId,
+        name:
+          providerId === 'openai'
+            ? 'OpenAI'
+            : providerId === 'anthropic'
+              ? 'Anthropic'
+              : providerId === 'gemini'
+                ? 'Google'
+                : providerId === 'ollama'
+                  ? 'Ollama'
+                  : providerId,
+        notice:
+          providerId === 'ollama' ? (
+            <div className="space-y-2" role="status">
+              <p>
+                {models.length
+                  ? 'Ollama đang kết nối.'
+                  : config.providerStatus?.ollama?.available
+                    ? 'Ollama chưa có model local. Hãy tải model trong Ollama rồi kiểm tra lại.'
+                    : 'Ollama chưa kết nối. Bạn có thể tắt để tiết kiệm RAM, mở khi cần rồi kiểm tra lại.'}
+              </p>
+              {modelsRefreshFailed && (
+                <p className="text-destructive">Không tải được cấu hình. Vui lòng thử lại.</p>
+              )}
+              {onRefreshModels && (
+                <button
+                  type="button"
+                  disabled={refreshingModels}
+                  onClick={onRefreshModels}
+                  className="rounded-md border px-2.5 py-1.5 text-foreground hover:bg-muted disabled:opacity-50"
+                >
+                  {refreshingModels ? 'Đang kiểm tra…' : 'Kiểm tra lại Ollama'}
+                </button>
+              )}
+            </div>
+          ) : undefined,
+        models: models.map((modelId) => {
+          const imageModel = modelId.toLowerCase().includes('image');
+          const reasoningModel = /^(gpt-|claude-|gemini-|grok-)/i.test(modelId) && !imageModel;
+          return {
+            id: modelId,
+            name: modelId,
+            capabilities: imageModel ? ['image'] : reasoningModel ? ['reasoning'] : undefined,
+            thinking: reasoningModel ? ['low', 'medium', 'high'] : undefined,
+            defaultThinking: reasoningModel ? 'medium' : undefined,
+          };
+        }),
       }),
-    }));
+    );
   }, [config, onRefreshModels, refreshingModels, modelsRefreshFailed]);
   const [hasScrolled, setHasScrolled] = useState(() => window.scrollY > 0);
 
@@ -132,9 +161,25 @@ export function ChatHeader({
             }}
           />
           {chat?.projectId ? (
-            <Select value={chat.collectionId || ''} disabled={busy} onValueChange={(value) => onCollectionChange?.(value || null)}>
-              <SelectTrigger className="h-9 max-w-40 rounded-lg border-transparent bg-muted/60 text-xs shadow-none hover:border-border hover:bg-muted" aria-label="Collection tài liệu"><SelectValue placeholder="Chưa chọn tài liệu" /></SelectTrigger>
-              <SelectContent><SelectItem value="">Chưa chọn tài liệu</SelectItem>{collections.map((collection) => <SelectItem key={collection.id} value={collection.id}>{collection.name}</SelectItem>)}</SelectContent>
+            <Select
+              value={chat.collectionId || ''}
+              disabled={busy}
+              onValueChange={(value) => onCollectionChange?.(value || null)}
+            >
+              <SelectTrigger
+                className="h-9 max-w-40 rounded-lg border-transparent bg-muted/60 text-xs shadow-none hover:border-border hover:bg-muted"
+                aria-label="Collection tài liệu"
+              >
+                <SelectValue placeholder="Chưa chọn tài liệu" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">Chưa chọn tài liệu</SelectItem>
+                {collections.map((collection) => (
+                  <SelectItem key={collection.id} value={collection.id}>
+                    {collection.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
             </Select>
           ) : null}
         </div>

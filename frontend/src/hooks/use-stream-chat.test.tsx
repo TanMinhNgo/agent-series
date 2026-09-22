@@ -53,8 +53,11 @@ describe('useStreamChat', () => {
     );
     const { result } = renderHook(() => useStreamChat(), { wrapper });
     await result.current.mutateAsync({
-      chatId: 'new-chat', content: 'Hello', runId: 'run-first',
-      optimisticMessageId: 'optimistic-first', onEvent: vi.fn(),
+      chatId: 'new-chat',
+      content: 'Hello',
+      runId: 'run-first',
+      optimisticMessageId: 'optimistic-first',
+      onEvent: vi.fn(),
     });
     expect(client.getQueryData(queryKeys.messages('new-chat'))).toEqual([
       expect.objectContaining({ messageId: 'optimistic-first', role: 'user', content: 'Hello' }),

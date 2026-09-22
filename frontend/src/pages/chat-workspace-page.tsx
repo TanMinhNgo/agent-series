@@ -444,7 +444,10 @@ export function ChatWorkspace({
     const content = contentValue.trim() || 'Hãy phân tích các tệp đính kèm này.';
     const outgoing: Message = {
       messageId: `optimistic-${crypto.randomUUID()}`,
-      role: 'user', content, optimistic: true, createdAt: new Date().toISOString(),
+      role: 'user',
+      content,
+      optimistic: true,
+      createdAt: new Date().toISOString(),
     };
     setPendingUser(outgoing);
     const artifactEdit = editingArtifact;
@@ -631,7 +634,9 @@ export function ChatWorkspace({
             <ChatHeader
               chat={activeChat}
               config={config.data || null}
-              onRefreshModels={() => { void config.refetch(); }}
+              onRefreshModels={() => {
+                void config.refetch();
+              }}
               refreshingModels={config.isFetching}
               modelsRefreshFailed={config.isRefetchError}
               provider={draftProvider}
@@ -689,8 +694,12 @@ export function ChatWorkspace({
                     <MessageList
                       key={activeChat?.id || 'new-chat'}
                       chatId={activeChat?.id}
-                      messages={pendingUser && !(messages.data || []).some((item) => item.messageId === pendingUser.messageId)
-                        ? [...(messages.data || []), pendingUser] : messages.data || []}
+                      messages={
+                        pendingUser &&
+                        !(messages.data || []).some((item) => item.messageId === pendingUser.messageId)
+                          ? [...(messages.data || []), pendingUser]
+                          : messages.data || []
+                      }
                       status={status}
                       isResponding={isResponding}
                       error={error}

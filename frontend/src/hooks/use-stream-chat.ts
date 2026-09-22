@@ -83,7 +83,9 @@ export const useStreamChat = () => {
       // the loading phase cannot erase the optimistic message.
       await queryClient.cancelQueries({ queryKey: queryKeys.messages(chatId) });
       queryClient.setQueryData<Message[]>(queryKeys.messages(chatId), (items = []) => [
-        ...items.filter((item) => item.messageId !== replaceAssistantMessageId && item.messageId !== optimisticMessageId),
+        ...items.filter(
+          (item) => item.messageId !== replaceAssistantMessageId && item.messageId !== optimisticMessageId,
+        ),
         ...(skipOptimisticUser
           ? []
           : [

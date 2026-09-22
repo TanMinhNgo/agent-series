@@ -66,11 +66,20 @@ export function ChatComposer({
       <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
         <span className="text-muted-foreground">Chế độ</span>
         <Select value={mode} disabled={busy} onValueChange={(value) => onModeChange(value as typeof mode)}>
-          <SelectTrigger id="chat-mode" className="h-9 w-auto min-w-36 gap-2 rounded-full border-border/80 bg-background px-3 text-xs shadow-sm hover:bg-muted/60">
+          <SelectTrigger
+            id="chat-mode"
+            className="h-9 w-auto min-w-36 gap-2 rounded-full border-border/80 bg-background px-3 text-xs shadow-sm hover:bg-muted/60"
+          >
             <selectedMode.icon className="size-3.5 text-primary" />
             <SelectValue />
           </SelectTrigger>
-          <SelectContent side="right" align="start" sideOffset={8} alignItemWithTrigger={false} className="w-64 rounded-xl p-1.5">
+          <SelectContent
+            side="right"
+            align="start"
+            sideOffset={8}
+            alignItemWithTrigger={false}
+            className="w-64 rounded-xl p-1.5"
+          >
             {modeOptions.map((item) => {
               const Icon = item.icon;
               return (
