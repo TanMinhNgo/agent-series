@@ -272,6 +272,64 @@ def test_chat_run_registry_cancels_only_the_owner() -> None:
     assert event.is_set()
 
 
+def test_chat_run_registry_serializes_turns_for_one_chat() -> None:
+    registry = main_module.ChatRunRegistry()
+    registry.start("chat-1", "run-1", "user-1")
+    with pytest.raises(ValueError, match="đang tạo phản hồi"):
+        registry.start("chat-1", "run-2", "user-1")
+    registry.start("chat-2", "run-2", "user-1")
+    registry.finish("chat-1", "run-1")
+    registry.start("chat-1", "run-2", "user-1")
+
+
+def test_rejected_chat_stream_does_not_register_a_run() -> None:
+    from fastapi import HTTPException
+    from api.modules.chats.controller import ChatStreamController
+
+    registry = main_module.ChatRunRegistry()
+    chat = Chat(id="chat-1", user_id="user-1", provider="openai", model="test", mode="plan")
+    services = SimpleNamespace(chats=SimpleNamespace(get=lambda _: chat),
+        media=SimpleNamespace(for_prompt=lambda _: []),
+        artifacts=SimpleNamespace(edit_context=lambda *_: SimpleNamespace(id="asset-1")))
+    controller = ChatStreamController(lambda: services, lambda *_: iter(()), registry, "Missing", "Missing")
+    with pytest.raises(HTTPException) as error:
+        controller.stream("chat-1", ChatRequest(content="Edit", editAssetId="asset-1", runId="run-1"))
+    assert error.value.status_code == 422
+    registry.start("chat-1", "run-1", "user-1")
+
+
+def test_disconnected_stream_cancels_its_agent_turn() -> None:
+    from api.modules.chats.runtime.stream import StreamDependencies, stream_chat
+    from agent_core.ai.agent import AgentCancelled
+    from agent_core.persistence.store import current_workspace_id
+
+    registry = main_module.ChatRunRegistry()
+    cancelled = registry.start("chat-1", "run-1", "user-1")
+    chat = Chat(id="chat-1", user_id="user-1", provider="openai", model="test")
+    def blocked_turn(*args):
+        assert args[6].wait(2)
+        raise AgentCancelled()
+    deps = StreamDependencies(
+        services=lambda: SimpleNamespace(chats=SimpleNamespace(get=lambda _: chat, history=lambda _: [])),
+        sse=lambda name, _: name,
+        chat_runs=registry,
+        run_image_turn=lambda *_: None,
+        message_json=lambda _: {},
+        small_talk_response=lambda _: None,
+        persist_static_response=lambda *_: None,
+        run_agent_turn=blocked_turn,
+        model_error_message=lambda *_: "error",
+        agent_cancelled=AgentCancelled,
+        image_generation_error=ValueError,
+        current_user_id=current_user_id,
+        current_workspace_id=current_workspace_id,
+    )
+    events = stream_chat(deps, "chat-1", "Long task", [], cancel_event=cancelled, run_id="run-1")
+    assert next(events) == "status"
+    events.close()
+    assert cancelled.is_set()
+
+
 def test_ollama_web_search_ignores_greetings_and_detects_fresh_questions() -> None:
     assert not main_module.should_search_web("Hôm nay bạn khỏe không?")
     assert main_module.should_search_web("Tin tức AI mới nhất hôm nay là gì?")

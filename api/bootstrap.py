@@ -126,6 +126,9 @@ class ChatRunRegistry:
             key = (chat_id, run_id)
             if key in self._runs:
                 raise ValueError("Lượt tạo phản hồi này đang chạy.")
+            # ponytail: a short in-process scan; use a persisted per-chat lease if API workers scale out.
+            if any(active_chat_id == chat_id for active_chat_id, _ in self._runs):
+                raise ValueError("Chat này đang tạo phản hồi. Hãy chờ lượt hiện tại hoàn tất.")
             event = Event()
             self._runs[key] = (user_id, event)
             return event

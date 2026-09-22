@@ -73,12 +73,15 @@ def stream_chat(
             events.put(("close", {}))
 
     Thread(target=run, daemon=True).start()
-    while True:
-        try:
-            event, payload = events.get(timeout=15)
-        except Empty:
-            yield ": keepalive\n\n"
-            continue
-        if event == "close":
-            return
-        yield deps.sse(event, payload)
+    try:
+        while True:
+            try:
+                event, payload = events.get(timeout=15)
+            except Empty:
+                yield ": keepalive\n\n"
+                continue
+            if event == "close":
+                return
+            yield deps.sse(event, payload)
+    finally:
+        cancel_event.set()

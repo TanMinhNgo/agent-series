@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from threading import Event
 from typing import Any, Callable
+from uuid import uuid4
 
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
@@ -34,16 +35,17 @@ class ChatStreamController:
             artifact_edit = app_services.artifacts.edit_context(payload.edit_asset_id, chat.project_id) if payload.edit_asset_id else None
         except ValueError as exc:
             raise HTTPException(status_code=404 if self.not_found_marker in str(exc) else 422, detail=str(exc)) from exc
-        try:
-            cancel_event = self.chat_runs.start(chat_id, payload.run_id, chat.user_id) if payload.run_id else Event()
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if mode == "plan" and payload.edit_asset_id:
             raise HTTPException(status_code=422, detail="Chế độ Lập kế hoạch không chỉnh sửa hoặc tạo file.")
         if mode == "image" and payload.edit_asset_id:
             raise HTTPException(status_code=422, detail="Chế độ tạo ảnh chỉ sửa ảnh được đính kèm trong tin nhắn.")
+        run_id = payload.run_id or str(uuid4())
+        try:
+            cancel_event = self.chat_runs.start(chat_id, run_id, chat.user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return StreamingResponse(
-            self.stream_chat(chat_id, payload.content, attachments, artifact_edit, cancel_event, payload.run_id, payload.research_web),
+            self.stream_chat(chat_id, payload.content, attachments, artifact_edit, cancel_event, run_id, payload.research_web),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
