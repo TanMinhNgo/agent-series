@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   CalendarDays,
   ChevronLeft,
@@ -27,6 +28,7 @@ import { PluginBrandIcon } from '@/src/components/plugin-brand-icon';
 import { useGetConfig } from '@/src/hooks/use-get-config';
 import { useInvitableWorkspaceUsers, useScheduleRuns, useWorkspace } from '@/src/hooks/use-workspace';
 import { useAuth } from '@/src/hooks/use-auth';
+import { request } from '@/src/hooks/client';
 import { useProjectDeletePreview } from '@/src/hooks/use-project-delete-preview';
 import type {
   ConnectorAuditLog,
@@ -40,6 +42,13 @@ import type {
 } from '@/src/types';
 
 export type WorkspaceView = 'projects' | 'schedules' | 'plugins' | 'members';
+type WorkflowRecipeOption = {
+  id: string;
+  title: string;
+  prompt: string;
+  recurrence: 'daily' | 'weekly';
+  sourceType: string;
+};
 
 const statusMeta = {
   active: { label: 'Đang hoạt động', Icon: CirclePlay, variant: 'default' as const },
@@ -502,31 +511,6 @@ const scheduleStatusLabels: Record<Schedule['status'], string> = {
   completed: 'Đã hoàn tất',
 };
 
-const WORKFLOW_RECIPES = [
-  {
-    id: 'daily-ai-digest',
-    title: 'Daily AI digest',
-    prompt: 'Tìm nguồn web mới, tổng hợp tin AI quan trọng hôm nay, nêu nguồn và tạo báo cáo Markdown.',
-    recurrence: 'daily' as const,
-    requireWebSource: true,
-  },
-  {
-    id: 'github-weekly-summary',
-    title: 'GitHub weekly summary',
-    prompt:
-      'Dùng GitHub đã chọn cho Project để tổng hợp issue, PR và workflow trong tuần; tạo báo cáo Markdown có nguồn.',
-    recurrence: 'weekly' as const,
-    requireWebSource: false,
-  },
-  {
-    id: 'project-report',
-    title: 'Project report',
-    prompt: 'Tổng hợp tiến độ Project, nguồn đã ghim, chat và artifact gần đây; tạo báo cáo Markdown.',
-    recurrence: 'weekly' as const,
-    requireWebSource: false,
-  },
-] as const;
-
 const scheduleFilterLabels = {
   active: 'Đang hoạt động',
   paused: 'Tạm dừng',
@@ -604,7 +588,11 @@ function SchedulesView() {
   };
   const startNow = async (scheduleId: string) => {
     const run = await runScheduleNow.mutateAsync(scheduleId);
-    navigate(`/chat/${run.chatId}`);
+    navigate(
+      'workflowRunId' in run
+        ? `/projects/${run.projectId}/workflow-runs/${run.workflowRunId}`
+        : `/chat/${run.chatId}`,
+    );
   };
   if (schedules.isLoading || projects.isLoading) return <WorkspaceSkeleton />;
   if (schedules.error || projects.error)
@@ -913,11 +901,15 @@ function ScheduleForm({
   const models = config.data?.providers[selectedProvider] || [];
   const selectedModel = model && models.includes(model) ? model : models[0] || model;
   const runs = useScheduleRuns(schedule?.id);
-  const applyRecipe = (recipe: (typeof WORKFLOW_RECIPES)[number]) => {
+  const recipes = useQuery({
+    queryKey: ['workflow-recipes'],
+    queryFn: () => request<WorkflowRecipeOption[]>({ url: '/workflow-recipes' }),
+  });
+  const applyRecipe = (recipe: WorkflowRecipeOption) => {
     setTitle(recipe.title);
     setPrompt(recipe.prompt);
     setRecurrence(recipe.recurrence);
-    setRequireWebSource(recipe.requireWebSource);
+    setRequireWebSource(recipe.sourceType === 'web');
     setNotifyEmail(true);
   };
   return (
@@ -950,12 +942,12 @@ function ScheduleForm({
               className="workspace-input"
               defaultValue=""
               onChange={(event) => {
-                const recipe = WORKFLOW_RECIPES.find((item) => item.id === event.target.value);
+                const recipe = recipes.data?.find((item) => item.id === event.target.value);
                 if (recipe) applyRecipe(recipe);
               }}
             >
               <option value="">Tự cấu hình</option>
-              {WORKFLOW_RECIPES.map((recipe) => (
+              {(recipes.data || []).map((recipe) => (
                 <option key={recipe.id} value={recipe.id}>
                   {recipe.title}
                 </option>

@@ -3,6 +3,7 @@ import { ArrowLeft, CalendarClock, FileText, FolderKanban, MessageSquare, Sparkl
 import { Link } from 'react-router-dom';
 import { useState, type ReactNode } from 'react';
 
+import { ProjectWorkflows } from '@/src/components/project-workflows';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { request } from '@/src/hooks/client';
 import type { Document, LibraryAsset, Project, Schedule } from '@/src/types';
@@ -83,6 +84,13 @@ export function ProjectOverviewPage() {
         <Metric icon={<Sparkles size={18} />} label="Project Sources" value={data.projectSources.length} />
         <Metric icon={<CalendarClock size={18} />} label="Lịch chạy" value={data.schedules.length} />
       </section>
+      <ProjectWorkflows
+        projectId={projectId}
+        repositories={
+          (data.connectorScopes.find((scope) => scope.connectorSlug === 'github')?.config.repositories as
+            string[] | undefined) ?? []
+        }
+      />
       <section className="mt-6 grid gap-6 lg:grid-cols-[1.2fr_.8fr]">
         <Card>
           <CardHeader>

@@ -167,7 +167,10 @@ export const useWorkspace = () => {
   const scheduleActions = useResourceActions<ScheduleInput>('schedule');
   const runScheduleNow = useMutation({
     mutationFn: (id: string) =>
-      request<{ status: string; chatId: string; runId: string }>({
+      request<
+        | { status: string; chatId: string; runId: string }
+        | { status: string; workflowRunId: string; projectId: string }
+      >({
         url: `/schedules/${id}/run-now`,
         method: 'POST',
       }),

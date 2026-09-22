@@ -7,6 +7,8 @@ import { request } from '@/src/hooks/client';
 
 import { ProjectOverviewPage } from './project-overview-page';
 
+vi.mock('@/src/components/project-workflows', () => ({ ProjectWorkflows: () => null }));
+
 vi.mock('@/src/hooks/client', () => ({ request: vi.fn() }));
 
 const timestamp = '2026-09-09T09:30:00+00:00';
