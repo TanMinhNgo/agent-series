@@ -41,7 +41,7 @@ jobs:
           cache-dependency-path: requirements-ci.lock
       - name: Install and test backend
         run: |
-          python -m pip install --require-hashes --requirement requirements-ci.lock
+          python -m pip install --only-binary :all: --require-hashes --requirement requirements-ci.lock
           python -m alembic upgrade head
           mkdir -p test-results
           python -m coverage run -m pytest -q --junitxml=test-results/backend-junit.xml

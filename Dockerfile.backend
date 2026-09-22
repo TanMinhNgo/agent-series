@@ -11,7 +11,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 appuser
 COPY requirements-ci.lock ./
-RUN python -m pip install --require-hashes --requirement requirements-ci.lock
+RUN python -m pip install --only-binary :all: --require-hashes --requirement requirements-ci.lock
 
 COPY alembic.ini ./
 COPY api ./api
