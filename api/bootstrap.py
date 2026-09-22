@@ -56,7 +56,8 @@ from api.modules.chats.runtime.generation import (
 )
 from api.modules.chats.runtime.tools import project_connector_tools as _project_connector_tools
 from api.modules.chats.runtime.stream import StreamDependencies, stream_chat as _stream_chat
-from api.modules.chats.runtime.agent import AgentDependencies, agent_system_prompt as _agent_system_prompt, make_agent as _make_agent
+from agent_core.runtime.agent import AgentDependencies, agent_system_prompt as _agent_system_prompt, build_agent as _make_agent, selected_settings as _selected_settings
+from agent_core.content.indexing import enqueue_artifact_index as _enqueue_artifact_index, queue_pending_artifacts
 from api.modules.chats.runtime.turn import run_agent_turn as _run_agent_turn
 from api.modules.projects.service import delete_project as _delete_project_service
 from fastapi.middleware.cors import CORSMiddleware
@@ -333,13 +334,7 @@ def cancel_workspace_invitation(invitation_id: str, request: Request) -> None:
 
 
 def selected_settings(provider: str, model: str, user_id: str | None) -> Settings:
-    app_services = services()
-    if provider == "ollama":
-        app_services.ollama.require_model(model)
-        return app_services.settings.with_provider_model(provider, model)
-    if model not in app_services.model_registry.active().get(provider, ()):
-        raise ValueError("Model đang tắt hoặc chưa được hệ thống cho phép.")
-    return app_services.settings.with_provider_model(provider, model, app_services.credentials.api_key(user_id, provider))
+    return _selected_settings(services(), provider, model, user_id)
 
 
 def available_provider_models(user_id: str | None, ollama_models: tuple[str, ...] | None = None) -> dict[str, list[str]]:
@@ -411,33 +406,7 @@ def enqueue_document_index(document: Document) -> BackgroundJob:
 
 
 def enqueue_artifact_index(asset: LibraryAsset, app_services: Services | None = None) -> BackgroundJob | None:
-    if not asset.is_project_source:
-        return None
-    selected = app_services or services()
-    jobs = BackgroundJobRepository(selected.chats.database)
-    job, created = jobs.enqueue_unique("artifact_index", {"asset_id": asset.id}, dedupe_key=f"artifact:{asset.id}")
-    if created:
-        asset.index_status, asset.index_error = "queued", None
-    return job
-
-
-def queue_pending_artifacts(app_services: Services) -> int:
-    """Backfill Project Sources created before the artifact index existed."""
-    with app_services.chats.database.session() as session:
-        assets = list(session.scalars(select(LibraryAsset).where(
-            LibraryAsset.is_project_source.is_(True),
-            LibraryAsset.index_status.in_(("pending", "queued")),
-        )))
-    for asset in assets:
-        enqueue_artifact_index(asset, app_services)
-    if assets:
-        with app_services.chats.database.session() as session:
-            for asset_id in [item.id for item in assets]:
-                item = session.get(LibraryAsset, asset_id)
-                if item and item.index_status == "pending":
-                    item.index_status = "queued"
-            session.commit()
-    return len(assets)
+    return _enqueue_artifact_index(asset, app_services or services())
 
 
 def queue_file_cleanup(session, files: list[dict[str, str]], dedupe_key: str) -> None:
@@ -1320,21 +1289,25 @@ web_context_from_result = _web_context_from_result
 project_connector_tools = _project_connector_tools
 agent_system_prompt = _agent_system_prompt
 def make_agent(app_services, chat, memory_context="", knowledge_context="", personalization_context="", plugin_tools=None, history=None, schedule_proposals=None, allow_schedule_proposals=True, artifact_edit=None, web_context="", allow_web=True):
-    return _make_agent(
-        AgentDependencies(selected_settings, enqueue_artifact_index, library_asset_json, recent_chat_history, ollama_recent_history, ScheduleProposalPayload, VIETNAM_TIMEZONE, build_client, build_knowledge_tool, build_default_registry),
-        app_services,
-        chat,
-        memory_context,
-        knowledge_context,
-        personalization_context,
-        plugin_tools,
-        history,
-        schedule_proposals,
-        allow_schedule_proposals,
-        artifact_edit,
-        web_context,
-        allow_web,
-    )
+    try:
+        return _make_agent(
+            AgentDependencies(lambda provider, model, user_id: _selected_settings(app_services, provider, model, user_id), enqueue_artifact_index, library_asset_json, recent_chat_history, ollama_recent_history, ScheduleProposalPayload, VIETNAM_TIMEZONE, build_client, build_knowledge_tool, build_default_registry),
+            app_services,
+            chat,
+            memory_context,
+            knowledge_context,
+            personalization_context,
+            plugin_tools,
+            history,
+            schedule_proposals,
+            allow_schedule_proposals,
+            artifact_edit,
+            web_context,
+            allow_web,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
 
 app.include_router(
     build_chat_stream_router(
@@ -1349,7 +1322,7 @@ app.include_router(build_admin_router(AdminRouteDependencies(services, require_s
 app.include_router(build_media_router(MediaRouteDependencies(services, media_json, API_ERROR_RESPONSES)))
 app.include_router(build_memory_router(MemoryRouteDependencies(services, API_ERROR_RESPONSES)))
 app.include_router(build_project_router(ProjectRouteDependencies(services, project_json, chat_json, document_json, library_asset_json, schedule_json, project_activity_json, record_project_activity, PROJECT_NOT_FOUND_ERROR, API_ERROR_RESPONSES, queue_file_cleanup)))
-app.include_router(build_workflow_router(API_ERROR_RESPONSES))
+app.include_router(build_workflow_router(API_ERROR_RESPONSES, services))
 app.include_router(build_integration_router(IntegrationRouteDependencies(services, record_project_activity, ARTIFACT_NOT_FOUND_ERROR, API_ERROR_RESPONSES)))
 app.include_router(build_schedule_router(ScheduleRouteDependencies(services, schedule_json, resolve_schedule_selection, current_user_id, record_project_activity, SELECTED_PROJECT_NOT_FOUND_ERROR, API_ERROR_RESPONSES)))
 app.include_router(build_chat_crud_router(ChatCrudDependencies(services, chat_json, lambda *args: available_provider_models(*args), selected_settings, current_user_id, SELECTED_PROJECT_NOT_FOUND_ERROR, API_ERROR_RESPONSES)))

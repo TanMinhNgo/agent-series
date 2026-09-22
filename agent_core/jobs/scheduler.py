@@ -6,24 +6,15 @@ import time
 from datetime import UTC, datetime
 from threading import Event, Thread
 
-from api.app import make_agent, persisted_history, queue_pending_artifacts
-from agent_core.content.artifacts import ArtifactService
+from agent_core.runtime.agent import make_agent, validate_agent_context
+from agent_core.ai.history import persisted_history
+from agent_core.content.indexing import queue_pending_artifacts
 from agent_core.runtime.services import Services, build_services
-from agent_core.knowledge.rag import KnowledgeService
-from agent_core.content.library import LibraryService
-from agent_core.content.media import MediaService
-from agent_core.content.file_storage import FileStorageService
-from agent_core.knowledge.memory import MemoryService
-from agent_core.ai.ollama import OllamaCatalog
-from agent_core.knowledge.personalization import PersonalizationService
-from agent_core.integrations.notifications import EmailNotificationService, public_chat_url, schedule_run_email
-from agent_core.integrations.web_search import WebSearchService, WebSourceUnavailable
-from agent_core.integrations.google_workspace import GOOGLE_WORKSPACE_SLUG, GoogleWorkspaceExecutor, GoogleWorkspaceService
-from agent_core.integrations.github_app import GITHUB_SLUG, GitHubAppExecutor, GitHubAppService
-from agent_core.runtime.auth import AuthService
-from agent_core.runtime.credentials import UserCredentialService
-from agent_core.integrations.plugin_execution import EXECUTORS, connected_read_tools, project_scoped_read_tools
-from agent_core.persistence.store import AuthRepository, BackgroundJobRepository, Chat, ChatRepository, ConnectorRepository, Database, MediaRepository, ModelRegistryRepository, Schedule, ScheduleRepository, WorkspaceRepository, current_user_id, current_workspace_id
+from agent_core.integrations.notifications import public_chat_url, schedule_run_email
+from agent_core.integrations.web_search import WebSourceUnavailable
+from agent_core.workflows.executor import transient_error
+from agent_core.integrations.plugin_execution import connected_read_tools, project_scoped_read_tools
+from agent_core.persistence.store import BackgroundJobRepository, Chat, Schedule, ScheduleRepository, current_user_id, current_workspace_id
 
 RETRY_DELAYS_MINUTES = (5, 15, 30)
 HEARTBEAT_SECONDS = 60
@@ -84,12 +75,17 @@ class ScheduleWorker:
     def ensure_chat(self, schedule: Schedule) -> Chat:
         chat = self.services.chats.get(schedule.chat_id) if schedule.chat_id else None
         if chat is not None:
+            if chat.user_id != schedule.user_id or chat.workspace_id != schedule.workspace_id or chat.project_id != schedule.project_id:
+                raise ValueError("Chat không khớp chủ sở hữu, workspace hoặc Project của lịch.")
+            validate_agent_context(self.services, chat)
             if schedule.provider and schedule.model and (chat.provider != schedule.provider or chat.model != schedule.model):
                 return self.services.chats.update(chat.id, provider=schedule.provider, model=schedule.model) or chat
             return chat
         provider = schedule.provider or self.services.settings.provider
         model = schedule.model or self.services.settings.active_model
-        chat = self.services.chats.create(provider, model)
+        context_chat = Chat(provider=provider, model=model, user_id=schedule.user_id, workspace_id=schedule.workspace_id, project_id=schedule.project_id)
+        validate_agent_context(self.services, context_chat)
+        chat = self.services.chats.create(provider, model, **({"project_id": schedule.project_id} if schedule.project_id else {}))
         chat = self.services.chats.update(chat.id, title=f"Lịch: {schedule.title}") or chat
         self.runs.attach_chat(schedule.id, chat.id)
         return chat
@@ -108,12 +104,9 @@ class ScheduleWorker:
 
     @staticmethod
     def _is_transient_error(error: Exception) -> bool:
-        # Missing web sources are never retried: a Tavily error text can contain
-        # "timeout" and would otherwise be mistaken for a provider outage.
         if isinstance(error, WebSourceUnavailable):
             return False
-        message = str(error).lower()
-        return any(marker in message for marker in ("503", "unavailable", "timeout", "timed out", "temporarily", "connection reset"))
+        return transient_error(error)
 
     @staticmethod
     def _final_failure_message(chat: Chat, transient: bool, error: Exception | None = None) -> str:
@@ -168,6 +161,9 @@ class ScheduleWorker:
         self.runs.record_email(run_id, status="sent")
 
     def execute(self, schedule: Schedule, run_id: str, prompt_persisted: bool = False) -> None:
+        if schedule.workflow_id:
+            # Workflow schedules enqueue atomically in claim_due; never run chat here.
+            return
         user_token = current_user_id.set(schedule.user_id)
         workspace_token = current_workspace_id.set(schedule.workspace_id)
         try:
@@ -215,6 +211,9 @@ class ScheduleWorker:
             saved_history[-1]["sources"] = web_sources["sources"]
         self.services.chats.replace_history(chat.id, saved_history)
         self.services.chats.set_unread(chat.id, True)
+        if result.status == "exhausted":
+            self.runs.finish(run_id, error=result.text)
+            return
         BackgroundJobRepository(self.services.chats.database).enqueue("memory_index", {"chat_id": chat.id})
         summary = result.text[:500]
         self.runs.finish(run_id, summary=summary)

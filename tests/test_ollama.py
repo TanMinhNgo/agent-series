@@ -111,7 +111,7 @@ def test_ollama_agent_receives_no_function_tools(monkeypatch):
         id="chat-1",
         provider="ollama",
         model="llama3.2:3b",
-        user_id="user-1",
+        user_id=None,
         project_id=None,
         collection_id=None,
         context_source_chat_id=None,

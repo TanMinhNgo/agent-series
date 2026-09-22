@@ -9,6 +9,7 @@ from threading import Event, Thread
 
 from .background import BackgroundWorker
 from .scheduler import build_worker
+from ..workflows.executor import WorkflowExecutor
 from ..persistence.store import BackgroundJobRepository
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ def run_cycle(schedule_worker, jobs: BackgroundJobRepository, now: datetime | No
     try:
         background_worker.run_once(now)
         schedule_worker.run_due(now)
+        WorkflowExecutor(schedule_worker.services).run_once()
     finally:
         stop_heartbeat.set()
         heartbeat_thread.join(timeout=1)

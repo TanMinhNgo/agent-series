@@ -104,8 +104,8 @@ class GitHubAppService:
             raise GitHubConnectorError("GITHUB_APP_PRIVATE_KEY không phải PEM RSA hợp lệ.") from exc
         return {"Authorization": f"Bearer {header}.{payload}.{_b64url(signature)}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "agent-series"}
 
-    def _installation_headers(self) -> tuple[dict[str, str], ConnectorConnection]:
-        connection = self.repository.get_connection(GITHUB_SLUG)
+    def _installation_headers(self, owner_id: str | None = None) -> tuple[dict[str, str], ConnectorConnection]:
+        connection = self.repository.get_connection(GITHUB_SLUG, owner_id) if owner_id else self.repository.get_connection(GITHUB_SLUG)
         if connection is None or connection.status != "connected":
             raise GitHubConnectorError("GitHub chưa kết nối hoặc cần kết nối lại.")
         try:
@@ -113,10 +113,10 @@ class GitHubAppService:
             installation_id = str(payload["installation_id"])
             token = self._github_json(f"/app/installations/{installation_id}/access_tokens", self._app_headers(), method="POST")
         except (InvalidToken, KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            self.repository.set_connection_status(GITHUB_SLUG, "reauth_required")
+            self.repository.set_connection_status(GITHUB_SLUG, "reauth_required", owner_id=owner_id)
             raise GitHubConnectorError("Không thể đọc liên kết GitHub đã lưu. Hãy kết nối lại.") from exc
         except GitHubConnectorError:
-            self.repository.set_connection_status(GITHUB_SLUG, "reauth_required")
+            self.repository.set_connection_status(GITHUB_SLUG, "reauth_required", owner_id=owner_id)
             raise
         return {"Authorization": f"Bearer {token['token']}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "agent-series"}, connection
 
@@ -146,6 +146,37 @@ class GitHubAppService:
         issues = [item for item in payload if term in f"{item.get('title', '')} {item.get('body', '')}".lower()][:limit]
         self.repository.audit(GITHUB_SLUG, "tool_invoked", connection.id, "search_github_issues", f"Tìm {len(issues)} issue/PR trong {repository}.")
         return "\n".join(f"- #{item.get('number')} {item.get('title')} — {item.get('html_url')}" for item in issues) or "Không tìm thấy issue hoặc pull request phù hợp."
+
+    def list_updated_issues(self, repository: str, start: datetime, end: datetime, owner_id: str) -> list[dict]:
+        path = self._repository_path(repository)
+        headers, connection = self._installation_headers(owner_id)
+        found = {}
+        complete = False
+        for page in range(1, 11):
+            query = urlencode({"state": "all", "sort": "updated", "direction": "asc", "since": (start - timedelta(seconds=1)).isoformat(), "per_page": 100, "page": page})
+            items = self._github_json(f"/repos/{path}/issues?{query}", headers)
+            if not isinstance(items, list):
+                raise GitHubConnectorError("GitHub trả dữ liệu không hợp lệ.")
+            for item in items:
+                updated = datetime.fromisoformat(item["updated_at"].replace("Z", "+00:00"))
+                if updated >= end:
+                    complete = True
+                    continue
+                if updated < start:
+                    continue
+                number = int(item["number"])
+                body = item.get("body") or ""
+                kind = "pr" if item.get("pull_request") else "issue"
+                found[number] = {"number": number, "kind": kind, "title": str(item["title"])[:500], "state": item["state"], "author": (item.get("user") or {}).get("login"), "createdAt": item["created_at"], "updatedAt": item["updated_at"], "closedAt": item.get("closed_at"), "url": f"https://github.com/{repository}/{'pull' if kind == 'pr' else 'issues'}/{number}", "body": body[:1000], "bodyTruncated": len(body) > 1000}
+                if len(found) > 200:
+                    raise GitHubConnectorError("Quá 200 issue/PR; hãy thu hẹp khoảng thời gian.")
+            if complete or len(items) < 100:
+                complete = True
+                break
+        if not complete:
+            raise GitHubConnectorError("Vượt giới hạn 10 trang; hãy thu hẹp khoảng thời gian.")
+        self.repository.audit(GITHUB_SLUG, "tool_invoked", connection.id, "workflow_github_report", f"Đọc {len(found)} issue/PR từ {repository}.")
+        return [{"id": f"S{index}", **item} for index, item in enumerate(found.values(), 1)]
 
     @staticmethod
     def _safe_error(error: Exception) -> str:

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
+import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from urllib.request import urlopen
@@ -80,6 +82,50 @@ class FileStorageService:
         if not path.is_file():
             return None
         return self.upload(path.read_bytes(), original_name, storage_area)
+
+    def upload_once(self, data: bytes, asset_id: str, provider: str) -> StoredFile:
+        """Reconcile an immutable workflow object after an interrupted upload."""
+        # Only hashes enter storage names or the provider's search language.
+        name = "workflow-" + sha256(asset_id.encode()).hexdigest() + "-" + sha256(data).hexdigest()
+        if provider == "local":
+            path = self._local_path(name)
+            if not path.exists():
+                temporary = self._local_path(self._store_local(data))
+                try:
+                    # Concurrent writers have exactly the same immutable bytes.
+                    os.replace(temporary, path)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            if path.read_bytes() != data:
+                raise ValueError("Nội dung artifact đã lưu không khớp checkpoint.")
+            return StoredFile("local", name)
+        if provider != "imagekit" or not self.imagekit_enabled:
+            raise ValueError("Storage của artifact không còn được cấu hình.")
+        client = self._imagekit()
+        folder = self._imagekit_folder("library")
+
+        def existing():
+            for item in client.assets.list(path=folder, search_query=f'name = "{name}"', limit=2):
+                if getattr(item, "file_path", None) == f"{folder}/{name}":
+                    stored = StoredFile("imagekit", item.file_path, item.file_id)
+                    if self.read(stored.provider, stored.stored_name, stored.file_id) != data:
+                        raise ValueError("Nội dung artifact đã lưu không khớp checkpoint.")
+                    return stored
+            return None
+
+        found = existing()
+        if found:
+            return found
+        try:
+            result = client.files.upload(file=data, file_name=name, folder=folder,
+                is_private_file=True, use_unique_file_name=False, overwrite_file=False)
+        except Exception:
+            # The response may have been lost after a successful upload.
+            found = existing()
+            if found:
+                return found
+            raise
+        return StoredFile("imagekit", str(result.file_path), str(result.file_id))
 
     def _imagekit_folder(self, storage_area: str) -> str:
         try:

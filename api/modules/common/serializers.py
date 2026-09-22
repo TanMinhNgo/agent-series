@@ -8,7 +8,6 @@ from agent_core.persistence.store import (
     ChatShare,
     Document,
     KnowledgeCollection,
-    LibraryAsset,
     Plugin,
     Project,
     PromptTemplate,
@@ -16,6 +15,8 @@ from agent_core.persistence.store import (
     ScheduleRun,
     User,
 )
+
+from agent_core.content.contracts import library_asset_json
 
 
 def chat_json(chat: Chat) -> dict[str, Any]:
@@ -49,9 +50,6 @@ def schedule_json(item: Schedule) -> dict[str, Any]:
 def schedule_run_json(item: ScheduleRun) -> dict[str, Any]:
     return {"id": item.id, "scheduleId": item.schedule_id, "scheduledFor": item.scheduled_for.isoformat(), "status": item.status, "retryCount": item.retry_count, "retryAt": item.retry_at.isoformat() if item.retry_at else None, "summary": item.summary, "error": item.error, "emailStatus": item.email_status, "emailSentAt": item.email_sent_at.isoformat() if item.email_sent_at else None, "emailError": item.email_error, "startedAt": item.started_at.isoformat(), "finishedAt": item.finished_at.isoformat() if item.finished_at else None}
 
-
-def library_asset_json(item: LibraryAsset) -> dict[str, Any]:
-    return {"id": item.id, "artifactId": item.artifact_id, "name": item.name, "version": item.version, "mimeType": item.mime_type, "sizeBytes": item.size_bytes, "source": item.source, "projectId": item.project_id, "isProjectSource": item.is_project_source, "indexStatus": item.index_status, "indexError": item.index_error, "createdAt": item.created_at.isoformat(), "url": f"/api/library/assets/{item.id}/file"}
 
 
 def retrieval_trace_json(item: Any) -> dict[str, Any]:

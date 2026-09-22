@@ -16,6 +16,10 @@ SMTP_TIMEOUT_SECONDS = 15
 class EmailDeliveryError(RuntimeError):
     """Raised when an email could not be delivered, with credentials stripped."""
 
+    def __init__(self, message: str, *, uncertain: bool = False):
+        super().__init__(message)
+        self.uncertain = uncertain
+
 
 def public_chat_url(app_web_url: str, chat_id: str) -> str | None:
     """Build a chat link only when the app is reachable outside this machine."""
@@ -41,17 +45,24 @@ class EmailNotificationService:
         message["To"] = to
         message["Subject"] = subject
         message.set_content(body)
+        sending = False
+        accepted = False
         try:
             with smtplib.SMTP(self.settings.smtp_host, self.settings.smtp_port, timeout=SMTP_TIMEOUT_SECONDS) as client:
                 if self.settings.smtp_use_tls:
                     client.starttls()
                 if self.settings.smtp_username:
                     client.login(self.settings.smtp_username, self.settings.smtp_password)
+                sending = True
                 client.send_message(message)
+                accepted = True
         except (OSError, smtplib.SMTPException) as exc:
+            if accepted:
+                return  # QUIT failed, but SMTP already accepted the message.
             # SMTPAuthenticationError can echo the submitted credentials, so the
             # class name is the only detail safe to surface or persist.
-            raise EmailDeliveryError(f"Không gửi được email ({type(exc).__name__}).") from exc
+            rejected = isinstance(exc, (smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused, smtplib.SMTPDataError))
+            raise EmailDeliveryError(f"Không gửi được email ({type(exc).__name__}).", uncertain=sending and not rejected) from exc
 
 
 def schedule_run_email(title: str, ran_at: datetime, summary: str | None, chat_url: str | None) -> tuple[str, str]:

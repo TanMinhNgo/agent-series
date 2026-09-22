@@ -15,7 +15,7 @@ và chạy được với mọi provider. Học viên chỉ cần đọc đúng 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable, Literal, Optional
 
 from .prompts import DEFAULT_SYSTEM_PROMPT
 from .response_blocks import parse_response
@@ -48,6 +48,7 @@ class AgentResult:
     text: str                        # câu trả lời cuối
     steps: list[Step] = field(default_factory=list)  # các bước gọi tool đã đi qua
     content_blocks: list[dict] = field(default_factory=list)
+    status: Literal["completed", "exhausted"] = "completed"
 
 
 class Agent:
@@ -136,10 +137,13 @@ class Agent:
             # Quay lại đầu vòng lặp: model xem kết quả tool rồi quyết định bước tiếp theo.
 
         # Nếu chạm giới hạn số bước mà vẫn chưa xong -> dừng an toàn và báo cho người dùng.
-        return AgentResult(
+        result = AgentResult(
             text=(
                 "Xin lỗi, mình đã đạt giới hạn số bước suy luận mà chưa hoàn tất. "
                 "Bạn thử hỏi cụ thể hơn giúp mình nhé."
             ),
             steps=steps,
+            status="exhausted",
         )
+        self.history.append({"role": "assistant", "content": result.text})
+        return result

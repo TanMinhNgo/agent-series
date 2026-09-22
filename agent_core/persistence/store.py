@@ -433,6 +433,7 @@ class Schedule(UserOwned, Base):
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     project_id: Mapped[str | None] = mapped_column(ForeignKey(PROJECT_ID_FOREIGN_KEY, ondelete="CASCADE"), nullable=True)
+    workflow_id: Mapped[str | None] = mapped_column(ForeignKey("workflows.id", ondelete="SET NULL"), nullable=True, index=True)
     chat_id: Mapped[str | None] = mapped_column(ForeignKey(CHAT_ID_FOREIGN_KEY, ondelete=SET_NULL), nullable=True)
     provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     model: Mapped[str | None] = mapped_column(String(160), nullable=True)
@@ -466,6 +467,55 @@ class ScheduleRun(UserOwned, Base):
     email_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Workflow(UserOwned, Base):
+    __tablename__ = "workflows"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(ForeignKey(PROJECT_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    config: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class WorkflowRun(UserOwned, Base):
+    __tablename__ = "workflow_runs"
+    __table_args__ = (UniqueConstraint("workflow_id", "user_id", "idempotency_key", name="uq_workflow_trigger"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workflow_id: Mapped[str] = mapped_column(ForeignKey("workflows.id", ondelete="CASCADE"), index=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey(PROJECT_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
+    snapshot: Mapped[dict] = mapped_column(JSON)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    artifact_id: Mapped[str | None] = mapped_column(ForeignKey("library_assets.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    lease_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class WorkflowStepRun(UserOwned, Base):
+    __tablename__ = "workflow_step_runs"
+    __table_args__ = (UniqueConstraint("run_id", "step_id", name="uq_workflow_run_step"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    run_id: Mapped[str] = mapped_column(ForeignKey("workflow_runs.id", ondelete="CASCADE"), index=True)
+    step_id: Mapped[str] = mapped_column(String(32))
+    position: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    output: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
 
 class Plugin(UserOwned, Base):
@@ -1255,9 +1305,12 @@ class ConnectorRepository:
     def __init__(self, database: Database):
         self.database = database
 
-    def get_connection(self, connector_slug: str) -> ConnectorConnection | None:
+    def get_connection(self, connector_slug: str, owner_id: str | None = None) -> ConnectorConnection | None:
         with self.database.session() as session:
-            return session.scalar(select(ConnectorConnection).where(ConnectorConnection.connector_slug == connector_slug))
+            query = select(ConnectorConnection).where(ConnectorConnection.connector_slug == connector_slug)
+            if owner_id is not None:
+                query = query.where(ConnectorConnection.user_id == owner_id)
+            return session.scalar(query)
 
     def save_connection(self, connector_slug: str, encrypted_token: str, account_email: str | None, scopes: list[str], expires_at: datetime | None, status: str = "connected") -> ConnectorConnection:
         with self.database.session() as session:
@@ -1275,9 +1328,12 @@ class ConnectorRepository:
             session.commit()
             return item
 
-    def set_connection_status(self, connector_slug: str, status: str) -> ConnectorConnection | None:
+    def set_connection_status(self, connector_slug: str, status: str, owner_id: str | None = None) -> ConnectorConnection | None:
         with self.database.session() as session:
-            item = session.scalar(select(ConnectorConnection).where(ConnectorConnection.connector_slug == connector_slug))
+            query = select(ConnectorConnection).where(ConnectorConnection.connector_slug == connector_slug)
+            if owner_id is not None:
+                query = query.where(ConnectorConnection.user_id == owner_id)
+            item = session.scalar(query)
             if item is None:
                 return None
             item.status = status
@@ -1544,9 +1600,14 @@ class ScheduleRepository:
             return None
         interval = timedelta(days=1 if schedule.recurrence == "daily" else 7)
         candidate = schedule.next_run_at or now
+        if schedule.workflow_id:
+            from zoneinfo import ZoneInfo
+            if candidate.tzinfo is None:
+                candidate = candidate.replace(tzinfo=UTC)
+            candidate = candidate.astimezone(ZoneInfo(schedule.timezone))
         while candidate <= now:
             candidate += interval
-        return candidate
+        return candidate.astimezone(UTC) if schedule.workflow_id else candidate
 
     def claim_due(self, now: datetime) -> list[tuple[Schedule, ScheduleRun]]:
         claimed: list[tuple[Schedule, ScheduleRun]] = []
@@ -1560,6 +1621,15 @@ class ScheduleRepository:
                 scheduled_for = schedule.next_run_at
                 if scheduled_for is None:
                     continue
+                if schedule.workflow_id:
+                    from zoneinfo import ZoneInfo
+                    if scheduled_for.tzinfo is None:
+                        scheduled_for = scheduled_for.replace(tzinfo=UTC)
+                    interval = timedelta(days=1 if schedule.recurrence == "daily" else 7)
+                    local = scheduled_for.astimezone(ZoneInfo(schedule.timezone))
+                    while local + interval <= now:
+                        local += interval
+                    scheduled_for = local.astimezone(UTC)
                 already_ran = session.scalar(
                     select(ScheduleRun.id)
                     .where(ScheduleRun.schedule_id == schedule.id, ScheduleRun.scheduled_for == scheduled_for)
@@ -1582,14 +1652,21 @@ class ScheduleRepository:
                     started_at=now,
                     heartbeat_at=now,
                     user_id=schedule.user_id,
+                    workspace_id=schedule.workspace_id,
                 )
                 session.add(run)
+                if schedule.workflow_id:
+                    from agent_core.workflows.repository import WorkflowRepository
+                    workflow_run = WorkflowRepository.enqueue_schedule(session, schedule, scheduled_for)
+                    run.status, run.finished_at = "succeeded", now
+                    run.summary = f"Workflow run: {workflow_run.id}"
                 schedule.last_run_at = now
                 schedule.next_run_at = self.next_run_after(schedule, now)
                 if schedule.next_run_at is None:
                     schedule.status = "completed"
                 schedule.updated_at = now
-                claimed.append((schedule, run))
+                if not schedule.workflow_id:
+                    claimed.append((schedule, run))
             session.commit()
             return claimed
 
@@ -1616,6 +1693,8 @@ class ScheduleRepository:
             schedule = session.get(Schedule, schedule_id, with_for_update=True)
             if schedule is None:
                 return None
+            if schedule.workflow_id:
+                raise ValueError("Hãy chạy workflow từ Project; lịch này không tạo chat.")
             running = session.scalar(
                 select(ScheduleRun.id)
                 .where(ScheduleRun.schedule_id == schedule_id, ScheduleRun.status == "running")
@@ -1645,6 +1724,22 @@ class ScheduleRepository:
             schedule.last_run_at, schedule.updated_at = now, now
             session.commit()
             return schedule, run
+
+    def enqueue_workflow_manual(self, schedule_id: str, now: datetime):
+        from agent_core.workflows.repository import WorkflowRepository
+        with self.database.session() as session:
+            schedule = session.get(Schedule, schedule_id, with_for_update=True)
+            if schedule is None or not schedule.workflow_id:
+                raise ValueError("Không tìm thấy lịch workflow.")
+            run = WorkflowRepository.enqueue_schedule(session, schedule, now)
+            previous = session.scalar(select(ScheduleRun).where(ScheduleRun.schedule_id == schedule_id, ScheduleRun.scheduled_for == now))
+            if previous is None:
+                session.add(ScheduleRun(schedule_id=schedule.id, scheduled_for=now, status="succeeded",
+                    started_at=now, finished_at=now, summary=f"Workflow run: {run.id}",
+                    user_id=schedule.user_id, workspace_id=schedule.workspace_id))
+            schedule.last_run_at = now
+            session.commit()
+            return run
 
     def schedule_retry(self, run_id: str, error: str, delays: tuple[int, ...], now: datetime | None = None) -> tuple[datetime, int] | None:
         """Queue one durable retry, returning its due time and retry number."""

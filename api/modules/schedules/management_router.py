@@ -1,6 +1,7 @@
 """Schedule mutation and run-management endpoints."""
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from threading import Thread
 from typing import Any, Callable
 
@@ -37,6 +38,8 @@ def build_router(deps: ScheduleManagementDependencies) -> APIRouter:
         if current is None:
             raise HTTPException(status_code=404, detail=deps.schedule_not_found_error)
         values = payload.model_dump(exclude_unset=True)
+        if getattr(current, "workflow_id", None) and set(values) - {"status"}:
+            raise HTTPException(409, "Lịch workflow chỉ cho phép bật hoặc tạm dừng tại đây.")
         starts_at = values.get("starts_at", current.starts_at)
         ends_at = values.get("ends_at", current.ends_at)
         if ends_at and ends_at < starts_at:
@@ -81,6 +84,16 @@ def build_router(deps: ScheduleManagementDependencies) -> APIRouter:
         schedule = deps.services().workspace.get(deps.schedule_model, schedule_id)
         if schedule is None:
             raise HTTPException(status_code=404, detail=deps.schedule_not_found_error)
+        if getattr(schedule, "workflow_id", None):
+            from agent_core.workflows.executor import authorize
+            try:
+                authorize(deps.services(), schedule.project_id, write=True)
+                run = deps.schedule_repository(deps.services().chats.database).enqueue_workflow_manual(schedule.id, datetime.now(UTC))
+            except PermissionError as exc:
+                raise HTTPException(403, str(exc)) from exc
+            except (ValueError, LookupError) as exc:
+                raise HTTPException(409, str(exc)) from exc
+            return {"status": run.status, "workflowRunId": run.id, "projectId": run.project_id}
         worker = deps.schedule_worker(deps.services())
         try:
             prepared = worker.start_manual(schedule_id)
@@ -98,6 +111,8 @@ def build_router(deps: ScheduleManagementDependencies) -> APIRouter:
         if schedule is None:
             raise HTTPException(status_code=404, detail=deps.schedule_not_found_error)
         runs = deps.schedule_repository(deps.services().chats.database)
+        if getattr(schedule, "workflow_id", None):
+            raise HTTPException(409, "Gửi lại email từ chi tiết workflow run.")
         run = runs.get_run(schedule_id, run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Không tìm thấy lần chạy.")

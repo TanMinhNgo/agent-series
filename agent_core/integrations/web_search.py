@@ -75,7 +75,7 @@ class WebSearchService:
                 continue
             name = str(item.get("title") or url).strip()[:300]
             snippet = str(item.get("content") or "").strip()[:4000]
-            sources.append({"name": name, "url": url, "kind": "external"})
+            sources.append({"name": name, "url": url, "kind": "external", "content": snippet})
             context.append(f"[{name}]({url})\n{snippet}")
         if not sources:
             return "[Không có kết quả web đáng tin cậy.]"

@@ -22,7 +22,7 @@ class FakeConnectorRepository:
         self.connection = SimpleNamespace(id="connection-1", encrypted_token=encrypted_token, account_email=account_email, scopes=scopes, expires_at=expires_at, status=status)
         return self.connection
 
-    def set_connection_status(self, _slug, status):
+    def set_connection_status(self, _slug, status, owner_id=None):
         self.connection.status = status
 
     def delete_connection(self, _slug):

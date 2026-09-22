@@ -457,7 +457,7 @@ def test_schedule_worker_restores_owner_and_replaces_legacy_chat(monkeypatch) ->
             assert prompt == "Dạy frontend"
             assert append_user_message is False
             self.history.append({"role": "assistant", "content": "Bài học đã sẵn sàng."})
-            return SimpleNamespace(text="Bài học đã sẵn sàng.", content_blocks=[])
+            return SimpleNamespace(text="Bài học đã sẵn sàng.", content_blocks=[], status="completed")
 
     services = SimpleNamespace(
         chats=Chats(),
@@ -512,9 +512,9 @@ def test_schedule_worker_retries_transient_provider_errors_without_duplicate_pro
             attempts += 1
             assert append_user_message is False
             if attempts == 1:
-                raise RuntimeError("503 UNAVAILABLE")
+                raise ConnectionError("provider unavailable")
             self.history.append({"role": "assistant", "content": "Đã hoàn tất."})
-            return SimpleNamespace(text="Đã hoàn tất.", content_blocks=[])
+            return SimpleNamespace(text="Đã hoàn tất.", content_blocks=[], status="completed")
 
     services = SimpleNamespace(
         chats=Chats(),
@@ -557,10 +557,14 @@ def test_schedule_worker_creates_chat_with_saved_schedule_provider_model() -> No
     ))
     worker.runs = SimpleNamespace(attach_chat=lambda *_args: None)
 
-    result = worker.ensure_chat(Schedule(
-        id="schedule-1", user_id="user-1", title="Báo cáo",
-        provider="openai", model="gpt-test",
-    ))
+    token = current_user_id.set("user-1")
+    try:
+        result = worker.ensure_chat(Schedule(
+            id="schedule-1", user_id="user-1", title="Báo cáo",
+            provider="openai", model="gpt-test",
+        ))
+    finally:
+        current_user_id.reset(token)
 
     assert result is chat
     assert created == [("openai", "gpt-test")]
@@ -584,7 +588,7 @@ def test_schedule_worker_reports_final_transient_failure_after_retry_budget(monk
 
     class AgentStub:
         def __init__(self, history): self.history = history
-        def run(self, *_args, **_kwargs): raise RuntimeError("503 UNAVAILABLE")
+        def run(self, *_args, **_kwargs): raise ConnectionError("provider unavailable")
 
     services = SimpleNamespace(chats=Chats(), memory=SimpleNamespace(recall=lambda *_args: ""), workspace=SimpleNamespace(list_plugins=lambda: []))
     worker = ScheduleWorker(services)
@@ -628,7 +632,7 @@ def _grounded_worker(monkeypatch, *, search_result: str, notify_email: bool, sen
             state.agent_calls += 1
             assert append_user_message is False
             self.history.append({"role": "assistant", "content": "Bản tin."})
-            return SimpleNamespace(text="Bản tin.", content_blocks=[])
+            return SimpleNamespace(text="Bản tin.", content_blocks=[], status="completed")
 
     def default_send(_to, _subject, _body): state.sent.append(_to)
 
@@ -717,7 +721,8 @@ def test_schedule_without_email_notification_never_touches_smtp(monkeypatch) -> 
 
 def test_absent_web_sources_are_never_treated_as_a_transient_provider_error() -> None:
     assert ScheduleWorker._is_transient_error(WebSourceUnavailable("Không thể tìm web: timed out")) is False
-    assert ScheduleWorker._is_transient_error(RuntimeError("503 UNAVAILABLE")) is True
+    assert ScheduleWorker._is_transient_error(RuntimeError("503 UNAVAILABLE")) is False
+    assert ScheduleWorker._is_transient_error(ConnectionError("provider unavailable")) is True
 
 
 def test_run_heartbeat_reports_while_running_and_stops_on_exit() -> None:
@@ -753,6 +758,14 @@ def test_health_and_public_config_do_not_expose_provider_keys(monkeypatch) -> No
     # Stub the available set here so this public-response contract never depends
     # on the shared local PostgreSQL state used by other tests.
     monkeypatch.setattr(main_module, "available_provider_models", lambda _user_id, _ollama_models=None: {"gemini": ["gemini-test"]})
+    fake_services = SimpleNamespace(
+        settings=SimpleNamespace(provider="gemini", active_model="gemini-test", gemini_api_key="test-secret"),
+        auth=SimpleNamespace(session_user=lambda _cookie: None),
+        ollama=SimpleNamespace(models=lambda: []),
+    )
+    monkeypatch.setattr(app.state, "services", fake_services, raising=False)
+    monkeypatch.setattr(main_module, "build_services", lambda: fake_services)
+    monkeypatch.setattr(main_module, "queue_pending_artifacts", lambda _services: 0)
 
     with TestClient(app) as client:
         assert client.get("/api/health").json() == {"status": "ok"}
@@ -971,7 +984,7 @@ def test_stream_chat_restores_the_chat_owner_in_its_worker_thread(monkeypatch) -
                 {"role": "user", "content": "RAG là gì?"},
                 {"role": "assistant", "content": "world"},
             ]
-            return SimpleNamespace(text="world", content_blocks=[])
+            return SimpleNamespace(text="world", content_blocks=[], status="completed")
 
     class Jobs:
         def __init__(self, _database): pass
@@ -1007,7 +1020,7 @@ def test_stream_chat_retrieves_the_global_library_before_creating_the_agent(monk
         history: list[dict] = []
         def run(self, _content, _attachments, on_step, **_kwargs):
             self.history = [{"role": "user", "content": "RAG là gì?"}, {"role": "assistant", "content": "RAG"}]
-            return SimpleNamespace(text="RAG", content_blocks=[])
+            return SimpleNamespace(text="RAG", content_blocks=[], status="completed")
 
     class Jobs:
         def __init__(self, _database): pass
@@ -1119,7 +1132,7 @@ def test_make_agent_does_not_mutate_the_history_being_persisted(monkeypatch) -> 
         media=SimpleNamespace(hydrate_history=lambda value: value),
         knowledge=SimpleNamespace(),
     )
-    monkeypatch.setattr(main_module, "selected_settings", lambda *_args: SimpleNamespace(max_steps=5))
+    monkeypatch.setattr(main_module, "_selected_settings", lambda *_args: SimpleNamespace(max_steps=5))
     monkeypatch.setattr(main_module, "build_client", lambda _settings: object())
     monkeypatch.setattr(main_module, "build_knowledge_tool", lambda *_args: None)
     monkeypatch.setattr(main_module, "build_default_registry", lambda *_args, **_kwargs: object())
@@ -1152,7 +1165,7 @@ def test_make_agent_uses_a_version_only_tool_for_an_artifact_edit(monkeypatch) -
             or SimpleNamespace(id="asset-v2", artifact_id="artifact-1", name="ke-hoach.md", version=2),
         ),
     )
-    monkeypatch.setattr(main_module, "selected_settings", lambda *_args: SimpleNamespace(max_steps=5))
+    monkeypatch.setattr(main_module, "_selected_settings", lambda *_args: SimpleNamespace(max_steps=5))
     monkeypatch.setattr(main_module, "build_client", lambda _settings: object())
     monkeypatch.setattr(main_module, "build_knowledge_tool", lambda *_args: None)
     monkeypatch.setattr(main_module, "build_default_registry", lambda _knowledge, extra_tools: captured_tools.extend(extra_tools) or object())
@@ -1437,7 +1450,9 @@ def test_editing_a_schedule_does_not_rewind_next_run_at_when_timing_is_unchanged
     assert any(key in retimed and retimed[key] != getattr(current, key) for key in ("starts_at", "recurrence"))
 
 
-def test_plugin_tools_require_an_enabled_connected_read_plugin() -> None:
+def test_plugin_tools_require_an_enabled_connected_read_plugin(monkeypatch) -> None:
+    from agent_core.integrations.github_app import GitHubAppExecutor, GitHubAppService
+    monkeypatch.setitem(EXECUTORS, "github", GitHubAppExecutor(GitHubAppService(None, None)))
     plugin = Plugin(id="plugin-1", slug="github", name="GitHub", enabled=True, connection_status="connected", capabilities=["search"])
     assert {tool.name for tool in connected_read_tools([plugin])} == {
         "list_github_repositories",
@@ -1483,3 +1498,30 @@ def test_plugin_catalog_has_unique_slugs_and_expected_core_apps() -> None:
     assert [item.slug for item in CATALOG if item.featured] == ["google-workspace", "notion", "figma", "github", "slack"]
     assert find_catalog_plugin("github").name == "GitHub"
     assert find_catalog_plugin("missing") is None
+
+
+def test_exhausted_schedule_does_not_retry_or_send_success_email(monkeypatch):
+    from agent_core.ai.agent import Agent
+    from agent_core.tools.registry import ToolRegistry
+
+    worker, schedule, state = _grounded_worker(monkeypatch, search_result=SEARCH_OK, notify_email=True)
+    def exhausted_agent(*_args, **kwargs):
+        agent = Agent(object(), ToolRegistry([]), max_steps=0)
+        agent.history = list(kwargs["history"])
+        return agent
+    monkeypatch.setattr("agent_core.jobs.scheduler.make_agent", exhausted_agent)
+    worker.execute(schedule, "run-1")
+    assert len(state.finished) == 1
+    assert "giới hạn số bước" in state.finished[0]["error"]
+    assert state.history[-1]["content"] == state.finished[0]["error"]
+    assert state.retries == 0
+    assert state.sent == state.emails == []
+
+
+def test_api_agent_translates_domain_validation_error(monkeypatch):
+    from fastapi import HTTPException
+    monkeypatch.setattr(main_module, "_selected_settings", lambda *_args: (_ for _ in ()).throw(ValueError("Model disabled")))
+    with pytest.raises(HTTPException) as captured:
+        make_agent(SimpleNamespace(), Chat(provider="openai", model="disabled"))
+    assert captured.value.status_code == 422
+    assert captured.value.detail == "Model disabled"
