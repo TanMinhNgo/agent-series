@@ -22,16 +22,21 @@ class ChatDetailDependencies:
     project_model: Any
 
 
+def _validate_collection_update(deps: ChatDetailDependencies, chat: Any, payload: UpdateChatRequest) -> None:
+    if "collection_id" not in payload.model_fields_set or not payload.collection_id:
+        return
+    collection = deps.services().knowledge.get_collection(payload.collection_id)
+    target_project = payload.project_id if "project_id" in payload.model_fields_set else chat.project_id
+    if collection is None or collection.project_id != target_project:
+        raise HTTPException(status_code=422, detail="Collection phải thuộc Project của chat.")
+
+
 def _update_values(deps: ChatDetailDependencies, chat: Any, payload: UpdateChatRequest) -> dict[str, Any]:
     provider, model = payload.provider or chat.provider, payload.model or chat.model
     deps.selected_settings(provider, model, deps.current_user_id())
     if payload.project_id and deps.services().workspace.get(deps.project_model, payload.project_id) is None:
         raise HTTPException(status_code=422, detail=deps.selected_project_not_found_error)
-    if "collection_id" in payload.model_fields_set and payload.collection_id:
-        collection = deps.services().knowledge.get_collection(payload.collection_id)
-        target_project = payload.project_id if "project_id" in payload.model_fields_set else chat.project_id
-        if collection is None or collection.project_id != target_project:
-            raise HTTPException(status_code=422, detail="Collection phải thuộc Project của chat.")
+    _validate_collection_update(deps, chat, payload)
     values = {"provider": provider, "model": model}
     for field in ("title", "pinned", "archived", "project_id", "collection_id", "mode"):
         if field in payload.model_fields_set:

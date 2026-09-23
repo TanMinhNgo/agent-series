@@ -29,6 +29,17 @@ class ScheduleManagementDependencies:
     api_error_responses: dict
 
 
+def _resolve_update_selection(deps: ScheduleManagementDependencies, current: Any, values: dict[str, Any]) -> None:
+    if not {"provider", "model"}.intersection(values):
+        return
+    provider = values.get("provider", current.provider)
+    model = values.get("model") if "model" in values else (current.model if "provider" not in values else None)
+    try:
+        values["provider"], values["model"] = deps.resolve_schedule_selection(provider, model, deps.current_user_id())
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def _schedule_update_values(deps: ScheduleManagementDependencies, current: Any, payload: ScheduleUpdateRequest) -> dict[str, Any]:
     values = payload.model_dump(exclude_unset=True)
     if getattr(current, "workflow_id", None) and set(values) - {"status"}:
@@ -42,13 +53,7 @@ def _schedule_update_values(deps: ScheduleManagementDependencies, current: Any, 
         raise HTTPException(status_code=422, detail=deps.selected_project_not_found_error)
     if values.get("status") == "active" and current.status == "completed" and current.recurrence == "once":
         raise HTTPException(status_code=422, detail="Lịch một lần đã hoàn tất; hãy tạo lịch mới để chạy lại.")
-    if {"provider", "model"}.intersection(values):
-        provider = values.get("provider", current.provider)
-        model = values.get("model") if "model" in values else (current.model if "provider" not in values else None)
-        try:
-            values["provider"], values["model"] = deps.resolve_schedule_selection(provider, model, deps.current_user_id())
-        except Exception as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _resolve_update_selection(deps, current, values)
     if any(key in values and values[key] != getattr(current, key) for key in ("starts_at", "recurrence")) and "next_run_at" not in values:
         values["next_run_at"] = values.get("starts_at", current.starts_at)
     return values
