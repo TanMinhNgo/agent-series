@@ -23,6 +23,13 @@ type Props = {
   onCollectionChange?: (collectionId: string | null) => void;
 };
 
+const PROVIDER_NAMES: Record<string, string> = {
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  gemini: 'Google',
+  ollama: 'Ollama',
+};
+
 export function ChatHeader({
   chat,
   config,
@@ -53,16 +60,7 @@ export function ChatHeader({
     return Object.entries({ ...config.providers, ollama: config.providers.ollama ?? [] }).map(
       ([providerId, models]) => ({
         id: providerId,
-        name:
-          providerId === 'openai'
-            ? 'OpenAI'
-            : providerId === 'anthropic'
-              ? 'Anthropic'
-              : providerId === 'gemini'
-                ? 'Google'
-                : providerId === 'ollama'
-                  ? 'Ollama'
-                  : providerId,
+        name: PROVIDER_NAMES[providerId] ?? providerId,
         notice:
           providerId === 'ollama' ? (
             <div className="space-y-2" role="status">

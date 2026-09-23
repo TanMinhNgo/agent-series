@@ -19,6 +19,18 @@ class MessageRouteDependencies:
     error_responses: dict
 
 
+def _visible_messages(deps: MessageRouteDependencies, services: Any, chat_id: str) -> list[dict[str, Any]]:
+    backfill = getattr(services.chats, "backfill_artifact_links", None)
+    if backfill:
+        backfill(chat_id)
+    history = [item for item in services.chats.history(chat_id) if item["role"] in {"user", "assistant"}]
+    ids = [item["message_id"] for item in history if item["role"] == "assistant" and item.get("message_id")]
+    artifacts = services.chats.artifacts_by_assistant_message(chat_id, ids) if hasattr(services.chats, "artifacts_by_assistant_message") else {}
+    feedback = services.personalization.feedback_by_message_ids(ids)
+    traces = services.workspace.retrieval_traces(ids) if hasattr(services.workspace, "retrieval_traces") else {}
+    return [deps.message_json({**item, "feedback_kind": feedback.get(item.get("message_id")), "artifacts": [deps.library_asset_json(a) for a in artifacts.get(item.get("message_id", ""), [])], "retrievalTrace": [deps.retrieval_trace_json(t) for t in traces.get(item.get("message_id", ""), [])]} if item["role"] == "assistant" else item) for item in history]
+
+
 def build_router(deps: MessageRouteDependencies) -> APIRouter:
     router = APIRouter(tags=["Chats"])
 
@@ -27,15 +39,7 @@ def build_router(deps: MessageRouteDependencies) -> APIRouter:
         services = deps.services()
         if services.chats.get(chat_id) is None:
             raise HTTPException(status_code=404, detail=deps.chat_not_found_error)
-        backfill = getattr(services.chats, "backfill_artifact_links", None)
-        if backfill:
-            backfill(chat_id)
-        history = [item for item in services.chats.history(chat_id) if item["role"] in {"user", "assistant"}]
-        ids = [item["message_id"] for item in history if item["role"] == "assistant" and item.get("message_id")]
-        artifacts = services.chats.artifacts_by_assistant_message(chat_id, ids) if hasattr(services.chats, "artifacts_by_assistant_message") else {}
-        feedback = services.personalization.feedback_by_message_ids(ids)
-        traces = services.workspace.retrieval_traces(ids) if hasattr(services.workspace, "retrieval_traces") else {}
-        return [deps.message_json({**item, "feedback_kind": feedback.get(item.get("message_id")), "artifacts": [deps.library_asset_json(a) for a in artifacts.get(item.get("message_id", ""), [])], "retrievalTrace": [deps.retrieval_trace_json(t) for t in traces.get(item.get("message_id", ""), [])]} if item["role"] == "assistant" else item) for item in history]
+        return _visible_messages(deps, services, chat_id)
 
     @router.post("/api/chats/{chat_id}/read", responses=deps.error_responses)
     def mark_chat_read(chat_id: str) -> dict[str, Any]:

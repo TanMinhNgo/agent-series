@@ -23,6 +23,23 @@ class StreamDependencies:
     current_workspace_id: Any
 
 
+def _dispatch_turn(deps: StreamDependencies, app_services: Any, chat: Any, chat_id: str, content: str, attachments: list[dict], artifact_edit: Any, cancel_event: Event, events: Queue, research_web: bool) -> None:
+    if cancel_event.is_set():
+        raise deps.agent_cancelled()
+    events.put(("status", {"message": "Agent đang suy nghĩ..."}))
+    full_history = app_services.chats.history(chat_id)
+    if getattr(chat, "mode", "standard") == "image":
+        deps.run_image_turn(app_services, chat_id, content, attachments, full_history, events, deps.message_json)
+        return
+    static_response = None if attachments or artifact_edit is not None else deps.small_talk_response(content)
+    if static_response is not None:
+        if cancel_event.is_set():
+            raise deps.agent_cancelled()
+        deps.persist_static_response(app_services, chat_id, full_history, content, static_response, events)
+        return
+    deps.run_agent_turn(app_services, chat, chat_id, content, attachments, artifact_edit, cancel_event, full_history, events, research_web)
+
+
 def stream_chat(
     deps: StreamDependencies,
     chat_id: str,
@@ -46,20 +63,7 @@ def stream_chat(
         user_token = deps.current_user_id.set(chat.user_id)
         workspace_token = deps.current_workspace_id.set(chat.workspace_id)
         try:
-            if cancel_event.is_set():
-                raise deps.agent_cancelled()
-            events.put(("status", {"message": "Agent đang suy nghĩ..."}))
-            full_history = app_services.chats.history(chat_id)
-            if getattr(chat, "mode", "standard") == "image":
-                deps.run_image_turn(app_services, chat_id, content, attachments, full_history, events, deps.message_json)
-                return
-            static_response = None if attachments or artifact_edit is not None else deps.small_talk_response(content)
-            if static_response is not None:
-                if cancel_event.is_set():
-                    raise deps.agent_cancelled()
-                deps.persist_static_response(app_services, chat_id, full_history, content, static_response, events)
-                return
-            deps.run_agent_turn(app_services, chat, chat_id, content, attachments, artifact_edit, cancel_event, full_history, events, research_web)
+            _dispatch_turn(deps, app_services, chat, chat_id, content, attachments, artifact_edit, cancel_event, events, research_web)
         except deps.agent_cancelled:
             events.put(("cancelled", {"message": "Đã dừng tạo phản hồi."}))
         except (deps.image_generation_error, ValueError) as exc:

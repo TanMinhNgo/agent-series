@@ -19,6 +19,36 @@ class ConnectorOAuthDependencies:
     api_error_responses: dict
 
 
+def _google_callback(deps: ConnectorOAuthDependencies, request: Request, code: str | None, state: str | None, error: str | None) -> RedirectResponse:
+    base_url = deps.services().settings.app_web_url
+    if error or not code or not state:
+        return RedirectResponse(f"{base_url}/plugins?{urlencode({'google': 'cancelled'})}", status_code=303)
+    try:
+        deps.services().google_workspace.complete_authorization(code, state)
+        deps.set_plugin_connection(deps.google_slug, "connected")
+        user = request.state.user
+        deps.services().auth.repository.add_system_audit("plugin_connected", actor_user_id=user.id, subject_user_id=user.id, summary="Đã kết nối Google Workspace (chỉ đọc).")
+        result = "connected"
+    except deps.google_error:
+        result = "failed"
+    return RedirectResponse(f"{base_url}/plugins?{urlencode({'google': result})}", status_code=303)
+
+
+def _github_callback(deps: ConnectorOAuthDependencies, request: Request, installation_id: str | None, state: str | None, setup_action: str | None) -> RedirectResponse:
+    base_url = deps.services().settings.app_web_url
+    if setup_action == "update" or not installation_id or not state:
+        return RedirectResponse(f"{base_url}/plugins?{urlencode({'github': 'cancelled'})}", status_code=303)
+    try:
+        deps.services().github.complete_installation(installation_id, state)
+        deps.set_plugin_connection(deps.github_slug, "connected")
+        user = request.state.user
+        deps.services().auth.repository.add_system_audit("plugin_connected", actor_user_id=user.id, subject_user_id=user.id, summary="Đã kết nối GitHub App (chỉ đọc).")
+        result = "connected"
+    except deps.github_error:
+        result = "failed"
+    return RedirectResponse(f"{base_url}/plugins?{urlencode({'github': result})}", status_code=303)
+
+
 def build_router(deps: ConnectorOAuthDependencies) -> APIRouter:
     router = APIRouter(tags=["Connectors"])
 
@@ -33,18 +63,7 @@ def build_router(deps: ConnectorOAuthDependencies) -> APIRouter:
 
     @router.get("/api/connectors/google/callback", include_in_schema=False)
     def google_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None) -> RedirectResponse:
-        base_url = deps.services().settings.app_web_url
-        if error or not code or not state:
-            return RedirectResponse(f"{base_url}/plugins?{urlencode({'google': 'cancelled'})}", status_code=303)
-        try:
-            deps.services().google_workspace.complete_authorization(code, state)
-            deps.set_plugin_connection(deps.google_slug, "connected")
-            user = request.state.user
-            deps.services().auth.repository.add_system_audit("plugin_connected", actor_user_id=user.id, subject_user_id=user.id, summary="Đã kết nối Google Workspace (chỉ đọc).")
-            result = "connected"
-        except deps.google_error:
-            result = "failed"
-        return RedirectResponse(f"{base_url}/plugins?{urlencode({'google': result})}", status_code=303)
+        return _google_callback(deps, request, code, state, error)
 
     @router.delete("/api/connectors/google", status_code=204, responses=deps.api_error_responses)
     def google_disconnect(request: Request) -> None:
@@ -64,18 +83,7 @@ def build_router(deps: ConnectorOAuthDependencies) -> APIRouter:
 
     @router.get("/api/connectors/github/callback", include_in_schema=False)
     def github_callback(request: Request, installation_id: str | None = None, state: str | None = None, setup_action: str | None = None) -> RedirectResponse:
-        base_url = deps.services().settings.app_web_url
-        if setup_action == "update" or not installation_id or not state:
-            return RedirectResponse(f"{base_url}/plugins?{urlencode({'github': 'cancelled'})}", status_code=303)
-        try:
-            deps.services().github.complete_installation(installation_id, state)
-            deps.set_plugin_connection(deps.github_slug, "connected")
-            user = request.state.user
-            deps.services().auth.repository.add_system_audit("plugin_connected", actor_user_id=user.id, subject_user_id=user.id, summary="Đã kết nối GitHub App (chỉ đọc).")
-            result = "connected"
-        except deps.github_error:
-            result = "failed"
-        return RedirectResponse(f"{base_url}/plugins?{urlencode({'github': result})}", status_code=303)
+        return _github_callback(deps, request, installation_id, state, setup_action)
 
     @router.delete("/api/connectors/github", status_code=204, responses=deps.api_error_responses)
     def github_disconnect(request: Request) -> None:

@@ -21,6 +21,31 @@ class ChatCrudDependencies:
     error_responses: dict
 
 
+def _selected_chat_settings(deps: ChatCrudDependencies, payload: CreateChatRequest) -> Any:
+    settings = deps.services().settings
+    available = deps.available_provider_models(deps.current_user_id.get())
+    provider = payload.provider or (settings.provider if settings.provider in available else next(iter(available), settings.provider))
+    model = payload.model or (settings.active_model if settings.active_model in available.get(provider, []) else (available.get(provider) or [settings.active_model])[0])
+    try:
+        selected = deps.selected_settings(provider, model, deps.current_user_id.get())
+    except (ValueError, CredentialError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return selected
+
+
+def _create_chat(deps: ChatCrudDependencies, payload: CreateChatRequest) -> dict[str, Any]:
+    selected = _selected_chat_settings(deps, payload)
+    if payload.context_source_chat_id and deps.services().chats.get(payload.context_source_chat_id) is None:
+        raise HTTPException(status_code=422, detail="Không tìm thấy chat nguồn để kế thừa context.")
+    if payload.project_id and deps.services().workspace.get(Project, payload.project_id) is None:
+        raise HTTPException(status_code=422, detail=deps.selected_project_not_found_error)
+    if payload.collection_id:
+        collection = deps.services().knowledge.get_collection(payload.collection_id)
+        if collection is None or collection.project_id != payload.project_id:
+            raise HTTPException(status_code=422, detail="Collection phải thuộc Project đã chọn.")
+    return deps.chat_json(deps.services().chats.create(selected.provider, selected.active_model, payload.context_source_chat_id, payload.project_id, payload.collection_id, payload.mode))
+
+
 def build_router(deps: ChatCrudDependencies) -> APIRouter:
     router = APIRouter(tags=["Chats"])
 
@@ -32,22 +57,6 @@ def build_router(deps: ChatCrudDependencies) -> APIRouter:
 
     @router.post("/api/chats", status_code=201, responses=deps.error_responses)
     def create_chat(payload: CreateChatRequest) -> dict[str, Any]:
-        settings = deps.services().settings
-        available = deps.available_provider_models(deps.current_user_id.get())
-        provider = payload.provider or (settings.provider if settings.provider in available else next(iter(available), settings.provider))
-        model = payload.model or (settings.active_model if settings.active_model in available.get(provider, []) else (available.get(provider) or [settings.active_model])[0])
-        try:
-            selected = deps.selected_settings(provider, model, deps.current_user_id.get())
-        except (ValueError, CredentialError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        if payload.context_source_chat_id and deps.services().chats.get(payload.context_source_chat_id) is None:
-            raise HTTPException(status_code=422, detail="Không tìm thấy chat nguồn để kế thừa context.")
-        if payload.project_id and deps.services().workspace.get(Project, payload.project_id) is None:
-            raise HTTPException(status_code=422, detail=deps.selected_project_not_found_error)
-        if payload.collection_id:
-            collection = deps.services().knowledge.get_collection(payload.collection_id)
-            if collection is None or collection.project_id != payload.project_id:
-                raise HTTPException(status_code=422, detail="Collection phải thuộc Project đã chọn.")
-        return deps.chat_json(deps.services().chats.create(selected.provider, selected.active_model, payload.context_source_chat_id, payload.project_id, payload.collection_id, payload.mode))
+        return _create_chat(deps, payload)
 
     return router

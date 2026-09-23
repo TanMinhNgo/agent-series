@@ -88,17 +88,7 @@ class FileStorageService:
         # Only hashes enter storage names or the provider's search language.
         name = "workflow-" + sha256(asset_id.encode()).hexdigest() + "-" + sha256(data).hexdigest()
         if provider == "local":
-            path = self._local_path(name)
-            if not path.exists():
-                temporary = self._local_path(self._store_local(data))
-                try:
-                    # Concurrent writers have exactly the same immutable bytes.
-                    os.replace(temporary, path)
-                finally:
-                    temporary.unlink(missing_ok=True)
-            if path.read_bytes() != data:
-                raise ValueError("Nội dung artifact đã lưu không khớp checkpoint.")
-            return StoredFile("local", name)
+            return self._upload_once_local(name, data)
         if provider != "imagekit" or not self.imagekit_enabled:
             raise ValueError("Storage của artifact không còn được cấu hình.")
         client = self._imagekit()
@@ -126,6 +116,19 @@ class FileStorageService:
                 return found
             raise
         return StoredFile("imagekit", str(result.file_path), str(result.file_id))
+
+    def _upload_once_local(self, name: str, data: bytes) -> StoredFile:
+        path = self._local_path(name)
+        if not path.exists():
+            temporary = self._local_path(self._store_local(data))
+            try:
+                # Concurrent writers have exactly the same immutable bytes.
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
+        if path.read_bytes() != data:
+            raise ValueError("Nội dung artifact đã lưu không khớp checkpoint.")
+        return StoredFile("local", name)
 
     def _imagekit_folder(self, storage_area: str) -> str:
         try:

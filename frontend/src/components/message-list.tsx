@@ -46,6 +46,147 @@ type Props = {
   onOpenArtifact?: (asset: LibraryAsset) => void;
 };
 
+function MessageMedia({ message }: { message: Message }) {
+  return (
+    <>
+      {message.attachments?.length ? (
+        <div className={cn('mt-3 flex flex-wrap gap-2', message.role === 'user' && 'justify-end')}>
+          {message.attachments.map((item) => (
+            <a
+              key={item.id}
+              href={item.url}
+              target="_blank"
+              rel="noreferrer"
+              className="overflow-hidden rounded-lg border border-white/30 bg-muted"
+            >
+              <img src={item.url} alt={item.name} className="size-20 object-cover" />
+            </a>
+          ))}
+        </div>
+      ) : null}
+      {message.generatedAssets?.length ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {message.generatedAssets.map((asset) => (
+            <a
+              key={asset.id}
+              href={asset.url}
+              target="_blank"
+              rel="noreferrer"
+              className="overflow-hidden rounded-lg border bg-muted"
+            >
+              <img src={asset.url} alt={asset.name} className="max-h-80 max-w-full object-cover" />
+            </a>
+          ))}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function MessageEvidence({
+  message,
+  onOpenArtifact,
+}: {
+  message: Message;
+  onOpenArtifact?: (asset: LibraryAsset) => void;
+}) {
+  if (message.role !== 'assistant') return null;
+  return (
+    <>
+      {message.artifacts?.length ? (
+        <div className="mt-4 max-w-2xl border-l-2 border-primary/50 pl-3">
+          <p className="mb-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+            File AI đã tạo
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {message.artifacts.map((asset) => (
+              <button
+                key={asset.id}
+                type="button"
+                className="flex min-w-0 items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 text-left transition-colors hover:bg-muted"
+                onClick={() => onOpenArtifact?.(asset)}
+              >
+                <FileText className="shrink-0 text-muted-foreground" size={16} />
+                <span className="min-w-0 flex-1 truncate text-sm">{asset.name}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">v{asset.version}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {message.retrievalTrace?.length ? (
+        <div className="mt-4 max-w-2xl border-l-2 border-sky-500/50 pl-3">
+          <p className="mb-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+            Nguồn đã dùng
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {message.retrievalTrace.map((source) => (
+              <a
+                key={`${source.sourceId}-${source.chunkRef || ''}`}
+                href={source.url}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-md bg-muted/60 px-2 py-1 text-xs hover:bg-muted"
+              >
+                {source.sourceName}
+                {source.version ? ` · v${source.version}` : ''}
+                {source.chunkRef ? ` · ${source.chunkRef}` : ''}
+              </a>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function UserMessageActions({ message, onPin }: { message: Message; onPin?: (message: Message) => void }) {
+  if (!message.messageId || message.role !== 'user') return null;
+  return (
+    <div className="mt-1 flex justify-end gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className="size-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              onClick={() => void navigator.clipboard.writeText(message.content)}
+              aria-label="Sao chép đoạn chat"
+            />
+          }
+        >
+          <Copy />
+        </TooltipTrigger>
+        <TooltipContent side="bottom" sideOffset={6}>
+          Sao chép đoạn chat
+        </TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className={cn(
+                'size-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground',
+                message.pinned && 'bg-muted text-foreground',
+              )}
+              onClick={() => onPin?.(message)}
+              aria-label={message.pinned ? 'Bỏ ghim đoạn chat' : 'Ghim đoạn chat'}
+            />
+          }
+        >
+          <Bookmark />
+        </TooltipTrigger>
+        <TooltipContent side="bottom" sideOffset={6}>
+          {message.pinned ? 'Bỏ ghim đoạn chat' : 'Ghim đoạn chat'}
+        </TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
 export function MessageList({
   chatId,
   messages,
@@ -279,42 +420,7 @@ export function MessageList({
                   ) : (
                     <p className="m-0 whitespace-pre-wrap text-[.95rem]">{message.content}</p>
                   )}
-                  {message.attachments?.length ? (
-                    <div
-                      className={cn('mt-3 flex flex-wrap gap-2', message.role === 'user' && 'justify-end')}
-                    >
-                      {message.attachments.map((item) => (
-                        <a
-                          key={item.id}
-                          href={item.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="overflow-hidden rounded-lg border border-white/30 bg-muted"
-                        >
-                          <img src={item.url} alt={item.name} className="size-20 object-cover" />
-                        </a>
-                      ))}
-                    </div>
-                  ) : null}
-                  {message.generatedAssets?.length ? (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {message.generatedAssets.map((asset) => (
-                        <a
-                          key={asset.id}
-                          href={asset.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="overflow-hidden rounded-lg border bg-muted"
-                        >
-                          <img
-                            src={asset.url}
-                            alt={asset.name}
-                            className="max-h-80 max-w-full object-cover"
-                          />
-                        </a>
-                      ))}
-                    </div>
-                  ) : null}
+                  <MessageMedia message={message} />
                 </div>
                 {message.messageId && message.role === 'assistant' && onBranch && onRegenerate ? (
                   <AssistantMessageActions
@@ -325,92 +431,8 @@ export function MessageList({
                     onRegenerate={onRegenerate}
                   />
                 ) : null}
-                {message.role === 'assistant' && message.artifacts?.length ? (
-                  <div className="mt-4 max-w-2xl border-l-2 border-primary/50 pl-3">
-                    <p className="mb-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-                      File AI đã tạo
-                    </p>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {message.artifacts.map((asset) => (
-                        <button
-                          key={asset.id}
-                          type="button"
-                          className="flex min-w-0 items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 text-left transition-colors hover:bg-muted"
-                          onClick={() => onOpenArtifact?.(asset)}
-                        >
-                          <FileText className="shrink-0 text-muted-foreground" size={16} />
-                          <span className="min-w-0 flex-1 truncate text-sm">{asset.name}</span>
-                          <span className="shrink-0 text-xs text-muted-foreground">v{asset.version}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {message.role === 'assistant' && message.retrievalTrace?.length ? (
-                  <div className="mt-4 max-w-2xl border-l-2 border-sky-500/50 pl-3">
-                    <p className="mb-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-                      Nguồn đã dùng
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {message.retrievalTrace.map((source) => (
-                        <a
-                          key={`${source.sourceId}-${source.chunkRef || ''}`}
-                          href={source.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="rounded-md bg-muted/60 px-2 py-1 text-xs hover:bg-muted"
-                        >
-                          {source.sourceName}
-                          {source.version ? ` · v${source.version}` : ''}
-                          {source.chunkRef ? ` · ${source.chunkRef}` : ''}
-                        </a>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {message.messageId && message.role === 'user' ? (
-                  <div className="mt-1 flex justify-end gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <Button
-                            size="icon-sm"
-                            variant="ghost"
-                            className="size-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-                            onClick={() => void navigator.clipboard.writeText(message.content)}
-                            aria-label="Sao chép đoạn chat"
-                          />
-                        }
-                      >
-                        <Copy />
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom" sideOffset={6}>
-                        Sao chép đoạn chat
-                      </TooltipContent>
-                    </Tooltip>
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <Button
-                            size="icon-sm"
-                            variant="ghost"
-                            className={cn(
-                              'size-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground',
-                              message.pinned && 'bg-muted text-foreground',
-                            )}
-                            onClick={() => onPin?.(message)}
-                            aria-label={message.pinned ? 'Bỏ ghim đoạn chat' : 'Ghim đoạn chat'}
-                          />
-                        }
-                      >
-                        <Bookmark />
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom" sideOffset={6}>
-                        {message.pinned ? 'Bỏ ghim đoạn chat' : 'Ghim đoạn chat'}
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                ) : null}
+                <MessageEvidence message={message} onOpenArtifact={onOpenArtifact} />
+                <UserMessageActions message={message} onPin={onPin} />
               </div>
             </article>
           </Fragment>

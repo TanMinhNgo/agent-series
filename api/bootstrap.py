@@ -105,10 +105,12 @@ PROJECT_NOT_FOUND_ERROR = "Không tìm thấy dự án."
 SCHEDULE_NOT_FOUND_ERROR = "Không tìm thấy lịch trình."
 API_ERROR_SCHEMA_REFERENCE = "#/components/schemas/ApiError"
 CHAT_DETAIL_PATH = "/api/chats/{chat_id}"
+FORBIDDEN_ACTION_DESCRIPTION = "Không có quyền thực hiện thao tác này."
+INVALID_STATE_DESCRIPTION = "Trạng thái hiện tại không cho phép thao tác."
 API_ERROR_RESPONSES = {
-    403: {"description": "Không có quyền thực hiện thao tác này."},
+    403: {"description": FORBIDDEN_ACTION_DESCRIPTION},
     404: {"description": "Không tìm thấy tài nguyên."},
-    409: {"description": "Trạng thái hiện tại không cho phép thao tác."},
+    409: {"description": INVALID_STATE_DESCRIPTION},
     422: {"description": "Dữ liệu yêu cầu không hợp lệ."},
     502: {"description": "Dịch vụ phụ thuộc trả lỗi."},
     503: {"description": "Dịch vụ tạm thời không khả dụng."},
@@ -623,6 +625,15 @@ def delete_template(template_id: str) -> None:
         raise HTTPException(status_code=404, detail="Không tìm thấy template.")
 
 
+def _record_chat_project_move(chat: Chat, previous_project_id: str | None) -> None:
+    if previous_project_id == chat.project_id:
+        return
+    if previous_project_id:
+        record_project_activity(previous_project_id, "chat.removed", "chat", chat.id, f"Đã chuyển chat {chat.title} ra khỏi Project.")
+    if chat.project_id:
+        record_project_activity(chat.project_id, "chat.added", "chat", chat.id, f"Đã thêm chat {chat.title} vào Project.")
+
+
 def update_chat(chat_id: str, payload: UpdateChatRequest) -> dict[str, Any]:
     try:
         chat = services().chats.get(chat_id)
@@ -649,11 +660,8 @@ def update_chat(chat_id: str, payload: UpdateChatRequest) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if chat is None:
         raise HTTPException(status_code=404, detail=CHAT_NOT_FOUND_ERROR)
-    if "project_id" in payload.model_fields_set and previous_project_id != chat.project_id:
-        if previous_project_id:
-            record_project_activity(previous_project_id, "chat.removed", "chat", chat.id, f"Đã chuyển chat {chat.title} ra khỏi Project.")
-        if chat.project_id:
-            record_project_activity(chat.project_id, "chat.added", "chat", chat.id, f"Đã thêm chat {chat.title} vào Project.")
+    if "project_id" in payload.model_fields_set:
+        _record_chat_project_move(chat, previous_project_id)
     return chat_json(chat)
 
 
@@ -1148,8 +1156,8 @@ ERROR_RESPONSES: dict[int, dict[str, Any]] = {
         "content": {JSON_MEDIA_TYPE: {"schema": {"$ref": API_ERROR_SCHEMA_REFERENCE}, "example": {"detail": AUTHENTICATION_REQUIRED_ERROR}}},
     },
     403: {
-        "description": "Không có quyền thực hiện thao tác này.",
-        "content": {JSON_MEDIA_TYPE: {"schema": {"$ref": API_ERROR_SCHEMA_REFERENCE}, "example": {"detail": "Không có quyền thực hiện thao tác này."}}},
+        "description": FORBIDDEN_ACTION_DESCRIPTION,
+        "content": {JSON_MEDIA_TYPE: {"schema": {"$ref": API_ERROR_SCHEMA_REFERENCE}, "example": {"detail": FORBIDDEN_ACTION_DESCRIPTION}}},
     },
     404: {
         "description": "Không tìm thấy tài nguyên được yêu cầu.",
@@ -1170,8 +1178,8 @@ ERROR_RESPONSES: dict[int, dict[str, Any]] = {
         },
     },
     409: {
-        "description": "Trạng thái hiện tại không cho phép thao tác.",
-        "content": {JSON_MEDIA_TYPE: {"schema": {"$ref": API_ERROR_SCHEMA_REFERENCE}, "example": {"detail": "Trạng thái hiện tại không cho phép thao tác."}}},
+        "description": INVALID_STATE_DESCRIPTION,
+        "content": {JSON_MEDIA_TYPE: {"schema": {"$ref": API_ERROR_SCHEMA_REFERENCE}, "example": {"detail": INVALID_STATE_DESCRIPTION}}},
     },
     500: {
         "description": "Lỗi máy chủ không mong đợi. Kiểm tra log FastAPI để biết chi tiết.",

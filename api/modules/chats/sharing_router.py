@@ -23,18 +23,43 @@ class ChatSharingDependencies:
     record_project_activity: Callable[..., Any]
 
 
+def _list_templates(deps: ChatSharingDependencies, project_id: str | None) -> list[dict[str, Any]]:
+    with deps.services().chats.database.session() as session:
+        statement = select(deps.template_model).order_by(deps.template_model.updated_at.desc())
+        if project_id:
+            statement = statement.where(deps.template_model.project_id.in_((None, project_id)))
+        else:
+            statement = statement.where(deps.template_model.project_id.is_(None))
+        return [deps.template_json(item) for item in session.scalars(statement)]
+
+
+def _share_chat(deps: ChatSharingDependencies, chat_id: str, payload: ShareRequest | None) -> dict[str, Any]:
+    expires_at = payload.expires_at if payload else None
+    if expires_at and expires_at <= datetime.now(UTC):
+        raise HTTPException(status_code=422, detail="Thời hạn chia sẻ phải ở tương lai.")
+    share = deps.services().chats.create_or_update_share(chat_id, expires_at)
+    if share is None:
+        raise HTTPException(status_code=404, detail=deps.chat_not_found_error)
+    chat = deps.services().chats.get(chat_id)
+    if chat and chat.project_id:
+        deps.record_project_activity(chat.project_id, "chat.shared", "chat", chat.id, f"Đã tạo hoặc cập nhật liên kết chia sẻ cho chat {chat.title}.")
+    return deps.share_json(share)
+
+
+def _revoke_share(deps: ChatSharingDependencies, chat_id: str) -> None:
+    chat = deps.services().chats.get(chat_id)
+    if not deps.services().chats.revoke_share(chat_id):
+        raise HTTPException(status_code=404, detail="Chat chưa có liên kết chia sẻ.")
+    if chat and chat.project_id:
+        deps.record_project_activity(chat.project_id, "chat.share_revoked", "chat", chat.id, f"Đã thu hồi liên kết chia sẻ của chat {chat.title}.")
+
+
 def build_router(deps: ChatSharingDependencies) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/templates", tags=["Workspace"], responses=deps.api_error_responses)
     def list_templates(project_id: str | None = Query(default=None, alias="projectId")) -> list[dict[str, Any]]:
-        with deps.services().chats.database.session() as session:
-            statement = select(deps.template_model).order_by(deps.template_model.updated_at.desc())
-            if project_id:
-                statement = statement.where(deps.template_model.project_id.in_((None, project_id)))
-            else:
-                statement = statement.where(deps.template_model.project_id.is_(None))
-            return [deps.template_json(item) for item in session.scalars(statement)]
+        return _list_templates(deps, project_id)
 
     @router.post("/api/templates", status_code=201, tags=["Workspace"], responses=deps.api_error_responses)
     def create_template(payload: PromptTemplateRequest) -> dict[str, Any]:
@@ -58,24 +83,11 @@ def build_router(deps: ChatSharingDependencies) -> APIRouter:
 
     @router.post("/api/chats/{chat_id}/share", tags=["Shared chats"], responses=deps.api_error_responses)
     def share_chat(chat_id: str, payload: ShareRequest | None = None) -> dict[str, Any]:
-        expires_at = payload.expires_at if payload else None
-        if expires_at and expires_at <= datetime.now(UTC):
-            raise HTTPException(status_code=422, detail="Thời hạn chia sẻ phải ở tương lai.")
-        share = deps.services().chats.create_or_update_share(chat_id, expires_at)
-        if share is None:
-            raise HTTPException(status_code=404, detail=deps.chat_not_found_error)
-        chat = deps.services().chats.get(chat_id)
-        if chat and chat.project_id:
-            deps.record_project_activity(chat.project_id, "chat.shared", "chat", chat.id, f"Đã tạo hoặc cập nhật liên kết chia sẻ cho chat {chat.title}.")
-        return deps.share_json(share)
+        return _share_chat(deps, chat_id, payload)
 
     @router.delete("/api/chats/{chat_id}/share", status_code=204, tags=["Shared chats"], responses=deps.api_error_responses)
     def revoke_share(chat_id: str) -> None:
-        chat = deps.services().chats.get(chat_id)
-        if not deps.services().chats.revoke_share(chat_id):
-            raise HTTPException(status_code=404, detail="Chat chưa có liên kết chia sẻ.")
-        if chat and chat.project_id:
-            deps.record_project_activity(chat.project_id, "chat.share_revoked", "chat", chat.id, f"Đã thu hồi liên kết chia sẻ của chat {chat.title}.")
+        _revoke_share(deps, chat_id)
 
     @router.get("/api/public/shares/{token}", tags=["Shared chats"], responses=deps.api_error_responses)
     def public_share(token: str) -> dict[str, Any]:

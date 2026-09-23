@@ -38,6 +38,14 @@ def persisted_history(full_history: list[dict[str, Any]], agent_history: list[di
     return [*full_history, *agent_history[initial_length:]]
 
 
+def _payload_artifact_ids(payload: Any) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    items = payload.get("items")
+    values = [*items, payload] if isinstance(items, list) else [payload]
+    return [value["id"] for value in values if isinstance(value, dict) and isinstance(value.get("id"), str)]
+
+
 def created_artifact_ids(steps: list[Any]) -> list[str]:
     asset_ids: list[str] = []
     for step in steps:
@@ -47,12 +55,7 @@ def created_artifact_ids(steps: list[Any]) -> list[str]:
             payload = json.loads(getattr(step, "result", ""))
         except (TypeError, ValueError):
             continue
-        values = payload.get("items", []) if isinstance(payload, dict) else []
-        values = list(values) if isinstance(values, list) else []
-        if isinstance(payload, dict):
-            values.append(payload)
-        for value in values:
-            asset_id = value.get("id") if isinstance(value, dict) else None
-            if isinstance(asset_id, str) and asset_id not in asset_ids:
+        for asset_id in _payload_artifact_ids(payload):
+            if asset_id not in asset_ids:
                 asset_ids.append(asset_id)
     return asset_ids

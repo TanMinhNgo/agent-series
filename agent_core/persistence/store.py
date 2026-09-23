@@ -21,6 +21,7 @@ PROJECT_ID_FOREIGN_KEY = "projects.id"
 CHAT_MESSAGE_ID_FOREIGN_KEY = "chat_messages.id"
 CHAT_NOT_FOUND_ERROR = "Không tìm thấy chat."
 SET_NULL = "SET NULL"
+LIBRARY_ASSET_ID_FOREIGN_KEY = "library_assets.id"
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
@@ -329,7 +330,7 @@ class ArtifactMessageLink(UserOwned, Base):
     __table_args__ = (UniqueConstraint("asset_id", "assistant_message_id", name="uq_artifact_message_link"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    asset_id: Mapped[str] = mapped_column(ForeignKey("library_assets.id", ondelete="CASCADE"), index=True)
+    asset_id: Mapped[str] = mapped_column(ForeignKey(LIBRARY_ASSET_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
     chat_id: Mapped[str] = mapped_column(ForeignKey(CHAT_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
     user_message_id: Mapped[str] = mapped_column(ForeignKey(CHAT_MESSAGE_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
     assistant_message_id: Mapped[str] = mapped_column(ForeignKey(CHAT_MESSAGE_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
@@ -404,7 +405,7 @@ class ArtifactChunk(UserOwned, Base):
     __table_args__ = (UniqueConstraint("asset_id", "chunk_index", name="uq_artifact_chunks_asset_index"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    asset_id: Mapped[str] = mapped_column(ForeignKey("library_assets.id", ondelete="CASCADE"), index=True)
+    asset_id: Mapped[str] = mapped_column(ForeignKey(LIBRARY_ASSET_ID_FOREIGN_KEY, ondelete="CASCADE"), index=True)
     chunk_index: Mapped[int] = mapped_column(Integer)
     content: Mapped[str] = mapped_column(Text)
     embedding: Mapped[list[float]] = mapped_column(Vector(384))
@@ -433,7 +434,7 @@ class Schedule(UserOwned, Base):
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     project_id: Mapped[str | None] = mapped_column(ForeignKey(PROJECT_ID_FOREIGN_KEY, ondelete="CASCADE"), nullable=True)
-    workflow_id: Mapped[str | None] = mapped_column(ForeignKey("workflows.id", ondelete="SET NULL"), nullable=True, index=True)
+    workflow_id: Mapped[str | None] = mapped_column(ForeignKey("workflows.id", ondelete=SET_NULL), nullable=True, index=True)
     chat_id: Mapped[str | None] = mapped_column(ForeignKey(CHAT_ID_FOREIGN_KEY, ondelete=SET_NULL), nullable=True)
     provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     model: Mapped[str | None] = mapped_column(String(160), nullable=True)
@@ -491,7 +492,7 @@ class WorkflowRun(UserOwned, Base):
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    artifact_id: Mapped[str | None] = mapped_column(ForeignKey("library_assets.id", ondelete="SET NULL"), nullable=True)
+    artifact_id: Mapped[str | None] = mapped_column(ForeignKey(LIBRARY_ASSET_ID_FOREIGN_KEY, ondelete=SET_NULL), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -1609,6 +1610,27 @@ class ScheduleRepository:
             candidate += interval
         return candidate.astimezone(UTC) if schedule.workflow_id else candidate
 
+    @staticmethod
+    def _scheduled_slot(schedule: Schedule, now: datetime) -> datetime | None:
+        scheduled_for = schedule.next_run_at
+        if scheduled_for is None or not schedule.workflow_id:
+            return scheduled_for
+        from zoneinfo import ZoneInfo
+        if scheduled_for.tzinfo is None:
+            scheduled_for = scheduled_for.replace(tzinfo=UTC)
+        interval = timedelta(days=1 if schedule.recurrence == "daily" else 7)
+        local = scheduled_for.astimezone(ZoneInfo(schedule.timezone))
+        while local + interval <= now:
+            local += interval
+        return local.astimezone(UTC)
+
+    @classmethod
+    def _advance_schedule(cls, schedule: Schedule, now: datetime) -> None:
+        schedule.next_run_at = cls.next_run_after(schedule, now)
+        if schedule.next_run_at is None:
+            schedule.status = "completed"
+        schedule.updated_at = now
+
     def claim_due(self, now: datetime) -> list[tuple[Schedule, ScheduleRun]]:
         claimed: list[tuple[Schedule, ScheduleRun]] = []
         with self.database.session() as session:
@@ -1618,18 +1640,9 @@ class ScheduleRepository:
                 .with_for_update(skip_locked=True)
             ).all()
             for schedule in schedules:
-                scheduled_for = schedule.next_run_at
+                scheduled_for = self._scheduled_slot(schedule, now)
                 if scheduled_for is None:
                     continue
-                if schedule.workflow_id:
-                    from zoneinfo import ZoneInfo
-                    if scheduled_for.tzinfo is None:
-                        scheduled_for = scheduled_for.replace(tzinfo=UTC)
-                    interval = timedelta(days=1 if schedule.recurrence == "daily" else 7)
-                    local = scheduled_for.astimezone(ZoneInfo(schedule.timezone))
-                    while local + interval <= now:
-                        local += interval
-                    scheduled_for = local.astimezone(UTC)
                 already_ran = session.scalar(
                     select(ScheduleRun.id)
                     .where(ScheduleRun.schedule_id == schedule.id, ScheduleRun.scheduled_for == scheduled_for)
@@ -1640,10 +1653,7 @@ class ScheduleRepository:
                     # `next_run_at` to `starts_at`, which can land on a past slot.
                     # Roll forward instead of inserting a duplicate, whose unique
                     # violation would abort the whole batch and stall the worker.
-                    schedule.next_run_at = self.next_run_after(schedule, now)
-                    if schedule.next_run_at is None:
-                        schedule.status = "completed"
-                    schedule.updated_at = now
+                    self._advance_schedule(schedule, now)
                     continue
                 run = ScheduleRun(
                     schedule_id=schedule.id,
@@ -1661,10 +1671,7 @@ class ScheduleRepository:
                     run.status, run.finished_at = "succeeded", now
                     run.summary = f"Workflow run: {workflow_run.id}"
                 schedule.last_run_at = now
-                schedule.next_run_at = self.next_run_after(schedule, now)
-                if schedule.next_run_at is None:
-                    schedule.status = "completed"
-                schedule.updated_at = now
+                self._advance_schedule(schedule, now)
                 if not schedule.workflow_id:
                     claimed.append((schedule, run))
             session.commit()

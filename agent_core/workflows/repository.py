@@ -14,6 +14,8 @@ from agent_core.persistence.store import (
 from .contracts import STEP_IDS
 
 RETRY_MINUTES = (1, 5, 15)
+RUN_NOT_FOUND = "Không tìm thấy lần chạy."
+RUN_CANCELLED = "Lượt chạy đã bị hủy."
 
 
 class LeaseLost(RuntimeError):
@@ -131,7 +133,7 @@ class WorkflowRepository:
         with self.database.session() as session:
             run = session.scalar(select(WorkflowRun).where(WorkflowRun.id == run_id, WorkflowRun.project_id == project_id))
             if run is None:
-                raise LookupError("Không tìm thấy lần chạy.")
+                raise LookupError(RUN_NOT_FOUND)
             return run, self._steps(session, run.id)
 
     @staticmethod
@@ -147,7 +149,7 @@ class WorkflowRepository:
         with self.database.session() as session:
             run = self._owned(session, run_id, token)
             if run.cancel_requested:
-                raise RunCancelled("Lượt chạy đã bị hủy.")
+                raise RunCancelled(RUN_CANCELLED)
 
     def claim(self, now=None, lease_seconds=120):
         now = now or utc_now()
@@ -186,7 +188,7 @@ class WorkflowRepository:
         with self.database.session() as session:
             run = self._owned(session, run_id, lease_token)
             if run.cancel_requested and status in {"running", "sending"}:
-                raise RunCancelled("Lượt chạy đã bị hủy.")
+                raise RunCancelled(RUN_CANCELLED)
             step = next(item for item in self._steps(session, run_id) if item.step_id == step_id)
             step.status, step.error, step.retry_at = status, error, None
             if output is not None:
@@ -202,7 +204,7 @@ class WorkflowRepository:
         with self.database.session() as session:
             run = self._owned(session, run_id, token)
             if run.cancel_requested:
-                raise RunCancelled("Lượt chạy đã bị hủy.")
+                raise RunCancelled(RUN_CANCELLED)
             step = next(item for item in self._steps(session, run_id) if item.step_id == "artifact")
             if not step.output:
                 step.output = {"assetId": str(uuid5(NAMESPACE_URL, f"workflow:{run_id}:artifact")),
@@ -234,7 +236,7 @@ class WorkflowRepository:
         with self.database.session() as session:
             run = self._owned(session, run_id, lease_token, now)
             if run.cancel_requested:
-                raise RunCancelled("Lượt chạy đã bị hủy.")
+                raise RunCancelled(RUN_CANCELLED)
             step = next(item for item in self._steps(session, run_id) if item.step_id == step_id)
             if not 1 <= step.attempt <= len(RETRY_MINUTES):
                 return False
@@ -249,7 +251,7 @@ class WorkflowRepository:
         with self.database.session() as session:
             run = self._owned(session, run_id, lease_token)
             run.status = "cancelled" if run.cancel_requested else ("failed" if error else "succeeded")
-            run.error = "Lượt chạy đã bị hủy." if run.cancel_requested else error
+            run.error = RUN_CANCELLED if run.cancel_requested else error
             run.finished_at, run.lease_token, run.lease_until = utc_now(), None, None
             if artifact_id:
                 run.artifact_id = artifact_id
@@ -262,11 +264,11 @@ class WorkflowRepository:
         with self.database.session() as session:
             run = session.scalar(select(WorkflowRun).where(WorkflowRun.id == run_id, WorkflowRun.project_id == project_id).with_for_update())
             if not run:
-                raise LookupError("Không tìm thấy lần chạy.")
+                raise LookupError(RUN_NOT_FOUND)
             if run.status not in {"succeeded", "failed", "cancelled"}:
                 run.cancel_requested = True
                 if run.status in {"queued", "retrying"}:
-                    run.status, run.finished_at, run.error = "cancelled", utc_now(), "Lượt chạy đã bị hủy."
+                    run.status, run.finished_at, run.error = "cancelled", utc_now(), RUN_CANCELLED
                     for step in self._steps(session, run_id):
                         if step.status in {"pending", "retrying"}:
                             step.status, step.retry_at, step.finished_at = "skipped", None, utc_now()
@@ -277,7 +279,7 @@ class WorkflowRepository:
         with self.database.session() as session:
             run = session.scalar(select(WorkflowRun).where(WorkflowRun.id == run_id, WorkflowRun.project_id == project_id).with_for_update())
             if not run:
-                raise LookupError("Không tìm thấy lần chạy.")
+                raise LookupError(RUN_NOT_FOUND)
             if run.status not in {"failed", "cancelled", "succeeded"}:
                 raise WorkflowConflict("Lượt chạy chưa kết thúc.")
             steps = self._steps(session, run_id)

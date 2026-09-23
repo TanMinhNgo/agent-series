@@ -18,6 +18,32 @@ class AdminRouteDependencies:
     error_responses: dict
 
 
+def _set_user_active(deps: AdminRouteDependencies, user_id: str, payload: AdminUserStatusRequest, request: Request) -> dict[str, Any]:
+    admin = deps.require_system_admin(request)
+    if user_id == admin.id and not payload.is_active:
+        raise HTTPException(status_code=422, detail="Không thể tự vô hiệu hóa system admin.")
+    user = deps.services().auth.repository.set_user_active(user_id, payload.is_active)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy user.")
+    deps.services().auth.repository.add_system_audit("user_activated" if payload.is_active else "user_deactivated", actor_user_id=admin.id, subject_user_id=user.id, summary=f"{'Kích hoạt' if payload.is_active else 'Vô hiệu hóa'} user.")
+    return deps.user_json(user)
+
+
+def _set_model_active(deps: AdminRouteDependencies, provider: str, model_id: str, payload: AdminModelStatusRequest, request: Request) -> dict[str, Any]:
+    admin = deps.require_system_admin(request)
+    model = deps.services().model_registry.set_active(provider, model_id, payload.is_active)
+    if model is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy model.")
+    deps.services().auth.repository.add_system_audit("model_activated" if model.is_active else "model_deactivated", actor_user_id=admin.id, summary=f"{'Kích hoạt' if model.is_active else 'Vô hiệu hóa'} {model.provider}/{model.model_id}.")
+    return {"id": model.model_id, "displayName": model.display_name, "isActive": model.is_active}
+
+
+def _audit_rows(deps: AdminRouteDependencies, offset: int, limit: int) -> dict[str, Any]:
+    repository = deps.services().auth.repository
+    rows, total = repository.list_system_audit(offset, limit)
+    return {"items": [{"id": item.id, "eventType": item.event_type, "actorUserId": item.actor_user_id, "actorEmail": (repository.get_user(item.actor_user_id).email if item.actor_user_id and repository.get_user(item.actor_user_id) else None), "subjectUserId": item.subject_user_id, "subjectEmail": (repository.get_user(item.subject_user_id).email if item.subject_user_id and repository.get_user(item.subject_user_id) else None), "summary": item.summary, "createdAt": item.created_at.isoformat()} for item in rows], "total": total}
+
+
 def build_router(deps: AdminRouteDependencies) -> APIRouter:
     router = APIRouter(tags=["System admin"])
 
@@ -40,23 +66,11 @@ def build_router(deps: AdminRouteDependencies) -> APIRouter:
 
     @router.patch("/api/admin/users/{user_id}/active", responses=deps.error_responses)
     def admin_set_user_active(user_id: str, payload: AdminUserStatusRequest, request: Request) -> dict[str, Any]:
-        admin = deps.require_system_admin(request)
-        if user_id == admin.id and not payload.is_active:
-            raise HTTPException(status_code=422, detail="Không thể tự vô hiệu hóa system admin.")
-        user = deps.services().auth.repository.set_user_active(user_id, payload.is_active)
-        if user is None:
-            raise HTTPException(status_code=404, detail="Không tìm thấy user.")
-        deps.services().auth.repository.add_system_audit("user_activated" if payload.is_active else "user_deactivated", actor_user_id=admin.id, subject_user_id=user.id, summary=f"{'Kích hoạt' if payload.is_active else 'Vô hiệu hóa'} user.")
-        return deps.user_json(user)
+        return _set_user_active(deps, user_id, payload, request)
 
     @router.patch("/api/admin/models/{provider}/{model_id}/active", responses=deps.error_responses)
     def admin_set_model_active(provider: str, model_id: str, payload: AdminModelStatusRequest, request: Request) -> dict[str, Any]:
-        admin = deps.require_system_admin(request)
-        model = deps.services().model_registry.set_active(provider, model_id, payload.is_active)
-        if model is None:
-            raise HTTPException(status_code=404, detail="Không tìm thấy model.")
-        deps.services().auth.repository.add_system_audit("model_activated" if model.is_active else "model_deactivated", actor_user_id=admin.id, summary=f"{'Kích hoạt' if model.is_active else 'Vô hiệu hóa'} {model.provider}/{model.model_id}.")
-        return {"id": model.model_id, "displayName": model.display_name, "isActive": model.is_active}
+        return _set_model_active(deps, provider, model_id, payload, request)
 
     @router.get("/api/admin/credentials", responses=deps.error_responses)
     def admin_credentials(request: Request, offset: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=100)) -> dict[str, Any]:
@@ -67,9 +81,7 @@ def build_router(deps: AdminRouteDependencies) -> APIRouter:
     @router.get("/api/admin/audit", responses=deps.error_responses)
     def admin_audit(request: Request, offset: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=100)) -> dict[str, Any]:
         deps.require_system_admin(request)
-        repository = deps.services().auth.repository
-        rows, total = repository.list_system_audit(offset, limit)
-        return {"items": [{"id": item.id, "eventType": item.event_type, "actorUserId": item.actor_user_id, "actorEmail": (repository.get_user(item.actor_user_id).email if item.actor_user_id and repository.get_user(item.actor_user_id) else None), "subjectUserId": item.subject_user_id, "subjectEmail": (repository.get_user(item.subject_user_id).email if item.subject_user_id and repository.get_user(item.subject_user_id) else None), "summary": item.summary, "createdAt": item.created_at.isoformat()} for item in rows], "total": total}
+        return _audit_rows(deps, offset, limit)
 
     @router.get("/api/admin/plugin-connections", responses=deps.error_responses)
     def admin_plugin_connections(request: Request, q: str | None = Query(default=None, max_length=160), connector_slug: str | None = Query(default=None, max_length=80), status: str | None = Query(default=None, max_length=32), offset: int = Query(default=0, ge=0), limit: int = Query(default=25, ge=1, le=100)) -> dict[str, Any]:

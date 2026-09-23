@@ -157,19 +157,7 @@ class GitHubAppService:
             items = self._github_json(f"/repos/{path}/issues?{query}", headers)
             if not isinstance(items, list):
                 raise GitHubConnectorError("GitHub trả dữ liệu không hợp lệ.")
-            for item in items:
-                updated = datetime.fromisoformat(item["updated_at"].replace("Z", "+00:00"))
-                if updated >= end:
-                    complete = True
-                    continue
-                if updated < start:
-                    continue
-                number = int(item["number"])
-                body = item.get("body") or ""
-                kind = "pr" if item.get("pull_request") else "issue"
-                found[number] = {"number": number, "kind": kind, "title": str(item["title"])[:500], "state": item["state"], "author": (item.get("user") or {}).get("login"), "createdAt": item["created_at"], "updatedAt": item["updated_at"], "closedAt": item.get("closed_at"), "url": f"https://github.com/{repository}/{'pull' if kind == 'pr' else 'issues'}/{number}", "body": body[:1000], "bodyTruncated": len(body) > 1000}
-                if len(found) > 200:
-                    raise GitHubConnectorError("Quá 200 issue/PR; hãy thu hẹp khoảng thời gian.")
+            complete = self._collect_page_issues(found, items, repository, start, end)
             if complete or len(items) < 100:
                 complete = True
                 break
@@ -177,6 +165,29 @@ class GitHubAppService:
             raise GitHubConnectorError("Vượt giới hạn 10 trang; hãy thu hẹp khoảng thời gian.")
         self.repository.audit(GITHUB_SLUG, "tool_invoked", connection.id, "workflow_github_report", f"Đọc {len(found)} issue/PR từ {repository}.")
         return [{"id": f"S{index}", **item} for index, item in enumerate(found.values(), 1)]
+
+    @classmethod
+    def _collect_page_issues(cls, found: dict, items: list[dict], repository: str, start: datetime, end: datetime) -> bool:
+        complete = False
+        for item in items:
+            updated = datetime.fromisoformat(item["updated_at"].replace("Z", "+00:00"))
+            if updated >= end:
+                complete = True
+                continue
+            if updated < start:
+                continue
+            number = int(item["number"])
+            found[number] = cls._issue_record(item, repository, number)
+            if len(found) > 200:
+                raise GitHubConnectorError("Quá 200 issue/PR; hãy thu hẹp khoảng thời gian.")
+        return complete
+
+    @staticmethod
+    def _issue_record(item: dict, repository: str, number: int) -> dict:
+        body = item.get("body") or ""
+        kind = "pr" if item.get("pull_request") else "issue"
+        route = "pull" if kind == "pr" else "issues"
+        return {"number": number, "kind": kind, "title": str(item["title"])[:500], "state": item["state"], "author": (item.get("user") or {}).get("login"), "createdAt": item["created_at"], "updatedAt": item["updated_at"], "closedAt": item.get("closed_at"), "url": f"https://github.com/{repository}/{route}/{number}", "body": body[:1000], "bodyTruncated": len(body) > 1000}
 
     @staticmethod
     def _safe_error(error: Exception) -> str:

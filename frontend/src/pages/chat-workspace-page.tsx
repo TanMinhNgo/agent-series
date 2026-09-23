@@ -430,6 +430,17 @@ export function ChatWorkspace({
       setRunwayChatId(null);
     }
   };
+  const uploadAttachments = async (files: File[], projectId?: string | null) => {
+    const knowledgeFiles = files.filter((file) => /\.(pdf|docx|md)$/i.test(file.name));
+    const images = files.filter((file) => file.type.startsWith('image/'));
+    const [uploadedImages] = await Promise.all([
+      images.length ? uploadMedia.mutateAsync(images) : Promise.resolve([]),
+      knowledgeFiles.length
+        ? uploadDocuments.mutateAsync({ files: knowledgeFiles, projectId: projectId || undefined })
+        : Promise.resolve([]),
+    ]);
+    return uploadedImages;
+  };
   const send = async (contentValue: string, files: File[]) => {
     if (
       (!contentValue.trim() && !files.length) ||
@@ -471,14 +482,7 @@ export function ChatWorkspace({
         navigate(`/chat/${chat.id}`);
       }
       setStatus('Agent đang suy nghĩ...');
-      const knowledgeFiles = files.filter((file) => /\.(pdf|docx|md)$/i.test(file.name));
-      const images = files.filter((file) => file.type.startsWith('image/'));
-      const [uploadedImages] = await Promise.all([
-        images.length ? uploadMedia.mutateAsync(images) : Promise.resolve([]),
-        knowledgeFiles.length
-          ? uploadDocuments.mutateAsync({ files: knowledgeFiles, projectId: chat.projectId || undefined })
-          : Promise.resolve([]),
-      ]);
+      const uploadedImages = await uploadAttachments(files, chat.projectId);
       await streamChat.mutateAsync({
         chatId: chat.id,
         content,
@@ -505,14 +509,65 @@ export function ChatWorkspace({
     }
   };
 
-  return (
-    <main className="min-h-dvh bg-background text-foreground">
-      <div
-        className={`grid min-h-dvh w-full transition-[grid-template-columns] duration-200 ${
-          sidebarCollapsed ? 'lg:grid-cols-[64px_minmax(0,1fr)]' : 'lg:grid-cols-[280px_minmax(0,1fr)]'
-        }`}
-      >
-        <div className="hidden lg:block">
+  const renderDesktopSidebar = () => (
+    <div className="hidden lg:block">
+      <AppSidebar
+        chats={chats.data || []}
+        projects={projects.data || []}
+        activeChatId={chatId}
+        activeNavigation={activeNavigation}
+        hasMoreChats={chats.hasNextPage}
+        loadingMoreChats={chats.isFetchingNextPage}
+        onLoadMoreChats={() => {
+          if (chats.hasNextPage && !chats.isFetchingNextPage) void chats.fetchNextPage();
+        }}
+        theme={theme}
+        onCreateChat={startNewChat}
+        onSelectChat={(chat: Chat) => {
+          navigate(`/chat/${chat.id}`);
+        }}
+        onThemeChange={setTheme}
+        onRename={(chat, title) => void renameChat(chat, title)}
+        onUpdate={(chat, values) => void updateChat(chat, values)}
+        onDelete={(chat) => void deleteChat(chat)}
+        onShare={setShareChat}
+        onOpenLibrary={() => {
+          navigate('/library');
+        }}
+        onOpenWorkspace={(view) => {
+          navigate(`/${view}`);
+        }}
+        isSystemAdmin={isSystemAdmin}
+        onOpenAdmin={() => {
+          setSidebarOpen(false);
+          navigate('/admin/overview');
+        }}
+        user={auth.session.user}
+        onOpenApiKeys={() => navigate('/settings/api-keys')}
+        onLogout={logoutToLogin}
+        workspaces={workspaces.data || []}
+        activeWorkspaceId={activeWorkspaceId}
+        onWorkspaceChange={(workspaceId) => {
+          selectWorkspace(workspaceId);
+          window.location.assign('/');
+        }}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
+      />
+    </div>
+  );
+
+  const renderMobileSidebar = () => {
+    if (!sidebarOpen) return null;
+    return (
+      <div className="fixed inset-0 z-40 lg:hidden">
+        <button
+          type="button"
+          className="absolute inset-0 bg-black/55"
+          aria-label="Đóng lịch sử chat"
+          onClick={() => setSidebarOpen(false)}
+        />
+        <div className="absolute inset-y-0 left-0 w-[min(86vw,340px)] shadow-2xl">
           <AppSidebar
             chats={chats.data || []}
             projects={projects.data || []}
@@ -525,18 +580,24 @@ export function ChatWorkspace({
             }}
             theme={theme}
             onCreateChat={startNewChat}
-            onSelectChat={(chat: Chat) => {
+            onSelectChat={(chat) => {
+              setSidebarOpen(false);
               navigate(`/chat/${chat.id}`);
             }}
             onThemeChange={setTheme}
             onRename={(chat, title) => void renameChat(chat, title)}
             onUpdate={(chat, values) => void updateChat(chat, values)}
             onDelete={(chat) => void deleteChat(chat)}
-            onShare={setShareChat}
+            onShare={(chat) => {
+              setShareChat(chat);
+              setSidebarOpen(false);
+            }}
             onOpenLibrary={() => {
+              setSidebarOpen(false);
               navigate('/library');
             }}
             onOpenWorkspace={(view) => {
+              setSidebarOpen(false);
               navigate(`/${view}`);
             }}
             isSystemAdmin={isSystemAdmin}
@@ -545,7 +606,10 @@ export function ChatWorkspace({
               navigate('/admin/overview');
             }}
             user={auth.session.user}
-            onOpenApiKeys={() => navigate('/settings/api-keys')}
+            onOpenApiKeys={() => {
+              setSidebarOpen(false);
+              navigate('/settings/api-keys');
+            }}
             onLogout={logoutToLogin}
             workspaces={workspaces.data || []}
             activeWorkspaceId={activeWorkspaceId}
@@ -553,220 +617,252 @@ export function ChatWorkspace({
               selectWorkspace(workspaceId);
               window.location.assign('/');
             }}
-            collapsed={sidebarCollapsed}
-            onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
           />
         </div>
-        {sidebarOpen ? (
-          <div className="fixed inset-0 z-40 lg:hidden">
-            <button
-              type="button"
-              className="absolute inset-0 bg-black/55"
-              aria-label="Đóng lịch sử chat"
-              onClick={() => setSidebarOpen(false)}
+      </div>
+    );
+  };
+
+  const renderPageHeader = () => {
+    if (libraryPage) return null;
+    if (workspaceView || adminPage || settingsPage)
+      return (
+        <div className="sticky top-0 z-20 flex h-15 items-center border-b bg-background/95 px-4 backdrop-blur sm:px-8">
+          <Button variant="ghost" size="sm" onClick={() => navigate('/')}>
+            ← Chat
+          </Button>
+        </div>
+      );
+    return (
+      <ChatHeader
+        chat={activeChat}
+        config={config.data || null}
+        onRefreshModels={() => {
+          void config.refetch();
+        }}
+        refreshingModels={config.isFetching}
+        modelsRefreshFailed={config.isRefetchError}
+        provider={draftProvider}
+        model={draftModel}
+        busy={createChat.isPending || chatActions.update.isPending || streamChat.isPending}
+        onOpenSidebar={() => setSidebarOpen(true)}
+        onProviderChange={(event) => void changeProvider(event)}
+        onModelChange={(event) => void changeModel(event)}
+        onSelectionChange={(provider, model) => void changeSelection(provider, model)}
+        collections={collections.data || []}
+        onCollectionChange={(collectionId) =>
+          activeChat && chatActions.update.mutate({ chatId: activeChat.id, values: { collectionId } })
+        }
+      />
+    );
+  };
+
+  const renderChatView = () => (
+    <div className="flex min-h-0 flex-1">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div ref={transcriptRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          <div className="mx-auto min-h-full w-full max-w-5xl px-4 sm:px-8 lg:px-12">
+            {pins.data?.length ? (
+              <div className="sticky top-0 z-10 flex gap-2 overflow-x-auto border-b bg-background/95 py-2.5 backdrop-blur">
+                <span className="shrink-0 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                  Đã ghim
+                </span>
+                {pins.data.map((item) => (
+                  <button
+                    key={item.messageId}
+                    className="shrink-0 rounded-md bg-muted/70 px-2 py-1 text-xs hover:bg-muted"
+                    onClick={() =>
+                      document
+                        .getElementById(`message-${item.messageId}`)
+                        ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                    }
+                  >
+                    {item.content.slice(0, 48)}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <MessageList
+              key={activeChat?.id || 'new-chat'}
+              chatId={activeChat?.id}
+              messages={
+                pendingUser && !(messages.data || []).some((item) => item.messageId === pendingUser.messageId)
+                  ? [...(messages.data || []), pendingUser]
+                  : messages.data || []
+              }
+              status={status}
+              isResponding={isResponding}
+              error={error}
+              userScrollRequest={userScrollRequest}
+              isRunwayRequested={runwayChatId === activeChat?.id}
+              scrollContainerRef={transcriptRef}
+              onRunwayRelease={() => setRunwayChatId(null)}
+              onPin={(message) =>
+                message.messageId && pin.mutate({ messageId: message.messageId, pinned: !message.pinned })
+              }
+              onScheduleProposalAction={(proposalId, action) =>
+                scheduleProposal.mutate({ proposalId, action })
+              }
+              onBranch={branchFromMessage}
+              onRegenerate={regenerateMessage}
+              onOpenArtifact={(asset) => setArtifactPanel({ open: true, selectedArtifactId: asset.id })}
             />
-            <div className="absolute inset-y-0 left-0 w-[min(86vw,340px)] shadow-2xl">
-              <AppSidebar
-                chats={chats.data || []}
-                projects={projects.data || []}
-                activeChatId={chatId}
-                activeNavigation={activeNavigation}
-                hasMoreChats={chats.hasNextPage}
-                loadingMoreChats={chats.isFetchingNextPage}
-                onLoadMoreChats={() => {
-                  if (chats.hasNextPage && !chats.isFetchingNextPage) void chats.fetchNextPage();
-                }}
-                theme={theme}
-                onCreateChat={startNewChat}
-                onSelectChat={(chat) => {
-                  setSidebarOpen(false);
-                  navigate(`/chat/${chat.id}`);
-                }}
-                onThemeChange={setTheme}
-                onRename={(chat, title) => void renameChat(chat, title)}
-                onUpdate={(chat, values) => void updateChat(chat, values)}
-                onDelete={(chat) => void deleteChat(chat)}
-                onShare={(chat) => {
-                  setShareChat(chat);
-                  setSidebarOpen(false);
-                }}
-                onOpenLibrary={() => {
-                  setSidebarOpen(false);
-                  navigate('/library');
-                }}
-                onOpenWorkspace={(view) => {
-                  setSidebarOpen(false);
-                  navigate(`/${view}`);
-                }}
-                isSystemAdmin={isSystemAdmin}
-                onOpenAdmin={() => {
-                  setSidebarOpen(false);
-                  navigate('/admin/overview');
-                }}
-                user={auth.session.user}
-                onOpenApiKeys={() => {
-                  setSidebarOpen(false);
-                  navigate('/settings/api-keys');
-                }}
-                onLogout={logoutToLogin}
-                workspaces={workspaces.data || []}
-                activeWorkspaceId={activeWorkspaceId}
-                onWorkspaceChange={(workspaceId) => {
-                  selectWorkspace(workspaceId);
-                  window.location.assign('/');
-                }}
-              />
-            </div>
           </div>
-        ) : null}
+        </div>
+        <div className="mx-auto w-full max-w-5xl px-4 sm:px-8 lg:px-12">
+          <ChatComposer
+            key={activeChat?.id || 'new-chat'}
+            prompt={prompt}
+            busy={
+              chatActions.update.isPending ||
+              streamChat.isPending ||
+              isResponding ||
+              uploadDocuments.isPending ||
+              uploadMedia.isPending
+            }
+            onPromptChange={setPrompt}
+            onSubmit={(content, attachments) => void send(content, attachments)}
+            templates={templates.data || []}
+            onSelectTemplate={(content) => setPrompt(content)}
+            onSaveTemplate={(content) =>
+              openTemplateEditor({ name: '', content, projectId: activeChat?.projectId || null })
+            }
+            onEditTemplate={(template) => openTemplateEditor(template)}
+            onDeleteTemplate={(id) => deleteTemplate.mutate(id)}
+            editingArtifact={editingArtifact}
+            onCancelArtifactEdit={() => setEditingArtifact(null)}
+            onStop={() => void stopResponse()}
+            mode={activeMode}
+            onModeChange={(mode) => {
+              setResearchWeb(false);
+              if (activeChat) chatActions.update.mutate({ chatId: activeChat.id, values: { mode } });
+              else setDraftSelection((selection) => ({ ...selection, mode }));
+            }}
+            researchWeb={researchWeb}
+            onResearchWebChange={setResearchWeb}
+          />
+        </div>
+      </div>
+      <ArtifactPanel
+        open={artifactPanel.open}
+        onOpenChange={setArtifactPanelOpen}
+        selectedArtifactId={artifactPanel.selectedArtifactId}
+        onSelectedArtifactChange={selectArtifact}
+        messages={messages.data || []}
+        canEditArtifacts={activeChat?.provider !== 'ollama'}
+        onEditArtifact={startArtifactEdit}
+      />
+    </div>
+  );
+
+  const renderPageContent = () => {
+    if (libraryPage)
+      return (
+        <Suspense fallback={<WorkspacePanelFallback />}>
+          <LibraryPage />
+        </Suspense>
+      );
+    if (workspaceView)
+      return (
+        <Suspense fallback={<WorkspacePanelFallback />}>
+          <WorkspacePanel view={workspaceView} />
+        </Suspense>
+      );
+    if (adminPage)
+      return (
+        <Suspense fallback={<WorkspacePanelFallback />}>
+          <AdminPage view={adminView || 'overview'} navigate={navigate} />
+        </Suspense>
+      );
+    if (settingsPage) return <SettingsApiKeysPage />;
+    return renderChatView();
+  };
+
+  const renderTemplateEditor = () => {
+    if (!templateDraft) return null;
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <form
+          className="w-full max-w-xl rounded-xl border bg-background p-5 shadow-xl"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="template-editor-title"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void saveTemplateDraft();
+          }}
+        >
+          <h2 id="template-editor-title" className="text-lg font-semibold">
+            {templateDraft.id ? 'Sửa template' : 'Lưu prompt thành template'}
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Lưu lại để dùng nhanh trong những cuộc trò chuyện sau.
+          </p>
+          <label className="mt-5 block text-sm font-medium" htmlFor="template-name">
+            Tên template
+          </label>
+          <input
+            id="template-name"
+            autoFocus
+            required
+            value={templateDraft.name}
+            onChange={(event) =>
+              setTemplateDraft((draft) => (draft ? { ...draft, name: event.target.value } : draft))
+            }
+            className="mt-2 w-full rounded-md border bg-transparent px-3 py-2 outline-none ring-ring focus:ring-2"
+            placeholder="Ví dụ: Tóm tắt tài liệu"
+          />
+          <label className="mt-4 block text-sm font-medium" htmlFor="template-content">
+            Nội dung
+          </label>
+          <textarea
+            id="template-content"
+            required
+            value={templateDraft.content}
+            onChange={(event) =>
+              setTemplateDraft((draft) => (draft ? { ...draft, content: event.target.value } : draft))
+            }
+            className="mt-2 min-h-40 w-full resize-y rounded-md border bg-transparent px-3 py-2 outline-none ring-ring focus:ring-2"
+            placeholder="Nhập nội dung prompt..."
+          />
+          {saveTemplate.error?.message || updateTemplate.error?.message ? (
+            <p className="mt-3 text-sm text-destructive">
+              {saveTemplate.error?.message || updateTemplate.error?.message}
+            </p>
+          ) : null}
+          <div className="mt-5 flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setTemplateDraft(null)}
+              disabled={saveTemplate.isPending || updateTemplate.isPending}
+            >
+              Hủy
+            </Button>
+            <Button type="submit" disabled={saveTemplate.isPending || updateTemplate.isPending}>
+              {saveTemplate.isPending || updateTemplate.isPending ? 'Đang lưu...' : 'Lưu template'}
+            </Button>
+          </div>
+        </form>
+      </div>
+    );
+  };
+  return (
+    <main className="min-h-dvh bg-background text-foreground">
+      <div
+        className={`grid min-h-dvh w-full transition-[grid-template-columns] duration-200 ${
+          sidebarCollapsed ? 'lg:grid-cols-[64px_minmax(0,1fr)]' : 'lg:grid-cols-[280px_minmax(0,1fr)]'
+        }`}
+      >
+        {renderDesktopSidebar()}
+        {renderMobileSidebar()}
         <section
           className={
             isChatView ? 'flex h-dvh min-w-0 min-h-0 flex-col overflow-hidden' : 'flex min-w-0 flex-col'
           }
         >
-          {libraryPage ? null : workspaceView || adminPage || settingsPage ? (
-            <div className="sticky top-0 z-20 flex h-15 items-center border-b bg-background/95 px-4 backdrop-blur sm:px-8">
-              <Button variant="ghost" size="sm" onClick={() => navigate('/')}>
-                ← Chat
-              </Button>
-            </div>
-          ) : (
-            <ChatHeader
-              chat={activeChat}
-              config={config.data || null}
-              onRefreshModels={() => {
-                void config.refetch();
-              }}
-              refreshingModels={config.isFetching}
-              modelsRefreshFailed={config.isRefetchError}
-              provider={draftProvider}
-              model={draftModel}
-              busy={createChat.isPending || chatActions.update.isPending || streamChat.isPending}
-              onOpenSidebar={() => setSidebarOpen(true)}
-              onProviderChange={(event) => void changeProvider(event)}
-              onModelChange={(event) => void changeModel(event)}
-              onSelectionChange={(provider, model) => void changeSelection(provider, model)}
-              collections={collections.data || []}
-              onCollectionChange={(collectionId) =>
-                activeChat && chatActions.update.mutate({ chatId: activeChat.id, values: { collectionId } })
-              }
-            />
-          )}
-          {libraryPage ? (
-            <Suspense fallback={<WorkspacePanelFallback />}>
-              <LibraryPage />
-            </Suspense>
-          ) : workspaceView ? (
-            <Suspense fallback={<WorkspacePanelFallback />}>
-              <WorkspacePanel view={workspaceView} />
-            </Suspense>
-          ) : adminPage ? (
-            <Suspense fallback={<WorkspacePanelFallback />}>
-              <AdminPage view={adminView || 'overview'} navigate={navigate} />
-            </Suspense>
-          ) : settingsPage ? (
-            <SettingsApiKeysPage />
-          ) : (
-            <div className="flex min-h-0 flex-1">
-              <div className="flex min-w-0 flex-1 flex-col">
-                <div ref={transcriptRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-                  <div className="mx-auto min-h-full w-full max-w-5xl px-4 sm:px-8 lg:px-12">
-                    {pins.data?.length ? (
-                      <div className="sticky top-0 z-10 flex gap-2 overflow-x-auto border-b bg-background/95 py-2.5 backdrop-blur">
-                        <span className="shrink-0 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-                          Đã ghim
-                        </span>
-                        {pins.data.map((item) => (
-                          <button
-                            key={item.messageId}
-                            className="shrink-0 rounded-md bg-muted/70 px-2 py-1 text-xs hover:bg-muted"
-                            onClick={() =>
-                              document
-                                .getElementById(`message-${item.messageId}`)
-                                ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                            }
-                          >
-                            {item.content.slice(0, 48)}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                    <MessageList
-                      key={activeChat?.id || 'new-chat'}
-                      chatId={activeChat?.id}
-                      messages={
-                        pendingUser &&
-                        !(messages.data || []).some((item) => item.messageId === pendingUser.messageId)
-                          ? [...(messages.data || []), pendingUser]
-                          : messages.data || []
-                      }
-                      status={status}
-                      isResponding={isResponding}
-                      error={error}
-                      userScrollRequest={userScrollRequest}
-                      isRunwayRequested={runwayChatId === activeChat?.id}
-                      scrollContainerRef={transcriptRef}
-                      onRunwayRelease={() => setRunwayChatId(null)}
-                      onPin={(message) =>
-                        message.messageId &&
-                        pin.mutate({ messageId: message.messageId, pinned: !message.pinned })
-                      }
-                      onScheduleProposalAction={(proposalId, action) =>
-                        scheduleProposal.mutate({ proposalId, action })
-                      }
-                      onBranch={branchFromMessage}
-                      onRegenerate={regenerateMessage}
-                      onOpenArtifact={(asset) =>
-                        setArtifactPanel({ open: true, selectedArtifactId: asset.id })
-                      }
-                    />
-                  </div>
-                </div>
-                <div className="mx-auto w-full max-w-5xl px-4 sm:px-8 lg:px-12">
-                  <ChatComposer
-                    key={activeChat?.id || 'new-chat'}
-                    prompt={prompt}
-                    busy={
-                      chatActions.update.isPending ||
-                      streamChat.isPending ||
-                      isResponding ||
-                      uploadDocuments.isPending ||
-                      uploadMedia.isPending
-                    }
-                    onPromptChange={setPrompt}
-                    onSubmit={(content, attachments) => void send(content, attachments)}
-                    templates={templates.data || []}
-                    onSelectTemplate={(content) => setPrompt(content)}
-                    onSaveTemplate={(content) =>
-                      openTemplateEditor({ name: '', content, projectId: activeChat?.projectId || null })
-                    }
-                    onEditTemplate={(template) => openTemplateEditor(template)}
-                    onDeleteTemplate={(id) => deleteTemplate.mutate(id)}
-                    editingArtifact={editingArtifact}
-                    onCancelArtifactEdit={() => setEditingArtifact(null)}
-                    onStop={() => void stopResponse()}
-                    mode={activeMode}
-                    onModeChange={(mode) => {
-                      setResearchWeb(false);
-                      if (activeChat) chatActions.update.mutate({ chatId: activeChat.id, values: { mode } });
-                      else setDraftSelection((selection) => ({ ...selection, mode }));
-                    }}
-                    researchWeb={researchWeb}
-                    onResearchWebChange={setResearchWeb}
-                  />
-                </div>
-              </div>
-              <ArtifactPanel
-                open={artifactPanel.open}
-                onOpenChange={setArtifactPanelOpen}
-                selectedArtifactId={artifactPanel.selectedArtifactId}
-                onSelectedArtifactChange={selectArtifact}
-                messages={messages.data || []}
-                canEditArtifacts={activeChat?.provider !== 'ollama'}
-                onEditArtifact={startArtifactEdit}
-              />
-            </div>
-          )}
+          {renderPageHeader()}
+          {renderPageContent()}
         </section>
       </div>
       {shareChat ? (
@@ -774,72 +870,7 @@ export function ChatWorkspace({
           <ChatShareDialog chat={shareChat} onClose={() => setShareChat(null)} />
         </Suspense>
       ) : null}
-      {templateDraft ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <form
-            className="w-full max-w-xl rounded-xl border bg-background p-5 shadow-xl"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="template-editor-title"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void saveTemplateDraft();
-            }}
-          >
-            <h2 id="template-editor-title" className="text-lg font-semibold">
-              {templateDraft.id ? 'Sửa template' : 'Lưu prompt thành template'}
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Lưu lại để dùng nhanh trong những cuộc trò chuyện sau.
-            </p>
-            <label className="mt-5 block text-sm font-medium" htmlFor="template-name">
-              Tên template
-            </label>
-            <input
-              id="template-name"
-              autoFocus
-              required
-              value={templateDraft.name}
-              onChange={(event) =>
-                setTemplateDraft((draft) => (draft ? { ...draft, name: event.target.value } : draft))
-              }
-              className="mt-2 w-full rounded-md border bg-transparent px-3 py-2 outline-none ring-ring focus:ring-2"
-              placeholder="Ví dụ: Tóm tắt tài liệu"
-            />
-            <label className="mt-4 block text-sm font-medium" htmlFor="template-content">
-              Nội dung
-            </label>
-            <textarea
-              id="template-content"
-              required
-              value={templateDraft.content}
-              onChange={(event) =>
-                setTemplateDraft((draft) => (draft ? { ...draft, content: event.target.value } : draft))
-              }
-              className="mt-2 min-h-40 w-full resize-y rounded-md border bg-transparent px-3 py-2 outline-none ring-ring focus:ring-2"
-              placeholder="Nhập nội dung prompt..."
-            />
-            {saveTemplate.error?.message || updateTemplate.error?.message ? (
-              <p className="mt-3 text-sm text-destructive">
-                {saveTemplate.error?.message || updateTemplate.error?.message}
-              </p>
-            ) : null}
-            <div className="mt-5 flex justify-end gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setTemplateDraft(null)}
-                disabled={saveTemplate.isPending || updateTemplate.isPending}
-              >
-                Hủy
-              </Button>
-              <Button type="submit" disabled={saveTemplate.isPending || updateTemplate.isPending}>
-                {saveTemplate.isPending || updateTemplate.isPending ? 'Đang lưu...' : 'Lưu template'}
-              </Button>
-            </div>
-          </form>
-        </div>
-      ) : null}
+      {renderTemplateEditor()}
     </main>
   );
 }

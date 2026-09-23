@@ -61,6 +61,35 @@ def agent_system_prompt(chat: Chat, project: Project | None, web_tool: ToolSpec 
     return prompt
 
 
+def _artifact_version_tool(deps: AgentDependencies, app_services: Services, artifact_edit: ArtifactEditContext) -> tuple[ToolSpec, str]:
+    created = False
+
+    def create_artifact_version(content: str) -> str:
+        nonlocal created
+        if created:
+            raise ValueError("Mỗi lần sửa chỉ được tạo một version mới.")
+        if len(content) > PREVIEW_LIMIT:
+            raise ValueError("Nội dung mới vượt quá 30.000 ký tự nên chưa thể lưu bằng AI.")
+        asset = app_services.library.create_version(artifact_edit.asset_id, artifact_edit.name, artifact_edit.mime_type, content.encode("utf-8"))
+        created = True
+        deps.enqueue_artifact_index(asset, app_services)
+        return json.dumps(deps.library_asset_json(asset), ensure_ascii=False)
+
+    tool = ToolSpec(name="create_artifact_version", description="Lưu nội dung đã chỉnh sửa thành version mới.", parameters={"type": "object", "properties": {"content": {"type": "string"}}, "required": ["content"]}, func=create_artifact_version)
+    context = f"\n\nBạn đang sửa file `{artifact_edit.name}` version {artifact_edit.version}.\n<artifact-content>\n{artifact_edit.content}\n</artifact-content>"
+    return tool, context
+
+
+def _schedule_tool(deps: AgentDependencies, chat: Chat, schedule_proposals: list[dict[str, Any]]) -> ToolSpec:
+    def propose_schedule(title: str, prompt: str, startsAt: str, recurrence: str = "once", timezone: str = deps.vietnam_timezone) -> str:
+        proposal = deps.schedule_payload.model_validate({"title": title, "prompt": prompt, "startsAt": startsAt, "recurrence": recurrence, "timezone": timezone})
+        block = {"type": "schedule-proposal", "config": {"proposalId": str(uuid4()), "status": "pending", "title": proposal.title, "prompt": proposal.prompt, "startsAt": proposal.starts_at.isoformat(), "recurrence": proposal.recurrence, "timezone": proposal.timezone, "projectId": chat.project_id}}
+        schedule_proposals.append(block)
+        return json.dumps({"status": "pending", "message": "Đã tạo thẻ xác nhận lịch trình."}, ensure_ascii=False)
+
+    return ToolSpec(name="propose_schedule", description="Tạo thẻ xác nhận lịch trình, không tự lưu lịch.", parameters={"type": "object", "properties": {"title": {"type": "string"}, "prompt": {"type": "string"}, "startsAt": {"type": "string"}}, "required": ["title", "prompt", "startsAt"]}, func=propose_schedule)
+
+
 def build_agent(deps: AgentDependencies, app_services: Services, chat: Chat, memory_context: str = "", knowledge_context: str = "", personalization_context: str = "", plugin_tools: list[ToolSpec] | None = None, history: list[dict[str, Any]] | None = None, schedule_proposals: list[dict[str, Any]] | None = None, allow_schedule_proposals: bool = True, artifact_edit: ArtifactEditContext | None = None, web_context: str = "", allow_web: bool = True) -> Agent:
     project = validate_agent_context(app_services, chat)
     settings = deps.selected_settings(chat.provider, chat.model, chat.user_id)
@@ -80,35 +109,13 @@ def build_agent(deps: AgentDependencies, app_services: Services, chat: Chat, mem
             deps.enqueue_artifact_index(asset, app_services)
         return json.dumps({"items": [deps.library_asset_json(asset) for asset in assets]}, ensure_ascii=False)
     web_bundle_tool = ToolSpec(name="create_web_bundle", description="Tạo website gồm index.html, style.css và app.js.", parameters={"type": "object", "properties": {"name": {"type": "string"}, "html": {"type": "string"}, "css": {"type": "string"}, "js": {"type": "string"}, "include_zip": {"type": "boolean"}}, "required": ["name", "html", "css", "js"]}, func=create_web_bundle)
-    version_tool = None
-    artifact_edit_context = ""
-    if artifact_edit is not None:
-        created = False
-        def create_artifact_version(content: str) -> str:
-            nonlocal created
-            if created:
-                raise ValueError("Mỗi lần sửa chỉ được tạo một version mới.")
-            if len(content) > PREVIEW_LIMIT:
-                raise ValueError("Nội dung mới vượt quá 30.000 ký tự nên chưa thể lưu bằng AI.")
-            asset = app_services.library.create_version(artifact_edit.asset_id, artifact_edit.name, artifact_edit.mime_type, content.encode("utf-8"))
-            created = True
-            deps.enqueue_artifact_index(asset, app_services)
-            return json.dumps(deps.library_asset_json(asset), ensure_ascii=False)
-        version_tool = ToolSpec(name="create_artifact_version", description="Lưu nội dung đã chỉnh sửa thành version mới.", parameters={"type": "object", "properties": {"content": {"type": "string"}}, "required": ["content"]}, func=create_artifact_version)
-        artifact_edit_context = f"\n\nBạn đang sửa file `{artifact_edit.name}` version {artifact_edit.version}.\n<artifact-content>\n{artifact_edit.content}\n</artifact-content>"
+    version_tool, artifact_edit_context = _artifact_version_tool(deps, app_services, artifact_edit) if artifact_edit is not None else (None, "")
     web_search = getattr(app_services, "web_search", None)
     web_tool = build_web_search_tool(web_search) if web_search is not None else None
     if getattr(chat, "mode", "standard") in {"plan", "research"} and not allow_web:
         web_tool = None
     knowledge_tool = deps.build_knowledge_tool(app_services.knowledge, chat.project_id, chat.collection_id)
-    schedule_tool = None
-    if chat.provider != "ollama" and allow_schedule_proposals and schedule_proposals is not None:
-        def propose_schedule(title: str, prompt: str, startsAt: str, recurrence: str = "once", timezone: str = deps.vietnam_timezone) -> str:
-            proposal = deps.schedule_payload.model_validate({"title": title, "prompt": prompt, "startsAt": startsAt, "recurrence": recurrence, "timezone": timezone})
-            block = {"type": "schedule-proposal", "config": {"proposalId": str(uuid4()), "status": "pending", "title": proposal.title, "prompt": proposal.prompt, "startsAt": proposal.starts_at.isoformat(), "recurrence": proposal.recurrence, "timezone": proposal.timezone, "projectId": chat.project_id}}
-            schedule_proposals.append(block)
-            return json.dumps({"status": "pending", "message": "Đã tạo thẻ xác nhận lịch trình."}, ensure_ascii=False)
-        schedule_tool = ToolSpec(name="propose_schedule", description="Tạo thẻ xác nhận lịch trình, không tự lưu lịch.", parameters={"type": "object", "properties": {"title": {"type": "string"}, "prompt": {"type": "string"}, "startsAt": {"type": "string"}}, "required": ["title", "prompt", "startsAt"]}, func=propose_schedule)
+    schedule_tool = _schedule_tool(deps, chat, schedule_proposals) if chat.provider != "ollama" and allow_schedule_proposals and schedule_proposals is not None else None
     if chat.provider == "ollama":
         registry = ToolRegistry([])
         web_tool = None

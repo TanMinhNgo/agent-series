@@ -1,6 +1,7 @@
 """Reusable workflow recipe catalog."""
 
 from contextlib import contextmanager
+from typing import Callable
 from fastapi import APIRouter, HTTPException, Header, Query
 from agent_core.workflows.contracts import WorkflowConfig, RunInput, RetryInput, WorkflowScheduleInput
 from agent_core.workflows.repository import WorkflowRepository, WorkflowConflict
@@ -10,10 +11,54 @@ from sqlalchemy import select
 
 
 
-def build_router(error_responses: dict, services=None) -> APIRouter:
-    router = APIRouter(tags=["Workflows"])
+@contextmanager
+def _access(services: Callable, project_id: str, write: bool = False):
+    try:
+        app_services = services()
+        authorize(app_services, project_id, write)
+        yield app_services, WorkflowRepository(app_services.chats.database)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except WorkflowConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
-    @router.get("/api/workflow-recipes", responses=error_responses)
+
+def _start_run(services: Callable, project_id: str, workflow_id: str, payload: RunInput, idempotency_key: str | None):
+    with _access(services, project_id, True) as (app_services, repo):
+        workflow = repo.get(project_id, workflow_id)
+        validate_config(app_services, project_id, workflow.config)
+        if idempotency_key and len(idempotency_key) > 160:
+            raise HTTPException(422, "Idempotency-Key quá dài.")
+        if idempotency_key is not None and not idempotency_key.strip():
+            raise HTTPException(422, "Idempotency-Key không được để trống.")
+        return run_json(repo.enqueue(workflow, payload, idempotency_key=idempotency_key))
+
+
+def _create_schedule(services: Callable, project_id: str, workflow_id: str, payload: WorkflowScheduleInput):
+    with _access(services, project_id, True) as (app_services, repo):
+        workflow = repo.get(project_id, workflow_id)
+        validate_config(app_services, project_id, workflow.config)
+        with app_services.chats.database.session() as session:
+            session.scalar(select(Workflow.id).where(Workflow.id == workflow_id).with_for_update())
+            if session.scalar(select(Schedule.id).where(Schedule.workflow_id == workflow_id)):
+                raise WorkflowConflict("Workflow đã có lịch. Hãy tạm dừng hoặc xóa lịch hiện có trước.")
+            schedule = Schedule(title=payload.title or workflow.name, starts_at=payload.nextRunAt,
+                project_id=project_id, workflow_id=workflow.id,
+                recurrence="daily" if workflow.config["template"] == "daily-ai-digest" else "weekly",
+                status="active", next_run_at=payload.nextRunAt, timezone=payload.timezone,
+                user_id=current_user_id.get(), workspace_id=current_workspace_id.get())
+            session.add(schedule); session.commit()
+            return {"id": schedule.id, "workflowId": workflow.id, "nextRunAt": schedule.next_run_at.isoformat(), "recurrence": schedule.recurrence, "timezone": schedule.timezone}
+
+
+def build_router(error_responses: dict, services=None) -> APIRouter:
+    router = APIRouter(tags=["Workflows"], responses=error_responses)
+
+    @router.get("/api/workflow-recipes")
     def workflow_recipes() -> list[dict[str, object]]:
         return [
             {"id": "daily-ai-digest", "title": "Daily AI digest", "description": "Tóm tắt nguồn web lấy khi lịch chạy; chưa xác minh ngày xuất bản.", "sourceType": "web", "prompt": "Tổng hợp nguồn web vừa tìm được về AI, nêu nguồn; không khẳng định ngày xuất bản khi nguồn không cung cấp.", "recurrence": "daily", "notifyEmail": True, "requiresRepository": False},
@@ -21,20 +66,8 @@ def build_router(error_responses: dict, services=None) -> APIRouter:
             {"id": "project-report", "title": "Project report", "description": "Tổng hợp các tài liệu đã ghim trong Project.", "sourceType": "library", "prompt": "Tổng hợp tiến độ Project từ các nguồn đã ghim và tạo báo cáo Markdown.", "recurrence": "weekly", "notifyEmail": True, "requiresRepository": False},
         ]
 
-    @contextmanager
     def access(project_id, write=False):
-        try:
-            app_services = services()
-            authorize(app_services, project_id, write)
-            yield app_services, WorkflowRepository(app_services.chats.database)
-        except PermissionError as exc:
-            raise HTTPException(403, str(exc)) from exc
-        except LookupError as exc:
-            raise HTTPException(404, str(exc)) from exc
-        except WorkflowConflict as exc:
-            raise HTTPException(409, str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(422, str(exc)) from exc
+        return _access(services, project_id, write)
 
     @router.get("/api/projects/{project_id}/workflows")
     def list_workflows(project_id: str):
@@ -57,31 +90,11 @@ def build_router(error_responses: dict, services=None) -> APIRouter:
 
     @router.post("/api/projects/{project_id}/workflows/{workflow_id}/runs", status_code=202)
     def start_run(project_id: str, workflow_id: str, payload: RunInput, idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
-        with access(project_id, True) as (app_services, repo):
-            workflow = repo.get(project_id, workflow_id)
-            validate_config(app_services, project_id, workflow.config)
-            if idempotency_key and len(idempotency_key) > 160:
-                raise HTTPException(422, "Idempotency-Key quá dài.")
-            if idempotency_key is not None and not idempotency_key.strip():
-                raise HTTPException(422, "Idempotency-Key không được để trống.")
-            return run_json(repo.enqueue(workflow, payload, idempotency_key=idempotency_key))
+        return _start_run(services, project_id, workflow_id, payload, idempotency_key)
 
     @router.post("/api/projects/{project_id}/workflows/{workflow_id}/schedule", status_code=201)
     def create_schedule(project_id: str, workflow_id: str, payload: WorkflowScheduleInput):
-        with access(project_id, True) as (app_services, repo):
-            workflow = repo.get(project_id, workflow_id)
-            validate_config(app_services, project_id, workflow.config)
-            with app_services.chats.database.session() as session:
-                session.scalar(select(Workflow.id).where(Workflow.id == workflow_id).with_for_update())
-                if session.scalar(select(Schedule.id).where(Schedule.workflow_id == workflow_id)):
-                    raise WorkflowConflict("Workflow đã có lịch. Hãy tạm dừng hoặc xóa lịch hiện có trước.")
-                schedule = Schedule(title=payload.title or workflow.name, starts_at=payload.nextRunAt,
-                    project_id=project_id, workflow_id=workflow.id,
-                    recurrence="daily" if workflow.config["template"] == "daily-ai-digest" else "weekly",
-                    status="active", next_run_at=payload.nextRunAt, timezone=payload.timezone,
-                    user_id=current_user_id.get(), workspace_id=current_workspace_id.get())
-                session.add(schedule); session.commit()
-                return {"id": schedule.id, "workflowId": workflow.id, "nextRunAt": schedule.next_run_at.isoformat(), "recurrence": schedule.recurrence, "timezone": schedule.timezone}
+        return _create_schedule(services, project_id, workflow_id, payload)
 
     @router.post("/api/projects/{project_id}/workflow-runs/{run_id}/cancel")
     def cancel_run(project_id: str, run_id: str):

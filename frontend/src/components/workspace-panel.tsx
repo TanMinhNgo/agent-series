@@ -1526,33 +1526,11 @@ function GoogleWorkspaceCard({
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          {!plugin ? (
-            <Button size="sm" onClick={onInstall} disabled={busy}>
-              Thêm Google Workspace
-            </Button>
-          ) : !configured ? (
-            <Button size="sm" variant="outline" disabled>
-              Thiếu cấu hình .env
-            </Button>
-          ) : !connected ? (
-            <Button size="sm" onClick={() => void onConnect().catch(() => undefined)} disabled={busy}>
-              Kết nối Google
-            </Button>
-          ) : (
-            <>
-              <Button
-                size="sm"
-                variant={plugin.enabled ? 'secondary' : 'default'}
-                onClick={() => void onToggle().catch(() => undefined)}
-                disabled={busy}
-              >
-                {plugin.enabled ? 'Tắt trong chat' : 'Bật cho chat'}
-              </Button>
-              <Button size="sm" variant="outline" onClick={onDisconnect} disabled={busy}>
-                Ngắt kết nối
-              </Button>
-            </>
-          )}
+          <ConnectorActions
+            {...{ plugin, configured, connected, busy, onInstall, onConnect, onDisconnect, onToggle }}
+            addLabel="Thêm Google Workspace"
+            connectLabel="Kết nối Google"
+          />
         </div>
       </div>
       {!configured && plugin ? (
@@ -1582,11 +1560,13 @@ function GoogleWorkspaceCard({
   );
 }
 
-function GitHubActions({
+function ConnectorActions({
   plugin,
   configured,
   connected,
   busy,
+  addLabel,
+  connectLabel,
   onInstall,
   onConnect,
   onDisconnect,
@@ -1596,6 +1576,8 @@ function GitHubActions({
   configured: boolean;
   connected: boolean;
   busy: boolean;
+  addLabel: string;
+  connectLabel: string;
   onInstall: () => void;
   onConnect: () => Promise<void>;
   onDisconnect: () => void;
@@ -1604,7 +1586,7 @@ function GitHubActions({
   if (!plugin)
     return (
       <Button size="sm" onClick={onInstall} disabled={busy}>
-        Thêm GitHub
+        {addLabel}
       </Button>
     );
   if (!configured)
@@ -1616,7 +1598,7 @@ function GitHubActions({
   if (!connected)
     return (
       <Button size="sm" onClick={() => void onConnect().catch(() => undefined)} disabled={busy}>
-        Kết nối GitHub
+        {connectLabel}
       </Button>
     );
   const toggleLabel = plugin.enabled ? 'Tắt trong chat' : 'Bật cho chat';
@@ -1683,8 +1665,10 @@ function GitHubCard({
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <GitHubActions
+          <ConnectorActions
             {...{ plugin, configured, connected, busy, onInstall, onConnect, onDisconnect, onToggle }}
+            addLabel="Thêm GitHub"
+            connectLabel="Kết nối GitHub"
           />
         </div>
       </div>

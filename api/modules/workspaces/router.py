@@ -23,6 +23,34 @@ class WorkspaceDependencies:
     user_model: Any
 
 
+def _create_invitation(deps: WorkspaceDependencies, payload: WorkspaceInvitationRequest, request: Request) -> dict[str, Any]:
+    email = payload.email.strip().lower()
+    if "@" not in email:
+        raise HTTPException(status_code=422, detail="Email lời mời không hợp lệ.")
+    item = deps.services().workspace.invite(deps.current_workspace_id(), email, payload.role, request.state.user.id, datetime.now(UTC) + timedelta(days=7))
+    deps.record_workspace_activity("workspace.invitation_created", "workspace_invitation", item.id, f"Đã mời {email} vào workspace với quyền {payload.role}.")
+    result = deps.invitation_json(item)
+    result["inviteUrl"] = f"{deps.services().settings.app_web_url}/?invite={item.id}"
+    result["emailStatus"] = "pending"
+    if deps.services().email.enabled:
+        try:
+            deps.services().email.send(email, "Lời mời vào Agent Series workspace", f"Bạn được mời vào workspace Agent Series với quyền {payload.role}.\n\nMở lời mời: {result['inviteUrl']}")
+            result["emailStatus"] = "sent"
+        except Exception:
+            pass
+    return result
+
+
+def _find_invitable_users(deps: WorkspaceDependencies, q: str) -> list[dict[str, str | None]]:
+    workspace_id, term = deps.current_workspace_id(), q.strip()
+    with deps.services().chats.database.session() as session:
+        existing = select(deps.workspace_member_model.user_id).where(deps.workspace_member_model.workspace_id == workspace_id)
+        pending = select(deps.workspace_invitation_model.email).where(deps.workspace_invitation_model.workspace_id == workspace_id)
+        statement = select(deps.user_model).where(deps.user_model.is_active.is_(True), deps.user_model.id.not_in(existing), deps.user_model.email.not_in(pending), or_(deps.user_model.email.ilike(f"%{term}%"), deps.user_model.display_name.ilike(f"%{term}%"))).order_by(deps.user_model.email).limit(10).execution_options(skip_user_scope=True)
+        admin_email = (deps.services().settings.system_admin_email or "").strip().lower()
+        return [{"id": user.id, "email": user.email, "displayName": user.display_name} for user in session.scalars(statement) if user.email.lower() != admin_email]
+
+
 def build_router(deps: WorkspaceDependencies) -> APIRouter:
     router = APIRouter(tags=["Workspaces"])
 
@@ -57,32 +85,12 @@ def build_router(deps: WorkspaceDependencies) -> APIRouter:
     @router.get("/api/workspaces/current/invitable-users", responses=deps.api_error_responses)
     def find_invitable_workspace_users(request: Request, q: str = Query(min_length=2, max_length=160)) -> list[dict[str, str | None]]:
         owner(request)
-        workspace_id, term = deps.current_workspace_id(), q.strip()
-        with deps.services().chats.database.session() as session:
-            existing = select(deps.workspace_member_model.user_id).where(deps.workspace_member_model.workspace_id == workspace_id)
-            pending = select(deps.workspace_invitation_model.email).where(deps.workspace_invitation_model.workspace_id == workspace_id)
-            statement = select(deps.user_model).where(deps.user_model.is_active.is_(True), deps.user_model.id.not_in(existing), deps.user_model.email.not_in(pending), or_(deps.user_model.email.ilike(f"%{term}%"), deps.user_model.display_name.ilike(f"%{term}%"))).order_by(deps.user_model.email).limit(10).execution_options(skip_user_scope=True)
-            admin_email = (deps.services().settings.system_admin_email or "").strip().lower()
-            return [{"id": user.id, "email": user.email, "displayName": user.display_name} for user in session.scalars(statement) if user.email.lower() != admin_email]
+        return _find_invitable_users(deps, q)
 
     @router.post("/api/workspaces/current/invitations", status_code=201, responses=deps.api_error_responses)
     def create_workspace_invitation(payload: WorkspaceInvitationRequest, request: Request) -> dict[str, Any]:
         owner(request)
-        email = payload.email.strip().lower()
-        if "@" not in email:
-            raise HTTPException(status_code=422, detail="Email lời mời không hợp lệ.")
-        item = deps.services().workspace.invite(deps.current_workspace_id(), email, payload.role, request.state.user.id, datetime.now(UTC) + timedelta(days=7))
-        deps.record_workspace_activity("workspace.invitation_created", "workspace_invitation", item.id, f"Đã mời {email} vào workspace với quyền {payload.role}.")
-        result = deps.invitation_json(item)
-        result["inviteUrl"] = f"{deps.services().settings.app_web_url}/?invite={item.id}"
-        result["emailStatus"] = "pending"
-        if deps.services().email.enabled:
-            try:
-                deps.services().email.send(email, "Lời mời vào Agent Series workspace", f"Bạn được mời vào workspace Agent Series với quyền {payload.role}.\n\nMở lời mời: {result['inviteUrl']}")
-                result["emailStatus"] = "sent"
-            except Exception:
-                pass
-        return result
+        return _create_invitation(deps, payload, request)
 
     @router.delete("/api/workspaces/current/invitations/{invitation_id}", status_code=204, responses=deps.api_error_responses)
     def cancel_workspace_invitation(invitation_id: str, request: Request) -> None:

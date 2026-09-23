@@ -129,7 +129,6 @@ export function AssistantMessageActions({
     () => message.sources || sourcesIn(message.content),
     [message.content, message.sources],
   );
-  const savedFeedbackKind = message.feedbackKind || null;
   const librarySources = sources.filter(
     (source) => source.kind === 'library' || (!source.kind && source.url.startsWith('/api/documents/')),
   );
@@ -163,10 +162,6 @@ export function AssistantMessageActions({
     window.speechSynthesis.speak(utterance);
     setSpeaking(true);
   };
-  const isHelpful = savedFeedbackKind === 'helpful';
-  const hasNegativeFeedback = Boolean(savedFeedbackKind && !isHelpful);
-  const FeedbackIcon = hasNegativeFeedback ? ThumbsDown : ThumbsUp;
-
   return (
     <>
       <div className="mt-2 flex items-center gap-0.5">
@@ -179,41 +174,7 @@ export function AssistantMessageActions({
         >
           {copied ? <Check /> : <Copy />}
         </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                className={cn('size-7 rounded-md', savedFeedbackKind && 'text-primary hover:text-primary')}
-                aria-label={
-                  savedFeedbackKind
-                    ? `Đã đánh giá: ${isHelpful ? 'trả lời tốt' : 'trả lời tệ'}`
-                    : 'Đánh giá phản hồi'
-                }
-              />
-            }
-          >
-            <span className="relative">
-              <FeedbackIcon className={savedFeedbackKind ? 'fill-current' : undefined} />
-              {savedFeedbackKind ? (
-                <Check className="absolute -bottom-1.5 -right-2 size-2.5 rounded-full bg-background" />
-              ) : null}
-            </span>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" side="top" sideOffset={8} className="w-40">
-            <DropdownMenuItem onClick={() => void feedback.submitFeedback('helpful', '')}>
-              <ThumbsUp className={isHelpful ? 'fill-current text-primary' : undefined} />
-              Trả lời tốt
-              {isHelpful ? <Check className="ml-auto size-4" /> : null}
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={feedback.openFeedback}>
-              <ThumbsDown className={hasNegativeFeedback ? 'fill-current text-primary' : undefined} />
-              Trả lời tệ
-              {hasNegativeFeedback ? <Check className="ml-auto size-4" /> : null}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <FeedbackButton savedKind={message.feedbackKind || null} feedback={feedback} />
         <Button
           size="icon-sm"
           variant="ghost"
@@ -269,63 +230,133 @@ export function AssistantMessageActions({
       {feedback.feedbackError ? (
         <p className="mt-1 text-xs text-destructive">{feedback.feedbackError}</p>
       ) : null}
-      {feedback.feedbackOpen ? (
-        <Modal title="Phản hồi này cần cải thiện ở đâu?" onClose={() => feedback.setFeedbackOpen(false)}>
-          <div className="grid gap-2">
-            {[
-              ['incorrect', 'Sai hoặc chưa chính xác'],
-              ['too_long', 'Quá dài'],
-              ['too_short', 'Quá ngắn'],
-              ['unclear', 'Khó hiểu'],
-              ['wrong_style', 'Sai định dạng hoặc phong cách'],
-            ].map(([value, label]) => (
-              <label key={value} className="flex items-center gap-2 text-sm">
-                <input
-                  type="radio"
-                  name={message.messageId}
-                  checked={feedback.feedbackKind === value}
-                  onChange={() => feedback.setFeedbackKind(value as FeedbackKind)}
-                />
-                {label}
-              </label>
-            ))}
-          </div>
-          <textarea
-            className="mt-4 min-h-24 w-full rounded-xl border bg-background p-3 text-sm"
-            value={feedback.note}
-            onChange={(event) => feedback.setNote(event.target.value)}
-            placeholder="Ghi chú thêm để AI cải thiện cho các lần sau (tùy chọn)"
-          />
-          <div className="mt-4 flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => feedback.setFeedbackOpen(false)}>
-              Hủy
-            </Button>
-            <Button disabled={feedback.busy} onClick={() => void feedback.submitFeedback()}>
-              {feedback.busy ? 'Đang lưu...' : 'Gửi đánh giá'}
-            </Button>
-          </div>
-          {feedback.feedbackError ? (
-            <p className="mt-3 text-sm text-destructive">{feedback.feedbackError}</p>
-          ) : null}
-        </Modal>
-      ) : null}
-      {sourcesOpen ? (
-        <Modal title="Nguồn của phản hồi" onClose={() => setSourcesOpen(false)}>
-          {sources.length ? (
-            <div className="space-y-5">
-              {librarySources.length ? (
-                <SourceGroup icon={<BookOpen />} title="Từ Thư viện" sources={librarySources} />
-              ) : null}
-              {externalSources.length ? (
-                <SourceGroup icon={<Globe />} title="Từ web" sources={externalSources} />
-              ) : null}
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">Phản hồi này không có nguồn được trích dẫn.</p>
-          )}
-        </Modal>
-      ) : null}
+      {feedback.feedbackOpen && <FeedbackModal messageId={message.messageId} feedback={feedback} />}
+      {sourcesOpen && (
+        <SourcesModal
+          sources={sources}
+          librarySources={librarySources}
+          externalSources={externalSources}
+          onClose={() => setSourcesOpen(false)}
+        />
+      )}
     </>
+  );
+}
+
+function FeedbackButton({
+  savedKind,
+  feedback,
+}: {
+  savedKind: FeedbackKind | null;
+  feedback: FeedbackState;
+}) {
+  const isHelpful = savedKind === 'helpful';
+  const hasNegativeFeedback = Boolean(savedKind && !isHelpful);
+  const FeedbackIcon = hasNegativeFeedback ? ThumbsDown : ThumbsUp;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className={cn('size-7 rounded-md', savedKind && 'text-primary hover:text-primary')}
+            aria-label={
+              savedKind ? `Đã đánh giá: ${isHelpful ? 'trả lời tốt' : 'trả lời tệ'}` : 'Đánh giá phản hồi'
+            }
+          />
+        }
+      >
+        <span className="relative">
+          <FeedbackIcon className={savedKind ? 'fill-current' : undefined} />
+          {savedKind && (
+            <Check className="absolute -bottom-1.5 -right-2 size-2.5 rounded-full bg-background" />
+          )}
+        </span>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" side="top" sideOffset={8} className="w-40">
+        <DropdownMenuItem onClick={() => void feedback.submitFeedback('helpful', '')}>
+          <ThumbsUp className={isHelpful ? 'fill-current text-primary' : undefined} />
+          Trả lời tốt
+          {isHelpful && <Check className="ml-auto size-4" />}
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={feedback.openFeedback}>
+          <ThumbsDown className={hasNegativeFeedback ? 'fill-current text-primary' : undefined} />
+          Trả lời tệ
+          {hasNegativeFeedback && <Check className="ml-auto size-4" />}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function FeedbackModal({ messageId, feedback }: { messageId?: string; feedback: FeedbackState }) {
+  return (
+    <Modal title="Phản hồi này cần cải thiện ở đâu?" onClose={() => feedback.setFeedbackOpen(false)}>
+      <div className="grid gap-2">
+        {[
+          ['incorrect', 'Sai hoặc chưa chính xác'],
+          ['too_long', 'Quá dài'],
+          ['too_short', 'Quá ngắn'],
+          ['unclear', 'Khó hiểu'],
+          ['wrong_style', 'Sai định dạng hoặc phong cách'],
+        ].map(([value, label]) => (
+          <label key={value} className="flex items-center gap-2 text-sm">
+            <input
+              type="radio"
+              name={messageId}
+              checked={feedback.feedbackKind === value}
+              onChange={() => feedback.setFeedbackKind(value as FeedbackKind)}
+            />
+            {label}
+          </label>
+        ))}
+      </div>
+      <textarea
+        className="mt-4 min-h-24 w-full rounded-xl border bg-background p-3 text-sm"
+        value={feedback.note}
+        onChange={(event) => feedback.setNote(event.target.value)}
+        placeholder="Ghi chú thêm để AI cải thiện cho các lần sau (tùy chọn)"
+      />
+      <div className="mt-4 flex justify-end gap-2">
+        <Button variant="ghost" onClick={() => feedback.setFeedbackOpen(false)}>
+          Hủy
+        </Button>
+        <Button disabled={feedback.busy} onClick={() => void feedback.submitFeedback()}>
+          {feedback.busy ? 'Đang lưu...' : 'Gửi đánh giá'}
+        </Button>
+      </div>
+      {feedback.feedbackError && <p className="mt-3 text-sm text-destructive">{feedback.feedbackError}</p>}
+    </Modal>
+  );
+}
+
+function SourcesModal({
+  sources,
+  librarySources,
+  externalSources,
+  onClose,
+}: {
+  sources: Source[];
+  librarySources: Source[];
+  externalSources: Source[];
+  onClose: () => void;
+}) {
+  return (
+    <Modal title="Nguồn của phản hồi" onClose={onClose}>
+      {sources.length ? (
+        <div className="space-y-5">
+          {librarySources.length ? (
+            <SourceGroup icon={<BookOpen />} title="Từ Thư viện" sources={librarySources} />
+          ) : null}
+          {externalSources.length ? (
+            <SourceGroup icon={<Globe />} title="Từ web" sources={externalSources} />
+          ) : null}
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">Phản hồi này không có nguồn được trích dẫn.</p>
+      )}
+    </Modal>
   );
 }
 
