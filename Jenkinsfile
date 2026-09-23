@@ -256,16 +256,28 @@ pipeline {
             set -euo pipefail
             trap 'docker logout >/dev/null 2>&1 || true' EXIT
 
-            printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+            retry_registry() {
+              local attempt=1
+              until "$@"; do
+                if (( attempt >= 3 )); then return 1; fi
+                echo 'Docker Hub request failed; retrying...' >&2
+                sleep "$((attempt * 5))"
+                ((attempt++))
+              done
+            }
+            login_registry() {
+              printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+            }
+            retry_registry login_registry
 
             for service in api worker frontend; do
               local_image="agent-series-${service}:$IMAGE_TAG"
               remote_image="${DOCKERHUB_USERNAME}/agent-series-${service}"
 
               docker tag "$local_image" "${remote_image}:sha-${GIT_SHA}"
-              docker push "${remote_image}:sha-${GIT_SHA}"
+              retry_registry docker push "${remote_image}:sha-${GIT_SHA}"
               docker tag "$local_image" "${remote_image}:latest"
-              docker push "${remote_image}:latest"
+              retry_registry docker push "${remote_image}:latest"
             done
           '''
         }
