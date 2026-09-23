@@ -47,6 +47,7 @@ class RunHeartbeat:
 
     def __exit__(self, *_exc_info) -> None:
         self._stop.set()
+        self._thread.join()
 
 
 class ScheduleWorker:
