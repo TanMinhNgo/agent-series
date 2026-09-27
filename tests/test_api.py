@@ -63,6 +63,79 @@ def use_services(monkeypatch, fake) -> None:
     monkeypatch.setattr(app.state, "services", fake, raising=False)
 
 
+class RecordingJobs:
+    """Hands out one job and records what BackgroundWorker does with it."""
+
+    def __init__(self, job, calls: list, record_heartbeats: bool = False):
+        self.job, self.calls, self.record_heartbeats = job, calls, record_heartbeats
+
+    def claim(self, _now): return self.job
+
+    def heartbeat(self, _now, current_job_type=None, last_error=None):
+        if self.record_heartbeats and (current_job_type or last_error):
+            self.calls.append(("heartbeat", current_job_type or last_error))
+
+    def succeed(self, job_id): self.calls.append(("succeed", job_id))
+    def fail(self, job_id, error, _now): self.calls.append(("fail", (job_id, error)))
+
+
+class HistoryChats:
+    """One chat whose history lives in a caller-owned list."""
+    database = object()
+
+    def __init__(self, chat, history: list[dict]):
+        self.chat, self.stored = chat, history
+
+    def get(self, _chat_id): return self.chat
+    def history(self, _chat_id): return [dict(item) for item in self.stored]
+    def replace_history(self, _chat_id, history): self.stored[:] = [dict(item) for item in history]
+    def set_unread(self, _chat_id, _unread): return self.chat
+
+
+def stub_scheduler(monkeypatch, make_agent) -> None:
+    monkeypatch.setattr("agent_core.jobs.scheduler.make_agent", make_agent)
+    monkeypatch.setattr("agent_core.jobs.scheduler.connected_read_tools", lambda _plugins: [])
+    monkeypatch.setattr("agent_core.jobs.scheduler.BackgroundJobRepository", lambda _database: SimpleNamespace(enqueue=lambda *_args, **_kwargs: None))
+
+
+class SavingChats:
+    """An empty chat that assigns message ids and keeps what stream_chat persists."""
+
+    def __init__(self, chat, saved: list[dict]):
+        self.chat, self.saved = chat, saved
+
+    def get(self, _chat_id): return self.chat
+    def history(self, _chat_id): return []
+
+    def replace_history(self, _chat_id, history):
+        for index, item in enumerate(history):
+            item["message_id"] = f"message-{index}"
+        self.saved.extend(history)
+
+
+class StubJobs:
+    def __init__(self, _database): pass
+    def enqueue(self, _kind, _payload): pass
+
+
+class FixedReplyAgent:
+    def __init__(self, question: str, answer: str):
+        self.question, self.answer, self.history = question, answer, []
+
+    def run(self, _content, _attachments, on_step, **_kwargs):
+        self.history = [{"role": "user", "content": self.question}, {"role": "assistant", "content": self.answer}]
+        return SimpleNamespace(text=self.answer, content_blocks=[], status="completed")
+
+
+def agent_services(chats, **extra) -> SimpleNamespace:
+    return SimpleNamespace(
+        chats=chats,
+        memory=SimpleNamespace(recall=lambda *_args, **_kwargs: ""),
+        workspace=SimpleNamespace(get=lambda *_args, **_kwargs: None, list_plugins=lambda: []),
+        **extra,
+    )
+
+
 def test_message_json_exposes_message_creation_time() -> None:
     created_at = datetime(2026, 8, 19, 9, 30, tzinfo=UTC).isoformat()
 
@@ -375,17 +448,7 @@ def test_ollama_tool_echo_is_rejected_before_rendering() -> None:
 def test_stream_chat_answers_ollama_small_talk_without_model_or_memory(monkeypatch) -> None:
     chat = Chat(id="chat-1", user_id="user-1", provider="ollama", model="llama3.2:3b")
     saved: list[dict] = []
-
-    class Chats:
-        def get(self, _chat_id): return chat
-        def history(self, _chat_id): return []
-        def replace_history(self, _chat_id, history):
-            for index, item in enumerate(history):
-                item["message_id"] = f"message-{index}"
-            saved.extend(history)
-
-    service = SimpleNamespace(chats=Chats())
-    monkeypatch.setattr(main_module, "services", lambda: service)
+    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(chats=SavingChats(chat, saved)))
 
     events = list(main_module.stream_chat("chat-1", "cảm ơn nhiều nha", []))
 
@@ -396,16 +459,7 @@ def test_stream_chat_answers_ollama_small_talk_without_model_or_memory(monkeypat
 def test_stream_chat_answers_cloud_small_talk_without_provider_call(monkeypatch) -> None:
     chat = Chat(id="chat-1", user_id="user-1", provider="openai", model="gpt-5.6-terra")
     saved: list[dict] = []
-
-    class Chats:
-        def get(self, _chat_id): return chat
-        def history(self, _chat_id): return []
-        def replace_history(self, _chat_id, history):
-            for index, item in enumerate(history):
-                item["message_id"] = f"message-{index}"
-            saved.extend(history)
-
-    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(chats=Chats()))
+    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(chats=SavingChats(chat, saved)))
     monkeypatch.setattr(main_module, "build_client", lambda _settings: (_ for _ in ()).throw(AssertionError("LLM must not run")))
 
     events = list(main_module.stream_chat("chat-1", "Dạo này ổn không?", []))
@@ -542,9 +596,7 @@ def test_schedule_worker_restores_owner_and_replaces_legacy_chat(monkeypatch) ->
     )
     worker = ScheduleWorker(services)
     worker.runs = Runs()
-    monkeypatch.setattr("agent_core.jobs.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
-    monkeypatch.setattr("agent_core.jobs.scheduler.connected_read_tools", lambda _plugins: [])
-    monkeypatch.setattr("agent_core.jobs.scheduler.BackgroundJobRepository", lambda _database: SimpleNamespace(enqueue=lambda *_args, **_kwargs: None))
+    stub_scheduler(monkeypatch, lambda *_args, **kwargs: AgentStub(kwargs["history"]))
     schedule = Schedule(
         id="schedule-1",
         user_id="user-1",
@@ -566,13 +618,6 @@ def test_schedule_worker_retries_transient_provider_errors_without_duplicate_pro
     finished: list[dict] = []
     chat = Chat(id="schedule-chat", user_id="user-1", provider="openai", model="gpt-test")
 
-    class Chats:
-        database = object()
-        def get(self, _chat_id): return chat
-        def history(self, _chat_id): return [dict(item) for item in stored_history]
-        def replace_history(self, _chat_id, history): stored_history[:] = [dict(item) for item in history]
-        def set_unread(self, _chat_id, _unread): return chat
-
     class Runs:
         def finish(self, _run_id, **values): finished.append(values)
         def schedule_retry(self, _run_id, error, delays):
@@ -592,15 +637,13 @@ def test_schedule_worker_retries_transient_provider_errors_without_duplicate_pro
             return SimpleNamespace(text="Đã hoàn tất.", content_blocks=[], status="completed")
 
     services = SimpleNamespace(
-        chats=Chats(),
+        chats=HistoryChats(chat, stored_history),
         memory=SimpleNamespace(recall=lambda *_args: ""),
         workspace=SimpleNamespace(list_plugins=lambda: []),
     )
     worker = ScheduleWorker(services)
     worker.runs = Runs()
-    monkeypatch.setattr("agent_core.jobs.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
-    monkeypatch.setattr("agent_core.jobs.scheduler.connected_read_tools", lambda _plugins: [])
-    monkeypatch.setattr("agent_core.jobs.scheduler.BackgroundJobRepository", lambda _database: SimpleNamespace(enqueue=lambda *_args, **_kwargs: None))
+    stub_scheduler(monkeypatch, lambda *_args, **kwargs: AgentStub(kwargs["history"]))
     worker.execute(Schedule(id="schedule-1", user_id="user-1", title="Báo cáo", prompt="Tạo báo cáo", chat_id=chat.id), "run-1")
 
     assert attempts == 1
@@ -650,13 +693,6 @@ def test_schedule_worker_reports_final_transient_failure_after_retry_budget(monk
     finished: list[dict] = []
     chat = Chat(id="schedule-chat", user_id="user-1", provider="gemini", model="gemini-test")
 
-    class Chats:
-        database = object()
-        def get(self, _chat_id): return chat
-        def history(self, _chat_id): return [dict(item) for item in stored_history]
-        def replace_history(self, _chat_id, history): stored_history[:] = [dict(item) for item in history]
-        def set_unread(self, _chat_id, _unread): return chat
-
     class Runs:
         def schedule_retry(self, *_args): return None
         def finish(self, _run_id, **values): finished.append(values)
@@ -665,11 +701,10 @@ def test_schedule_worker_reports_final_transient_failure_after_retry_budget(monk
         def __init__(self, history): self.history = history
         def run(self, *_args, **_kwargs): raise ConnectionError("provider unavailable")
 
-    services = SimpleNamespace(chats=Chats(), memory=SimpleNamespace(recall=lambda *_args: ""), workspace=SimpleNamespace(list_plugins=lambda: []))
+    services = SimpleNamespace(chats=HistoryChats(chat, stored_history), memory=SimpleNamespace(recall=lambda *_args: ""), workspace=SimpleNamespace(list_plugins=lambda: []))
     worker = ScheduleWorker(services)
     worker.runs = Runs()
-    monkeypatch.setattr("agent_core.jobs.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
-    monkeypatch.setattr("agent_core.jobs.scheduler.connected_read_tools", lambda _plugins: [])
+    stub_scheduler(monkeypatch, lambda *_args, **kwargs: AgentStub(kwargs["history"]))
 
     worker.execute(Schedule(id="schedule-1", user_id="user-1", title="Báo cáo", prompt="Tạo báo cáo", chat_id=chat.id), "run-1")
 
@@ -681,13 +716,6 @@ def _grounded_worker(monkeypatch, *, search_result: str, notify_email: bool, sen
     """Build a worker whose collaborators are all stubs, for grounding/email tests."""
     state = SimpleNamespace(history=[], emails=[], finished=[], retries=0, agent_calls=0, sent=[])
     chat = Chat(id="schedule-chat", user_id="user-1", provider="openai", model="gpt-test")
-
-    class Chats:
-        database = object()
-        def get(self, _chat_id): return chat
-        def history(self, _chat_id): return [dict(item) for item in state.history]
-        def replace_history(self, _chat_id, history): state.history[:] = [dict(item) for item in history]
-        def set_unread(self, _chat_id, _unread): return chat
 
     class Runs:
         def finish(self, _run_id, **values): state.finished.append(values)
@@ -712,7 +740,7 @@ def _grounded_worker(monkeypatch, *, search_result: str, notify_email: bool, sen
     def default_send(_to, _subject, _body): state.sent.append(_to)
 
     services = SimpleNamespace(
-        chats=Chats(),
+        chats=HistoryChats(chat, state.history),
         memory=SimpleNamespace(recall=lambda *_args: ""),
         workspace=SimpleNamespace(list_plugins=lambda: []),
         web_search=SimpleNamespace(search=lambda *_args, **_kwargs: search_result, enabled=True),
@@ -723,9 +751,7 @@ def _grounded_worker(monkeypatch, *, search_result: str, notify_email: bool, sen
     services.web_search.require_sources = WebSearchService.require_sources.__get__(services.web_search)
     worker = ScheduleWorker(services)
     worker.runs = Runs()
-    monkeypatch.setattr("agent_core.jobs.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
-    monkeypatch.setattr("agent_core.jobs.scheduler.connected_read_tools", lambda _plugins: [])
-    monkeypatch.setattr("agent_core.jobs.scheduler.BackgroundJobRepository", lambda _database: SimpleNamespace(enqueue=lambda *_args, **_kwargs: None))
+    stub_scheduler(monkeypatch, lambda *_args, **kwargs: AgentStub(kwargs["history"]))
     schedule = Schedule(
         id="schedule-1", user_id="user-1", title="Tin AI", prompt="Tổng hợp tin AI",
         chat_id=chat.id, require_web_source=True, notify_email=notify_email,
@@ -1057,27 +1083,10 @@ def test_stream_chat_restores_the_chat_owner_in_its_worker_thread(monkeypatch) -
             return []
         def replace_history(self, _chat_id, _history): pass
 
-    class AgentStub:
-        history: list[dict] = []
-        def run(self, _content, _attachments, on_step, **_kwargs):
-            self.history = [
-                {"role": "user", "content": "RAG là gì?"},
-                {"role": "assistant", "content": "world"},
-            ]
-            return SimpleNamespace(text="world", content_blocks=[], status="completed")
-
-    class Jobs:
-        def __init__(self, _database): pass
-        def enqueue(self, _kind, _payload): pass
-
-    service = SimpleNamespace(
-        chats=Chats(),
-        memory=SimpleNamespace(recall=lambda *_args, **_kwargs: ""),
-        workspace=SimpleNamespace(get=lambda *_args, **_kwargs: None, list_plugins=lambda: []),
-    )
+    service = agent_services(Chats())
     monkeypatch.setattr(main_module, "services", lambda: service)
-    monkeypatch.setattr(main_module, "make_agent", lambda *_args, **_kwargs: AgentStub())
-    monkeypatch.setattr(main_module, "BackgroundJobRepository", Jobs)
+    monkeypatch.setattr(main_module, "make_agent", lambda *_args, **_kwargs: FixedReplyAgent("RAG là gì?", "world"))
+    monkeypatch.setattr(main_module, "BackgroundJobRepository", StubJobs)
 
     events = list(main_module.stream_chat("chat-1", "RAG là gì?", []))
 
@@ -1090,39 +1099,18 @@ def test_stream_chat_retrieves_the_global_library_before_creating_the_agent(monk
     chat = Chat(id="chat-1", user_id="user-1", provider="openai", model="gpt-5.6-terra")
     observed: dict[str, object] = {}
 
-    class Chats:
-        database = object()
-        def get(self, _chat_id): return chat
-        def history(self, _chat_id): return []
-        def replace_history(self, _chat_id, _history): pass
-
-    class AgentStub:
-        history: list[dict] = []
-        def run(self, _content, _attachments, on_step, **_kwargs):
-            self.history = [{"role": "user", "content": "RAG là gì?"}, {"role": "assistant", "content": "RAG"}]
-            return SimpleNamespace(text="RAG", content_blocks=[], status="completed")
-
-    class Jobs:
-        def __init__(self, _database): pass
-        def enqueue(self, _kind, _payload): pass
-
     class Knowledge:
         def search(self, query, top_k=4, project_id=None, collection_id=None):
             observed["search"] = (query, top_k, project_id, collection_id)
             return "[Nguồn 1: [rag.md](/api/documents/doc-1/file), đoạn 1]\\nRAG dùng truy hồi."
 
-    service = SimpleNamespace(
-        chats=Chats(),
-        knowledge=Knowledge(),
-        memory=SimpleNamespace(recall=lambda *_args, **_kwargs: ""),
-        workspace=SimpleNamespace(get=lambda *_args, **_kwargs: None, list_plugins=lambda: []),
-    )
+    service = agent_services(HistoryChats(chat, []), knowledge=Knowledge())
     monkeypatch.setattr(main_module, "services", lambda: service)
     def make_agent_stub(*args, **kwargs):
         observed["context"] = args[3]
-        return AgentStub()
+        return FixedReplyAgent("RAG là gì?", "RAG")
     monkeypatch.setattr(main_module, "make_agent", make_agent_stub)
-    monkeypatch.setattr(main_module, "BackgroundJobRepository", Jobs)
+    monkeypatch.setattr(main_module, "BackgroundJobRepository", StubJobs)
 
     list(main_module.stream_chat("chat-1", "RAG là gì?", []))
 
@@ -1349,25 +1337,11 @@ def test_background_worker_indexes_a_document_job() -> None:
     job = SimpleNamespace(id="job-1", type="document_index", payload={"document_id": "document-1"})
     calls: list[tuple[str, object]] = []
 
-    class Jobs:
-        def claim(self, _now):
-            return job
-
-        def heartbeat(self, _now, current_job_type=None, last_error=None):
-            if current_job_type or last_error:
-                calls.append(("heartbeat", current_job_type or last_error))
-
-        def succeed(self, job_id):
-            calls.append(("succeed", job_id))
-
-        def fail(self, job_id, error, _now):
-            calls.append(("fail", (job_id, error)))
-
     class Knowledge:
         def index(self, document_id):
             calls.append(("index", document_id))
 
-    assert BackgroundWorker(Jobs(), Knowledge()).run_once(datetime.now(UTC))
+    assert BackgroundWorker(RecordingJobs(job, calls, record_heartbeats=True), Knowledge()).run_once(datetime.now(UTC))
     assert calls == [("heartbeat", "document_index"), ("index", "document-1"), ("succeed", "job-1")]
 
 
@@ -1375,18 +1349,11 @@ def test_background_worker_retries_a_failed_document_index() -> None:
     job = SimpleNamespace(id="job-1", type="document_index", payload={"document_id": "document-1"})
     calls: list[tuple[str, object]] = []
 
-    class Jobs:
-        def claim(self, _now): return job
-        def heartbeat(self, _now, current_job_type=None, last_error=None):
-            if last_error: calls.append(("heartbeat", last_error))
-        def succeed(self, job_id): calls.append(("succeed", job_id))
-        def fail(self, job_id, error, _now): calls.append(("fail", (job_id, error)))
-
     class Knowledge:
         def index(self, _document_id):
             return SimpleNamespace(status="failed", error="embedding unavailable")
 
-    assert BackgroundWorker(Jobs(), Knowledge()).run_once(datetime.now(UTC))
+    assert BackgroundWorker(RecordingJobs(job, calls), Knowledge()).run_once(datetime.now(UTC))
     assert calls[0][0] == "fail"
     assert "embedding unavailable" in str(calls[0][1])
     assert not any(kind == "succeed" for kind, _ in calls)
@@ -1395,12 +1362,6 @@ def test_background_worker_retries_a_failed_document_index() -> None:
 def test_background_worker_indexes_memory_from_persisted_history() -> None:
     job = SimpleNamespace(id="job-2", type="memory_index", payload={"chat_id": "chat-1"})
     calls: list[tuple[str, object]] = []
-
-    class Jobs:
-        def claim(self, _now): return job
-        def heartbeat(self, _now, current_job_type=None, last_error=None): pass
-        def succeed(self, job_id): calls.append(("succeed", job_id))
-        def fail(self, job_id, error, _now): calls.append(("fail", (job_id, error)))
 
     class Knowledge: pass
     class Chats:
@@ -1411,7 +1372,7 @@ def test_background_worker_indexes_memory_from_persisted_history() -> None:
     class Memory:
         def index_history(self, chat_id, history): calls.append(("memory", (chat_id, history)))
 
-    assert BackgroundWorker(Jobs(), Knowledge(), Memory(), Chats()).run_once(datetime.now(UTC))
+    assert BackgroundWorker(RecordingJobs(job, calls), Knowledge(), Memory(), Chats()).run_once(datetime.now(UTC))
     assert calls == [
         ("history", "chat-1"),
         ("memory", ("chat-1", [{"role": "user", "content": "hello"}])),
@@ -1453,18 +1414,12 @@ def test_artifact_text_preview_extracts_utf8_source(tmp_path: Path) -> None:
 
 def test_background_worker_indexes_an_artifact_job() -> None:
     job = SimpleNamespace(id="job-artifact", type="artifact_index", payload={"asset_id": "asset-1"})
-    calls: list[tuple[str, str]] = []
-
-    class Jobs:
-        def claim(self, _now): return job
-        def heartbeat(self, *_args, **_kwargs): pass
-        def succeed(self, job_id): calls.append(("succeed", job_id))
-        def fail(self, job_id, _error, _now): calls.append(("fail", job_id))
+    calls: list[tuple[str, object]] = []
 
     class Artifacts:
         def index(self, asset_id): calls.append(("index", asset_id))
 
-    assert BackgroundWorker(Jobs(), SimpleNamespace(), artifacts=Artifacts()).run_once(datetime.now(UTC))
+    assert BackgroundWorker(RecordingJobs(job, calls), SimpleNamespace(), artifacts=Artifacts()).run_once(datetime.now(UTC))
     assert calls == [("index", "asset-1"), ("succeed", "job-artifact")]
 
 
