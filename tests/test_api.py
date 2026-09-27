@@ -22,17 +22,13 @@ from api.main import (
     ScheduleUpdateRequest,
     ShareRequest,
     app,
-    create_chat_branch,
     created_artifact_ids,
-    create_response_feedback,
     detach_response_sources,
-    list_chats,
     make_agent,
     message_json,
     model_error_message,
     ollama_recent_history,
     small_talk_response,
-    prepare_chat_regeneration,
     persisted_history,
     project_activity_json,
     recent_chat_history,
@@ -49,6 +45,22 @@ from agent_core.persistence.store import Chat, Plugin, Schedule, ScheduleReposit
 from agent_core.jobs.scheduler import RunHeartbeat, ScheduleWorker
 from agent_core.integrations.notifications import public_chat_url
 from agent_core.integrations.web_search import WebSearchService, WebSourceUnavailable
+
+
+def route(name: str):
+    """Return the endpoint mounted on the app, so tests exercise the live router code."""
+    def walk(routes):
+        for item in routes:
+            nested = getattr(item, "original_router", None)
+            yield from walk(nested.routes) if nested is not None else (item,)
+
+    found = [item.endpoint for item in walk(app.routes) if getattr(item, "name", None) == name]
+    assert len(found) == 1, name
+    return found[0]
+
+
+def use_services(monkeypatch, fake) -> None:
+    monkeypatch.setattr(app.state, "services", fake, raising=False)
 
 
 def test_message_json_exposes_message_creation_time() -> None:
@@ -130,14 +142,14 @@ def test_project_activity_endpoint_mutations_are_recorded(monkeypatch) -> None:
         def create_or_update_share(self, *_args): return share
         def revoke_share(self, _id): return True
 
-    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(workspace=Workspace(), library=Library(), chats=Chats()))
-    monkeypatch.setattr(main_module, "enqueue_artifact_index", lambda *_args: None)
-    monkeypatch.setattr(main_module, "selected_settings", lambda *_args: None)
+    use_services(monkeypatch, SimpleNamespace(workspace=Workspace(), library=Library(), chats=Chats()))
+    monkeypatch.setattr(main_module, "_enqueue_artifact_index", lambda *_args: None)
+    monkeypatch.setattr(main_module, "_selected_settings", lambda *_args: None)
 
-    main_module.update_library_asset("asset-1", main_module.UpdateArtifactRequest(isProjectSource=True))
-    updated = main_module.update_chat("chat-1", main_module.UpdateChatRequest(projectId="project-1"))
-    main_module.share_chat("chat-1")
-    main_module.revoke_share("chat-1")
+    route("update_library_asset")("asset-1", main_module.UpdateArtifactRequest(isProjectSource=True))
+    updated = route("update_chat")("chat-1", main_module.UpdateChatRequest(projectId="project-1"))
+    route("share_chat")("chat-1")
+    route("revoke_share")("chat-1")
     main_module.record_workspace_activity("workspace.invitation_created", "workspace_invitation", "invite-1", "Đã mời thành viên.")
 
     assert updated["projectId"] == "project-1"
@@ -182,14 +194,14 @@ def test_project_collections_and_overview_record_and_return_project_data(monkeyp
 
     database = SimpleNamespace(session=lambda: Session())
     service = SimpleNamespace(workspace=Workspace(), knowledge=Knowledge(), chats=SimpleNamespace(database=database))
-    monkeypatch.setattr(main_module, "services", lambda: service)
+    use_services(monkeypatch, service)
 
     payload = main_module.KnowledgeCollectionRequest(name="Nguồn")
-    assert main_module.create_collection("project-1", payload)["id"] == "collection-1"
-    assert main_module.update_collection("collection-1", payload)["id"] == "collection-1"
-    assert main_module.set_collection_documents("collection-1", main_module.CollectionDocumentsRequest(documentIds=[]))["documentIds"] == []
-    main_module.delete_collection("collection-1")
-    detail = main_module.get_project("project-1")
+    assert route("create_collection")("project-1", payload)["id"] == "collection-1"
+    assert route("update_collection")("collection-1", payload)["id"] == "collection-1"
+    assert route("set_collection_documents")("collection-1", main_module.CollectionDocumentsRequest(documentIds=[]))["documentIds"] == []
+    route("delete_collection")("collection-1")
+    detail = route("get_project")("project-1")
 
     assert detail["project"]["id"] == "project-1"
     assert detail["activity"][0]["actorDisplayName"] == "Minh"
@@ -210,13 +222,13 @@ def test_workspace_invitation_activity_is_recorded(monkeypatch) -> None:
         settings=SimpleNamespace(app_web_url="http://localhost:5173"),
         email=SimpleNamespace(enabled=False),
     )
-    monkeypatch.setattr(main_module, "services", lambda: service)
-    monkeypatch.setattr(main_module, "require_workspace_owner", lambda _request: None)
+    use_services(monkeypatch, service)
     token = main_module.current_workspace_id.set("workspace-1")
     try:
-        request = SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id="owner-1")))
-        result = main_module.create_workspace_invitation(main_module.WorkspaceInvitationRequest(email="member@example.com"), request)
-        main_module.cancel_workspace_invitation("invite-1", request)
+        owner = SimpleNamespace(user_id="owner-1", role="owner")
+        request = SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id="owner-1"), workspace_membership=owner))
+        result = route("create_workspace_invitation")(main_module.WorkspaceInvitationRequest(email="member@example.com"), request)
+        route("cancel_workspace_invitation")("invite-1", request)
     finally:
         main_module.current_workspace_id.reset(token)
 
@@ -414,14 +426,19 @@ def test_stream_chat_does_not_persist_a_pre_cancelled_run(monkeypatch) -> None:
 
 
 def test_restore_library_asset_version_copies_the_selected_version(monkeypatch) -> None:
-    restored = SimpleNamespace(id="asset-v3", artifact_id="artifact-1", name="ke-hoach.md", version=3)
+    restored = SimpleNamespace(
+        id="asset-v3", artifact_id="artifact-1", name="ke-hoach.md", version=3, mime_type="text/markdown", size_bytes=20,
+        source="generated", project_id=None, is_project_source=False, index_status="pending", index_error=None,
+        created_at=datetime(2026, 9, 2, tzinfo=UTC),
+    )
     observed: list[str] = []
     service = SimpleNamespace(library=SimpleNamespace(restore_version=lambda asset_id: observed.append(asset_id) or restored))
-    monkeypatch.setattr(main_module, "services", lambda: service)
-    monkeypatch.setattr(main_module, "enqueue_artifact_index", lambda asset: observed.append(asset.id))
-    monkeypatch.setattr(main_module, "library_asset_json", lambda asset: {"id": asset.id, "version": asset.version})
+    use_services(monkeypatch, service)
+    monkeypatch.setattr(main_module, "_enqueue_artifact_index", lambda asset, _services: observed.append(asset.id))
 
-    assert main_module.restore_library_asset_version("asset-v1") == {"id": "asset-v3", "version": 3}
+    result = route("restore_library_asset_version")("asset-v1")
+
+    assert (result["id"], result["version"]) == ("asset-v3", 3)
     assert observed == ["asset-v1", "asset-v3"]
 
 
@@ -900,9 +917,9 @@ def test_messages_include_only_current_users_feedback(monkeypatch) -> None:
             assert message_ids == ["assistant-1"]
             return {"assistant-1": "helpful"}
 
-    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(chats=Chats(), personalization=Personalization()))
+    use_services(monkeypatch, SimpleNamespace(chats=Chats(), personalization=Personalization(), workspace=SimpleNamespace()))
 
-    result = main_module.messages("chat-1")
+    result = route("messages")("chat-1")
 
     assert result[0].get("feedbackKind") is None
     assert result[1]["feedbackKind"] == "helpful"
@@ -936,13 +953,9 @@ def test_messages_attach_artifacts_to_the_creating_assistant_response(monkeypatc
             assert (chat_id, message_ids) == ("chat-1", ["assistant-1"])
             return {"assistant-1": [asset]}
 
-    monkeypatch.setattr(
-        main_module,
-        "services",
-        lambda: SimpleNamespace(chats=Chats(), personalization=SimpleNamespace(feedback_by_message_ids=lambda _ids: {})),
-    )
+    use_services(monkeypatch, SimpleNamespace(chats=Chats(), personalization=SimpleNamespace(feedback_by_message_ids=lambda _ids: {}), workspace=SimpleNamespace()))
 
-    result = main_module.messages("chat-1")
+    result = route("messages")("chat-1")
 
     assert result[1]["artifacts"] == [{
         "id": "asset-1", "artifactId": "artifact-1", "name": "ke-hoach.md", "version": 1,
@@ -985,11 +998,11 @@ def test_feedback_branch_and_regenerate_endpoints_delegate_the_selected_message(
             calls.append(("regenerate", chat_id, message_id))
             return "Câu hỏi gốc"
 
-    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(personalization=Personalization(), chats=Chats()))
+    use_services(monkeypatch, SimpleNamespace(personalization=Personalization(), chats=Chats()))
 
-    feedback = create_response_feedback("assistant-1", FeedbackRequest(kind="helpful"))
-    created_branch = create_chat_branch("chat-1", BranchChatRequest(assistantMessageId="assistant-1"))
-    regeneration = prepare_chat_regeneration("chat-1", BranchChatRequest(assistantMessageId="assistant-1"))
+    feedback = route("create_response_feedback")("assistant-1", FeedbackRequest(kind="helpful"))
+    created_branch = route("create_chat_branch")("chat-1", BranchChatRequest(assistantMessageId="assistant-1"))
+    regeneration = route("prepare_chat_regeneration")("chat-1", BranchChatRequest(assistantMessageId="assistant-1"))
 
     assert feedback == {"id": "feedback-1", "messageId": "assistant-1", "kind": "helpful", "note": None}
     assert created_branch["id"] == "branch-1"
@@ -1155,8 +1168,8 @@ def test_chat_history_list_is_paginated(monkeypatch) -> None:
     class Services:
         chats = Chats()
 
-    monkeypatch.setattr("api.main.services", lambda: Services())
-    page = list_chats(offset=0, limit=2)
+    use_services(monkeypatch, Services())
+    page = route("list_chats")(offset=0, limit=2)
 
     assert [item["id"] for item in page["items"]] == ["chat-0", "chat-1"]
     assert page["total"] == 3
