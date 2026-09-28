@@ -127,6 +127,7 @@ def test_github_reauth_marks_only_the_requested_owner(monkeypatch):
     def invalid(_):
         raise InvalidToken()
     service = GitHubAppService(repo, object())
+    monkeypatch.setattr(service, "_app_headers", lambda: {})
     monkeypatch.setattr(service, "_fernet", lambda: SimpleNamespace(decrypt=invalid))
     with pytest.raises(GitHubConnectorError, match="kết nối lại"):
         service._installation_headers("runner")

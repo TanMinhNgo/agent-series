@@ -50,19 +50,28 @@ def github(repo=None, **values):
     return GitHubAppService(repo or FakeConnectorRepository(), SimpleNamespace(**settings))
 
 
-def test_github_install_url_saves_short_lived_state():
+def test_github_install_url_saves_short_lived_state(monkeypatch):
     repo = FakeConnectorRepository()
-    parsed = urlparse(github(repo).authorization_url())
+    service = github(repo)
+    monkeypatch.setattr(service, "_app_headers", lambda: {})
+    parsed = urlparse(service.authorization_url())
     state = parse_qs(parsed.query)["state"][0]
     assert parsed.netloc == "github.com"
     assert repo.states[state].connector_slug == GITHUB_SLUG
 
 
+def test_github_install_url_rejects_invalid_private_key_before_saving_state():
+    repo = FakeConnectorRepository()
+    with pytest.raises(GitHubConnectorError, match="PEM RSA"):
+        github(repo).authorization_url()
+    assert repo.states == {}
+
+
 def test_github_installation_persists_only_encrypted_installation_id(monkeypatch):
     repo = FakeConnectorRepository()
     service = github(repo)
-    state = parse_qs(urlparse(service.authorization_url()).query)["state"][0]
     monkeypatch.setattr(service, "_app_headers", lambda: {"Authorization": "Bearer app"})
+    state = parse_qs(urlparse(service.authorization_url()).query)["state"][0]
     monkeypatch.setattr(service, "_github_json", lambda *_args, **_kwargs: {"account": {"login": "octo-org"}, "permissions": {"contents": "read"}, "repository_selection": "selected"})
 
     assert service.complete_installation("42", state)["status"] == "connected"
@@ -80,6 +89,15 @@ def test_github_executor_exposes_read_only_tools(monkeypatch):
     tools = GitHubAppExecutor(service).tools()
     assert {tool.name for tool in tools} == {"list_github_repositories", "read_github_repository_file", "search_github_issues"}
     assert "octo/repo" in next(tool for tool in tools if tool.name == "list_github_repositories").func()
+
+
+def test_invalid_app_key_does_not_invalidate_user_installation():
+    repo = FakeConnectorRepository()
+    service = github(repo)
+    repo.connection = SimpleNamespace(id="connection-1", status="connected", encrypted_token="unused")
+    with pytest.raises(GitHubConnectorError, match="PEM RSA"):
+        service._installation_headers()
+    assert repo.connection.status == "connected"
 
 
 @pytest.mark.parametrize(("repository", "path"), (("octo/../repo", "README.md"), ("octo/repo", "../secrets.txt")))
