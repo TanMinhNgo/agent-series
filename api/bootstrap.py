@@ -222,10 +222,13 @@ def _schedule_worker(services_instance: Any) -> Any:
     return ScheduleWorker(services_instance)
 
 
-# Late-bound lambdas keep module-level helpers patchable in tests.
-provider_models = lambda *args: available_provider_models(*args)  # noqa: E731
+def provider_models(*args) -> dict[str, list[str]]:
+    """Late-bound so tests can patch ``available_provider_models``."""
+    return available_provider_models(*args)
+
+
 errors = API_ERROR_RESPONSES
-for router in (
+for _router in (
     build_chat_stream_router(chat_module.controller, errors),
     build_system_router(SystemRouteDependencies(services, ollama_status, provider_models, SESSION_COOKIE, errors, BackgroundJobRepository, lambda: datetime.now(UTC))),
     build_auth_router(AuthRouteDependencies(services, user_json, SESSION_COOKIE, errors)),
@@ -254,4 +257,4 @@ for router in (
     build_connector_router(ConnectorDependencies(services, connector_audit_json, GOOGLE_WORKSPACE_SLUG, GITHUB_SLUG, errors)),
     build_connector_oauth_router(ConnectorOAuthDependencies(services, set_plugin_connection, GOOGLE_WORKSPACE_SLUG, GITHUB_SLUG, GoogleConnectorError, GitHubConnectorError, errors)),
 ):
-    app.include_router(router)
+    app.include_router(_router)
