@@ -262,7 +262,7 @@ class ChatRepository:
                     continue
                 try:
                     asset_id = str(json.loads(message.content).get("id", ""))
-                except (TypeError, ValueError, json.JSONDecodeError):
+                except (TypeError, ValueError):
                     continue
                 asset = session.get(LibraryAsset, asset_id)
                 assistant = next((item for item in messages[index + 1 :] if item.role == "assistant"), None)

@@ -106,7 +106,7 @@ def test_ollama_agent_receives_no_function_tools(monkeypatch):
         chats=SimpleNamespace(history=lambda _id: []),
         web_search=None,
     )
-    monkeypatch.setattr(main_module, "services", lambda: fake_services)
+    monkeypatch.setattr(main_module.chat_module, "services", lambda: fake_services)
     chat = SimpleNamespace(
         id="chat-1",
         provider="ollama",
@@ -117,7 +117,7 @@ def test_ollama_agent_receives_no_function_tools(monkeypatch):
         context_source_chat_id=None,
     )
 
-    agent = main_module.make_agent(fake_services, chat, plugin_tools=[ToolSpec(name="plugin_read", description="plugin", parameters={}, func=lambda: "")], history=[])
+    agent = main_module.chat_module.make_agent(fake_services, chat, plugin_tools=[ToolSpec(name="plugin_read", description="plugin", parameters={}, func=lambda: "")], history=[])
 
     assert agent.registry.specs() == []
     assert "Không có tool" in agent.system_prompt

@@ -1,8 +1,20 @@
 """Public system endpoints."""
 
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, Request
+
+
+@dataclass(frozen=True)
+class SystemRouteDependencies:
+    services: Any
+    ollama_status: Any
+    available_provider_models: Any
+    session_cookie: str
+    error_responses: dict
+    background_job_repository: Any
+    now: Any
 
 
 def build_router(deps) -> APIRouter:
