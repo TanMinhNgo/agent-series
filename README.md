@@ -175,13 +175,13 @@ npm run build
 
 Mỗi pull request và push đều chạy migration + pytest/coverage với PostgreSQL pgvector, format/lint/build frontend trên GitHub Actions. Sau một **push** đã pass, workflow gọi Jenkins với đúng commit SHA; PR không gọi Jenkins để không cấp secrets cho code chưa tin cậy.
 
-Jenkins chạy lần lượt: test/coverage, OWASP Dependency-Check, SonarQube Quality Gate, Trivy source/config, build ba Docker image (`api`, `worker`, `frontend`), Trivy image scan, rồi mới đẩy image đã được xác minh lên Docker Hub. Mọi report được archive tại Jenkins; pipeline dừng ở CVSS 7+ hoặc Trivy `HIGH`/`CRITICAL` và sẽ không push image nếu một gate thất bại.
+Jenkins chạy lần lượt: test/coverage, SonarQube Quality Gate, Trivy source/config, build ba Docker image (`api`, `worker`, `frontend`), Trivy image scan, rồi mới đẩy image đã được xác minh lên Docker Hub. Mọi report được archive tại Jenkins; pipeline dừng khi một bước kiểm tra thất bại, trong đó Trivy chặn mức `HIGH`/`CRITICAL`.
 
 GitHub repository secrets bắt buộc: `JENKINS_TRIGGER_URL` (endpoint `buildWithParameters`), `JENKINS_USER`, `JENKINS_API_TOKEN`, `JENKINS_JOB_TOKEN`.
 
 Job trigger Jenkins chạy trên GitHub Actions self-hosted runner mang label `jenkins-trigger`, đặt cùng máy/mạng với Jenkins. Vì vậy `JENKINS_TRIGGER_URL` có thể dùng URL nội bộ, ví dụ `http://localhost:8080/job/Agent-Series-CI/buildWithParameters`; không cần public Jenkins chỉ để GitHub-hosted runner gọi vào.
 
-Jenkins cần Docker daemon, Git credential ID `github-read-token`, secret text `nvd-api-key`, username/password credential `dockerhub-credentials`, SonarQube server name `SonarQube`, và scanner tool name `SonarScanner`. Sonar token/URL được quản lý trong Jenkins SonarQube configuration, không commit vào repo.
+Jenkins cần Docker daemon, Git credential ID `github-read-token`, username/password credential `dockerhub-credentials`, SonarQube server name `SonarQube`, và scanner tool name `SonarScanner`. Sonar token/URL được quản lý trong Jenkins SonarQube configuration, không commit vào repo.
 
 Jenkins controller không chạy build trực tiếp. Tạo node inbound mang label `agent-series-ci`, rồi build `ci/jenkins-agent/Dockerfile`; agent này có Docker CLI, Python 3.12 và Node 22. Mount Docker socket của Docker Desktop vào agent để các stage build/scan tạo được container.
 
