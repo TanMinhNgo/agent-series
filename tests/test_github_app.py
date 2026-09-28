@@ -62,8 +62,9 @@ def test_github_install_url_saves_short_lived_state(monkeypatch):
 
 def test_github_install_url_rejects_invalid_private_key_before_saving_state():
     repo = FakeConnectorRepository()
+    service = github(repo)
     with pytest.raises(GitHubConnectorError, match="PEM RSA"):
-        github(repo).authorization_url()
+        service.authorization_url()
     assert repo.states == {}
 
 

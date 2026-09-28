@@ -142,6 +142,9 @@ class BackgroundJobRepository:
             heartbeat = state.last_heartbeat_at if state else None
             if heartbeat is not None and heartbeat.tzinfo is None:
                 heartbeat = heartbeat.replace(tzinfo=now.tzinfo)
+            last_error = state.last_error if state and state.last_error else None
+            if last_error is None and last_failed:
+                last_error = last_failed.last_error
             return {
                 "online": bool(heartbeat and heartbeat >= now - timedelta(seconds=15)),
                 "lastHeartbeatAt": heartbeat.isoformat() if heartbeat else None,
@@ -149,5 +152,5 @@ class BackgroundJobRepository:
                 "queued": counts.get("queued", 0),
                 "running": counts.get("running", 0),
                 "failed": counts.get("failed", 0),
-                "lastError": (state.last_error if state and state.last_error else (last_failed.last_error if last_failed else None)),
+                "lastError": last_error,
             }
