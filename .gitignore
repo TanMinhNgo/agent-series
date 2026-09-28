@@ -38,6 +38,7 @@ Thumbs.db
 knowledge/
 data/
 docs/
+graphify-out/
 
 # ===== Frontend runtime =====
 frontend/node_modules/

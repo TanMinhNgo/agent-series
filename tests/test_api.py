@@ -22,17 +22,13 @@ from api.main import (
     ScheduleUpdateRequest,
     ShareRequest,
     app,
-    create_chat_branch,
     created_artifact_ids,
-    create_response_feedback,
     detach_response_sources,
-    list_chats,
     make_agent,
     message_json,
     model_error_message,
     ollama_recent_history,
     small_talk_response,
-    prepare_chat_regeneration,
     persisted_history,
     project_activity_json,
     recent_chat_history,
@@ -49,6 +45,95 @@ from agent_core.persistence.store import Chat, Plugin, Schedule, ScheduleReposit
 from agent_core.jobs.scheduler import RunHeartbeat, ScheduleWorker
 from agent_core.integrations.notifications import public_chat_url
 from agent_core.integrations.web_search import WebSearchService, WebSourceUnavailable
+
+
+def route(name: str):
+    """Return the endpoint mounted on the app, so tests exercise the live router code."""
+    def walk(routes):
+        for item in routes:
+            nested = getattr(item, "original_router", None)
+            yield from walk(nested.routes) if nested is not None else (item,)
+
+    found = [item.endpoint for item in walk(app.routes) if getattr(item, "name", None) == name]
+    assert len(found) == 1, name
+    return found[0]
+
+
+def use_services(monkeypatch, fake) -> None:
+    monkeypatch.setattr(app.state, "services", fake, raising=False)
+
+
+class RecordingJobs:
+    """Hands out one job and records what BackgroundWorker does with it."""
+
+    def __init__(self, job, calls: list, record_heartbeats: bool = False):
+        self.job, self.calls, self.record_heartbeats = job, calls, record_heartbeats
+
+    def claim(self, _now): return self.job
+
+    def heartbeat(self, _now, current_job_type=None, last_error=None):
+        if self.record_heartbeats and (current_job_type or last_error):
+            self.calls.append(("heartbeat", current_job_type or last_error))
+
+    def succeed(self, job_id): self.calls.append(("succeed", job_id))
+    def fail(self, job_id, error, _now): self.calls.append(("fail", (job_id, error)))
+
+
+class HistoryChats:
+    """One chat whose history lives in a caller-owned list."""
+    database = object()
+
+    def __init__(self, chat, history: list[dict]):
+        self.chat, self.stored = chat, history
+
+    def get(self, _chat_id): return self.chat
+    def history(self, _chat_id): return [dict(item) for item in self.stored]
+    def replace_history(self, _chat_id, history): self.stored[:] = [dict(item) for item in history]
+    def set_unread(self, _chat_id, _unread): return self.chat
+
+
+def stub_scheduler(monkeypatch, make_agent) -> None:
+    monkeypatch.setattr("agent_core.jobs.scheduler.make_agent", make_agent)
+    monkeypatch.setattr("agent_core.jobs.scheduler.connected_read_tools", lambda _plugins: [])
+    monkeypatch.setattr("agent_core.jobs.scheduler.BackgroundJobRepository", lambda _database: SimpleNamespace(enqueue=lambda *_args, **_kwargs: None))
+
+
+class SavingChats:
+    """An empty chat that assigns message ids and keeps what stream_chat persists."""
+
+    def __init__(self, chat, saved: list[dict]):
+        self.chat, self.saved = chat, saved
+
+    def get(self, _chat_id): return self.chat
+    def history(self, _chat_id): return []
+
+    def replace_history(self, _chat_id, history):
+        for index, item in enumerate(history):
+            item["message_id"] = f"message-{index}"
+        self.saved.extend(history)
+
+
+class StubJobs:
+    def __init__(self, _database): pass
+    def enqueue(self, _kind, _payload): pass
+
+
+class FixedReplyAgent:
+    def __init__(self, question: str, answer: str):
+        self.question, self.answer, self.history = question, answer, []
+
+    def run(self, _content, _attachments, on_step, **_kwargs):
+        self.history = [{"role": "user", "content": self.question}, {"role": "assistant", "content": self.answer}]
+        return SimpleNamespace(text=self.answer, content_blocks=[], status="completed")
+
+
+def agent_services(chats, **extra) -> SimpleNamespace:
+    return SimpleNamespace(
+        chats=chats,
+        memory=SimpleNamespace(recall=lambda *_args, **_kwargs: ""),
+        workspace=SimpleNamespace(get=lambda *_args, **_kwargs: None, list_plugins=lambda: []),
+        **extra,
+    )
 
 
 def test_message_json_exposes_message_creation_time() -> None:
@@ -130,14 +215,14 @@ def test_project_activity_endpoint_mutations_are_recorded(monkeypatch) -> None:
         def create_or_update_share(self, *_args): return share
         def revoke_share(self, _id): return True
 
-    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(workspace=Workspace(), library=Library(), chats=Chats()))
-    monkeypatch.setattr(main_module, "enqueue_artifact_index", lambda *_args: None)
-    monkeypatch.setattr(main_module, "selected_settings", lambda *_args: None)
+    use_services(monkeypatch, SimpleNamespace(workspace=Workspace(), library=Library(), chats=Chats()))
+    monkeypatch.setattr(main_module, "_enqueue_artifact_index", lambda *_args: None)
+    monkeypatch.setattr(main_module, "_selected_settings", lambda *_args: None)
 
-    main_module.update_library_asset("asset-1", main_module.UpdateArtifactRequest(isProjectSource=True))
-    updated = main_module.update_chat("chat-1", main_module.UpdateChatRequest(projectId="project-1"))
-    main_module.share_chat("chat-1")
-    main_module.revoke_share("chat-1")
+    route("update_library_asset")("asset-1", main_module.UpdateArtifactRequest(isProjectSource=True))
+    updated = route("update_chat")("chat-1", main_module.UpdateChatRequest(projectId="project-1"))
+    route("share_chat")("chat-1")
+    route("revoke_share")("chat-1")
     main_module.record_workspace_activity("workspace.invitation_created", "workspace_invitation", "invite-1", "Đã mời thành viên.")
 
     assert updated["projectId"] == "project-1"
@@ -182,14 +267,14 @@ def test_project_collections_and_overview_record_and_return_project_data(monkeyp
 
     database = SimpleNamespace(session=lambda: Session())
     service = SimpleNamespace(workspace=Workspace(), knowledge=Knowledge(), chats=SimpleNamespace(database=database))
-    monkeypatch.setattr(main_module, "services", lambda: service)
+    use_services(monkeypatch, service)
 
     payload = main_module.KnowledgeCollectionRequest(name="Nguồn")
-    assert main_module.create_collection("project-1", payload)["id"] == "collection-1"
-    assert main_module.update_collection("collection-1", payload)["id"] == "collection-1"
-    assert main_module.set_collection_documents("collection-1", main_module.CollectionDocumentsRequest(documentIds=[]))["documentIds"] == []
-    main_module.delete_collection("collection-1")
-    detail = main_module.get_project("project-1")
+    assert route("create_collection")("project-1", payload)["id"] == "collection-1"
+    assert route("update_collection")("collection-1", payload)["id"] == "collection-1"
+    assert route("set_collection_documents")("collection-1", main_module.CollectionDocumentsRequest(documentIds=[]))["documentIds"] == []
+    route("delete_collection")("collection-1")
+    detail = route("get_project")("project-1")
 
     assert detail["project"]["id"] == "project-1"
     assert detail["activity"][0]["actorDisplayName"] == "Minh"
@@ -210,13 +295,13 @@ def test_workspace_invitation_activity_is_recorded(monkeypatch) -> None:
         settings=SimpleNamespace(app_web_url="http://localhost:5173"),
         email=SimpleNamespace(enabled=False),
     )
-    monkeypatch.setattr(main_module, "services", lambda: service)
-    monkeypatch.setattr(main_module, "require_workspace_owner", lambda _request: None)
+    use_services(monkeypatch, service)
     token = main_module.current_workspace_id.set("workspace-1")
     try:
-        request = SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id="owner-1")))
-        result = main_module.create_workspace_invitation(main_module.WorkspaceInvitationRequest(email="member@example.com"), request)
-        main_module.cancel_workspace_invitation("invite-1", request)
+        owner = SimpleNamespace(user_id="owner-1", role="owner")
+        request = SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id="owner-1"), workspace_membership=owner))
+        result = route("create_workspace_invitation")(main_module.WorkspaceInvitationRequest(email="member@example.com"), request)
+        route("cancel_workspace_invitation")("invite-1", request)
     finally:
         main_module.current_workspace_id.reset(token)
 
@@ -363,17 +448,7 @@ def test_ollama_tool_echo_is_rejected_before_rendering() -> None:
 def test_stream_chat_answers_ollama_small_talk_without_model_or_memory(monkeypatch) -> None:
     chat = Chat(id="chat-1", user_id="user-1", provider="ollama", model="llama3.2:3b")
     saved: list[dict] = []
-
-    class Chats:
-        def get(self, _chat_id): return chat
-        def history(self, _chat_id): return []
-        def replace_history(self, _chat_id, history):
-            for index, item in enumerate(history):
-                item["message_id"] = f"message-{index}"
-            saved.extend(history)
-
-    service = SimpleNamespace(chats=Chats())
-    monkeypatch.setattr(main_module, "services", lambda: service)
+    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(chats=SavingChats(chat, saved)))
 
     events = list(main_module.stream_chat("chat-1", "cảm ơn nhiều nha", []))
 
@@ -384,16 +459,7 @@ def test_stream_chat_answers_ollama_small_talk_without_model_or_memory(monkeypat
 def test_stream_chat_answers_cloud_small_talk_without_provider_call(monkeypatch) -> None:
     chat = Chat(id="chat-1", user_id="user-1", provider="openai", model="gpt-5.6-terra")
     saved: list[dict] = []
-
-    class Chats:
-        def get(self, _chat_id): return chat
-        def history(self, _chat_id): return []
-        def replace_history(self, _chat_id, history):
-            for index, item in enumerate(history):
-                item["message_id"] = f"message-{index}"
-            saved.extend(history)
-
-    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(chats=Chats()))
+    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(chats=SavingChats(chat, saved)))
     monkeypatch.setattr(main_module, "build_client", lambda _settings: (_ for _ in ()).throw(AssertionError("LLM must not run")))
 
     events = list(main_module.stream_chat("chat-1", "Dạo này ổn không?", []))
@@ -414,14 +480,19 @@ def test_stream_chat_does_not_persist_a_pre_cancelled_run(monkeypatch) -> None:
 
 
 def test_restore_library_asset_version_copies_the_selected_version(monkeypatch) -> None:
-    restored = SimpleNamespace(id="asset-v3", artifact_id="artifact-1", name="ke-hoach.md", version=3)
+    restored = SimpleNamespace(
+        id="asset-v3", artifact_id="artifact-1", name="ke-hoach.md", version=3, mime_type="text/markdown", size_bytes=20,
+        source="generated", project_id=None, is_project_source=False, index_status="pending", index_error=None,
+        created_at=datetime(2026, 9, 2, tzinfo=UTC),
+    )
     observed: list[str] = []
     service = SimpleNamespace(library=SimpleNamespace(restore_version=lambda asset_id: observed.append(asset_id) or restored))
-    monkeypatch.setattr(main_module, "services", lambda: service)
-    monkeypatch.setattr(main_module, "enqueue_artifact_index", lambda asset: observed.append(asset.id))
-    monkeypatch.setattr(main_module, "library_asset_json", lambda asset: {"id": asset.id, "version": asset.version})
+    use_services(monkeypatch, service)
+    monkeypatch.setattr(main_module, "_enqueue_artifact_index", lambda asset, _services: observed.append(asset.id))
 
-    assert main_module.restore_library_asset_version("asset-v1") == {"id": "asset-v3", "version": 3}
+    result = route("restore_library_asset_version")("asset-v1")
+
+    assert (result["id"], result["version"]) == ("asset-v3", 3)
     assert observed == ["asset-v1", "asset-v3"]
 
 
@@ -525,9 +596,7 @@ def test_schedule_worker_restores_owner_and_replaces_legacy_chat(monkeypatch) ->
     )
     worker = ScheduleWorker(services)
     worker.runs = Runs()
-    monkeypatch.setattr("agent_core.jobs.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
-    monkeypatch.setattr("agent_core.jobs.scheduler.connected_read_tools", lambda _plugins: [])
-    monkeypatch.setattr("agent_core.jobs.scheduler.BackgroundJobRepository", lambda _database: SimpleNamespace(enqueue=lambda *_args, **_kwargs: None))
+    stub_scheduler(monkeypatch, lambda *_args, **kwargs: AgentStub(kwargs["history"]))
     schedule = Schedule(
         id="schedule-1",
         user_id="user-1",
@@ -549,13 +618,6 @@ def test_schedule_worker_retries_transient_provider_errors_without_duplicate_pro
     finished: list[dict] = []
     chat = Chat(id="schedule-chat", user_id="user-1", provider="openai", model="gpt-test")
 
-    class Chats:
-        database = object()
-        def get(self, _chat_id): return chat
-        def history(self, _chat_id): return [dict(item) for item in stored_history]
-        def replace_history(self, _chat_id, history): stored_history[:] = [dict(item) for item in history]
-        def set_unread(self, _chat_id, _unread): return chat
-
     class Runs:
         def finish(self, _run_id, **values): finished.append(values)
         def schedule_retry(self, _run_id, error, delays):
@@ -575,15 +637,13 @@ def test_schedule_worker_retries_transient_provider_errors_without_duplicate_pro
             return SimpleNamespace(text="Đã hoàn tất.", content_blocks=[], status="completed")
 
     services = SimpleNamespace(
-        chats=Chats(),
+        chats=HistoryChats(chat, stored_history),
         memory=SimpleNamespace(recall=lambda *_args: ""),
         workspace=SimpleNamespace(list_plugins=lambda: []),
     )
     worker = ScheduleWorker(services)
     worker.runs = Runs()
-    monkeypatch.setattr("agent_core.jobs.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
-    monkeypatch.setattr("agent_core.jobs.scheduler.connected_read_tools", lambda _plugins: [])
-    monkeypatch.setattr("agent_core.jobs.scheduler.BackgroundJobRepository", lambda _database: SimpleNamespace(enqueue=lambda *_args, **_kwargs: None))
+    stub_scheduler(monkeypatch, lambda *_args, **kwargs: AgentStub(kwargs["history"]))
     worker.execute(Schedule(id="schedule-1", user_id="user-1", title="Báo cáo", prompt="Tạo báo cáo", chat_id=chat.id), "run-1")
 
     assert attempts == 1
@@ -633,13 +693,6 @@ def test_schedule_worker_reports_final_transient_failure_after_retry_budget(monk
     finished: list[dict] = []
     chat = Chat(id="schedule-chat", user_id="user-1", provider="gemini", model="gemini-test")
 
-    class Chats:
-        database = object()
-        def get(self, _chat_id): return chat
-        def history(self, _chat_id): return [dict(item) for item in stored_history]
-        def replace_history(self, _chat_id, history): stored_history[:] = [dict(item) for item in history]
-        def set_unread(self, _chat_id, _unread): return chat
-
     class Runs:
         def schedule_retry(self, *_args): return None
         def finish(self, _run_id, **values): finished.append(values)
@@ -648,11 +701,10 @@ def test_schedule_worker_reports_final_transient_failure_after_retry_budget(monk
         def __init__(self, history): self.history = history
         def run(self, *_args, **_kwargs): raise ConnectionError("provider unavailable")
 
-    services = SimpleNamespace(chats=Chats(), memory=SimpleNamespace(recall=lambda *_args: ""), workspace=SimpleNamespace(list_plugins=lambda: []))
+    services = SimpleNamespace(chats=HistoryChats(chat, stored_history), memory=SimpleNamespace(recall=lambda *_args: ""), workspace=SimpleNamespace(list_plugins=lambda: []))
     worker = ScheduleWorker(services)
     worker.runs = Runs()
-    monkeypatch.setattr("agent_core.jobs.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
-    monkeypatch.setattr("agent_core.jobs.scheduler.connected_read_tools", lambda _plugins: [])
+    stub_scheduler(monkeypatch, lambda *_args, **kwargs: AgentStub(kwargs["history"]))
 
     worker.execute(Schedule(id="schedule-1", user_id="user-1", title="Báo cáo", prompt="Tạo báo cáo", chat_id=chat.id), "run-1")
 
@@ -664,13 +716,6 @@ def _grounded_worker(monkeypatch, *, search_result: str, notify_email: bool, sen
     """Build a worker whose collaborators are all stubs, for grounding/email tests."""
     state = SimpleNamespace(history=[], emails=[], finished=[], retries=0, agent_calls=0, sent=[])
     chat = Chat(id="schedule-chat", user_id="user-1", provider="openai", model="gpt-test")
-
-    class Chats:
-        database = object()
-        def get(self, _chat_id): return chat
-        def history(self, _chat_id): return [dict(item) for item in state.history]
-        def replace_history(self, _chat_id, history): state.history[:] = [dict(item) for item in history]
-        def set_unread(self, _chat_id, _unread): return chat
 
     class Runs:
         def finish(self, _run_id, **values): state.finished.append(values)
@@ -695,7 +740,7 @@ def _grounded_worker(monkeypatch, *, search_result: str, notify_email: bool, sen
     def default_send(_to, _subject, _body): state.sent.append(_to)
 
     services = SimpleNamespace(
-        chats=Chats(),
+        chats=HistoryChats(chat, state.history),
         memory=SimpleNamespace(recall=lambda *_args: ""),
         workspace=SimpleNamespace(list_plugins=lambda: []),
         web_search=SimpleNamespace(search=lambda *_args, **_kwargs: search_result, enabled=True),
@@ -706,9 +751,7 @@ def _grounded_worker(monkeypatch, *, search_result: str, notify_email: bool, sen
     services.web_search.require_sources = WebSearchService.require_sources.__get__(services.web_search)
     worker = ScheduleWorker(services)
     worker.runs = Runs()
-    monkeypatch.setattr("agent_core.jobs.scheduler.make_agent", lambda *_args, **kwargs: AgentStub(kwargs["history"]))
-    monkeypatch.setattr("agent_core.jobs.scheduler.connected_read_tools", lambda _plugins: [])
-    monkeypatch.setattr("agent_core.jobs.scheduler.BackgroundJobRepository", lambda _database: SimpleNamespace(enqueue=lambda *_args, **_kwargs: None))
+    stub_scheduler(monkeypatch, lambda *_args, **kwargs: AgentStub(kwargs["history"]))
     schedule = Schedule(
         id="schedule-1", user_id="user-1", title="Tin AI", prompt="Tổng hợp tin AI",
         chat_id=chat.id, require_web_source=True, notify_email=notify_email,
@@ -900,9 +943,9 @@ def test_messages_include_only_current_users_feedback(monkeypatch) -> None:
             assert message_ids == ["assistant-1"]
             return {"assistant-1": "helpful"}
 
-    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(chats=Chats(), personalization=Personalization()))
+    use_services(monkeypatch, SimpleNamespace(chats=Chats(), personalization=Personalization(), workspace=SimpleNamespace()))
 
-    result = main_module.messages("chat-1")
+    result = route("messages")("chat-1")
 
     assert result[0].get("feedbackKind") is None
     assert result[1]["feedbackKind"] == "helpful"
@@ -936,13 +979,9 @@ def test_messages_attach_artifacts_to_the_creating_assistant_response(monkeypatc
             assert (chat_id, message_ids) == ("chat-1", ["assistant-1"])
             return {"assistant-1": [asset]}
 
-    monkeypatch.setattr(
-        main_module,
-        "services",
-        lambda: SimpleNamespace(chats=Chats(), personalization=SimpleNamespace(feedback_by_message_ids=lambda _ids: {})),
-    )
+    use_services(monkeypatch, SimpleNamespace(chats=Chats(), personalization=SimpleNamespace(feedback_by_message_ids=lambda _ids: {}), workspace=SimpleNamespace()))
 
-    result = main_module.messages("chat-1")
+    result = route("messages")("chat-1")
 
     assert result[1]["artifacts"] == [{
         "id": "asset-1", "artifactId": "artifact-1", "name": "ke-hoach.md", "version": 1,
@@ -985,11 +1024,11 @@ def test_feedback_branch_and_regenerate_endpoints_delegate_the_selected_message(
             calls.append(("regenerate", chat_id, message_id))
             return "Câu hỏi gốc"
 
-    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(personalization=Personalization(), chats=Chats()))
+    use_services(monkeypatch, SimpleNamespace(personalization=Personalization(), chats=Chats()))
 
-    feedback = create_response_feedback("assistant-1", FeedbackRequest(kind="helpful"))
-    created_branch = create_chat_branch("chat-1", BranchChatRequest(assistantMessageId="assistant-1"))
-    regeneration = prepare_chat_regeneration("chat-1", BranchChatRequest(assistantMessageId="assistant-1"))
+    feedback = route("create_response_feedback")("assistant-1", FeedbackRequest(kind="helpful"))
+    created_branch = route("create_chat_branch")("chat-1", BranchChatRequest(assistantMessageId="assistant-1"))
+    regeneration = route("prepare_chat_regeneration")("chat-1", BranchChatRequest(assistantMessageId="assistant-1"))
 
     assert feedback == {"id": "feedback-1", "messageId": "assistant-1", "kind": "helpful", "note": None}
     assert created_branch["id"] == "branch-1"
@@ -1044,27 +1083,10 @@ def test_stream_chat_restores_the_chat_owner_in_its_worker_thread(monkeypatch) -
             return []
         def replace_history(self, _chat_id, _history): pass
 
-    class AgentStub:
-        history: list[dict] = []
-        def run(self, _content, _attachments, on_step, **_kwargs):
-            self.history = [
-                {"role": "user", "content": "RAG là gì?"},
-                {"role": "assistant", "content": "world"},
-            ]
-            return SimpleNamespace(text="world", content_blocks=[], status="completed")
-
-    class Jobs:
-        def __init__(self, _database): pass
-        def enqueue(self, _kind, _payload): pass
-
-    service = SimpleNamespace(
-        chats=Chats(),
-        memory=SimpleNamespace(recall=lambda *_args, **_kwargs: ""),
-        workspace=SimpleNamespace(get=lambda *_args, **_kwargs: None, list_plugins=lambda: []),
-    )
+    service = agent_services(Chats())
     monkeypatch.setattr(main_module, "services", lambda: service)
-    monkeypatch.setattr(main_module, "make_agent", lambda *_args, **_kwargs: AgentStub())
-    monkeypatch.setattr(main_module, "BackgroundJobRepository", Jobs)
+    monkeypatch.setattr(main_module, "make_agent", lambda *_args, **_kwargs: FixedReplyAgent("RAG là gì?", "world"))
+    monkeypatch.setattr(main_module, "BackgroundJobRepository", StubJobs)
 
     events = list(main_module.stream_chat("chat-1", "RAG là gì?", []))
 
@@ -1077,39 +1099,18 @@ def test_stream_chat_retrieves_the_global_library_before_creating_the_agent(monk
     chat = Chat(id="chat-1", user_id="user-1", provider="openai", model="gpt-5.6-terra")
     observed: dict[str, object] = {}
 
-    class Chats:
-        database = object()
-        def get(self, _chat_id): return chat
-        def history(self, _chat_id): return []
-        def replace_history(self, _chat_id, _history): pass
-
-    class AgentStub:
-        history: list[dict] = []
-        def run(self, _content, _attachments, on_step, **_kwargs):
-            self.history = [{"role": "user", "content": "RAG là gì?"}, {"role": "assistant", "content": "RAG"}]
-            return SimpleNamespace(text="RAG", content_blocks=[], status="completed")
-
-    class Jobs:
-        def __init__(self, _database): pass
-        def enqueue(self, _kind, _payload): pass
-
     class Knowledge:
         def search(self, query, top_k=4, project_id=None, collection_id=None):
             observed["search"] = (query, top_k, project_id, collection_id)
             return "[Nguồn 1: [rag.md](/api/documents/doc-1/file), đoạn 1]\\nRAG dùng truy hồi."
 
-    service = SimpleNamespace(
-        chats=Chats(),
-        knowledge=Knowledge(),
-        memory=SimpleNamespace(recall=lambda *_args, **_kwargs: ""),
-        workspace=SimpleNamespace(get=lambda *_args, **_kwargs: None, list_plugins=lambda: []),
-    )
+    service = agent_services(HistoryChats(chat, []), knowledge=Knowledge())
     monkeypatch.setattr(main_module, "services", lambda: service)
     def make_agent_stub(*args, **kwargs):
         observed["context"] = args[3]
-        return AgentStub()
+        return FixedReplyAgent("RAG là gì?", "RAG")
     monkeypatch.setattr(main_module, "make_agent", make_agent_stub)
-    monkeypatch.setattr(main_module, "BackgroundJobRepository", Jobs)
+    monkeypatch.setattr(main_module, "BackgroundJobRepository", StubJobs)
 
     list(main_module.stream_chat("chat-1", "RAG là gì?", []))
 
@@ -1155,8 +1156,8 @@ def test_chat_history_list_is_paginated(monkeypatch) -> None:
     class Services:
         chats = Chats()
 
-    monkeypatch.setattr("api.main.services", lambda: Services())
-    page = list_chats(offset=0, limit=2)
+    use_services(monkeypatch, Services())
+    page = route("list_chats")(offset=0, limit=2)
 
     assert [item["id"] for item in page["items"]] == ["chat-0", "chat-1"]
     assert page["total"] == 3
@@ -1336,25 +1337,11 @@ def test_background_worker_indexes_a_document_job() -> None:
     job = SimpleNamespace(id="job-1", type="document_index", payload={"document_id": "document-1"})
     calls: list[tuple[str, object]] = []
 
-    class Jobs:
-        def claim(self, _now):
-            return job
-
-        def heartbeat(self, _now, current_job_type=None, last_error=None):
-            if current_job_type or last_error:
-                calls.append(("heartbeat", current_job_type or last_error))
-
-        def succeed(self, job_id):
-            calls.append(("succeed", job_id))
-
-        def fail(self, job_id, error, _now):
-            calls.append(("fail", (job_id, error)))
-
     class Knowledge:
         def index(self, document_id):
             calls.append(("index", document_id))
 
-    assert BackgroundWorker(Jobs(), Knowledge()).run_once(datetime.now(UTC))
+    assert BackgroundWorker(RecordingJobs(job, calls, record_heartbeats=True), Knowledge()).run_once(datetime.now(UTC))
     assert calls == [("heartbeat", "document_index"), ("index", "document-1"), ("succeed", "job-1")]
 
 
@@ -1362,18 +1349,11 @@ def test_background_worker_retries_a_failed_document_index() -> None:
     job = SimpleNamespace(id="job-1", type="document_index", payload={"document_id": "document-1"})
     calls: list[tuple[str, object]] = []
 
-    class Jobs:
-        def claim(self, _now): return job
-        def heartbeat(self, _now, current_job_type=None, last_error=None):
-            if last_error: calls.append(("heartbeat", last_error))
-        def succeed(self, job_id): calls.append(("succeed", job_id))
-        def fail(self, job_id, error, _now): calls.append(("fail", (job_id, error)))
-
     class Knowledge:
         def index(self, _document_id):
             return SimpleNamespace(status="failed", error="embedding unavailable")
 
-    assert BackgroundWorker(Jobs(), Knowledge()).run_once(datetime.now(UTC))
+    assert BackgroundWorker(RecordingJobs(job, calls), Knowledge()).run_once(datetime.now(UTC))
     assert calls[0][0] == "fail"
     assert "embedding unavailable" in str(calls[0][1])
     assert not any(kind == "succeed" for kind, _ in calls)
@@ -1382,12 +1362,6 @@ def test_background_worker_retries_a_failed_document_index() -> None:
 def test_background_worker_indexes_memory_from_persisted_history() -> None:
     job = SimpleNamespace(id="job-2", type="memory_index", payload={"chat_id": "chat-1"})
     calls: list[tuple[str, object]] = []
-
-    class Jobs:
-        def claim(self, _now): return job
-        def heartbeat(self, _now, current_job_type=None, last_error=None): pass
-        def succeed(self, job_id): calls.append(("succeed", job_id))
-        def fail(self, job_id, error, _now): calls.append(("fail", (job_id, error)))
 
     class Knowledge: pass
     class Chats:
@@ -1398,7 +1372,7 @@ def test_background_worker_indexes_memory_from_persisted_history() -> None:
     class Memory:
         def index_history(self, chat_id, history): calls.append(("memory", (chat_id, history)))
 
-    assert BackgroundWorker(Jobs(), Knowledge(), Memory(), Chats()).run_once(datetime.now(UTC))
+    assert BackgroundWorker(RecordingJobs(job, calls), Knowledge(), Memory(), Chats()).run_once(datetime.now(UTC))
     assert calls == [
         ("history", "chat-1"),
         ("memory", ("chat-1", [{"role": "user", "content": "hello"}])),
@@ -1440,18 +1414,12 @@ def test_artifact_text_preview_extracts_utf8_source(tmp_path: Path) -> None:
 
 def test_background_worker_indexes_an_artifact_job() -> None:
     job = SimpleNamespace(id="job-artifact", type="artifact_index", payload={"asset_id": "asset-1"})
-    calls: list[tuple[str, str]] = []
-
-    class Jobs:
-        def claim(self, _now): return job
-        def heartbeat(self, *_args, **_kwargs): pass
-        def succeed(self, job_id): calls.append(("succeed", job_id))
-        def fail(self, job_id, _error, _now): calls.append(("fail", job_id))
+    calls: list[tuple[str, object]] = []
 
     class Artifacts:
         def index(self, asset_id): calls.append(("index", asset_id))
 
-    assert BackgroundWorker(Jobs(), SimpleNamespace(), artifacts=Artifacts()).run_once(datetime.now(UTC))
+    assert BackgroundWorker(RecordingJobs(job, calls), SimpleNamespace(), artifacts=Artifacts()).run_once(datetime.now(UTC))
     assert calls == [("index", "asset-1"), ("succeed", "job-artifact")]
 
 

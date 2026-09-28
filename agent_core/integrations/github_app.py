@@ -61,6 +61,7 @@ class GitHubAppService:
 
     def authorization_url(self) -> str:
         self._fernet()
+        self._app_headers()
         state = token_urlsafe(32)
         self.repository.create_oauth_state(state, GITHUB_SLUG, datetime.now(UTC) + timedelta(minutes=10))
         base = self.settings.github_app_install_url or f"https://github.com/apps/{self.settings.github_app_slug}/installations/new"
@@ -108,10 +109,11 @@ class GitHubAppService:
         connection = self.repository.get_connection(GITHUB_SLUG, owner_id) if owner_id else self.repository.get_connection(GITHUB_SLUG)
         if connection is None or connection.status != "connected":
             raise GitHubConnectorError("GitHub chưa kết nối hoặc cần kết nối lại.")
+        app_headers = self._app_headers()
         try:
             payload = json.loads(self._fernet().decrypt(connection.encrypted_token.encode()).decode())
             installation_id = str(payload["installation_id"])
-            token = self._github_json(f"/app/installations/{installation_id}/access_tokens", self._app_headers(), method="POST")
+            token = self._github_json(f"/app/installations/{installation_id}/access_tokens", app_headers, method="POST")
         except (InvalidToken, KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             self.repository.set_connection_status(GITHUB_SLUG, "reauth_required", owner_id=owner_id)
             raise GitHubConnectorError("Không thể đọc liên kết GitHub đã lưu. Hãy kết nối lại.") from exc

@@ -1,21 +1,19 @@
-"""Application composition and compatibility handlers during the API split."""
+"""Application composition: builds the FastAPI app and wires the feature routers."""
 
 from __future__ import annotations
 
 import json
 import re
-from copy import deepcopy
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from queue import Empty, Queue
-from threading import Event, Lock, Thread
-from typing import Any, Literal
-from urllib.parse import urlencode
+from queue import Queue
+from threading import Event, Lock
+from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
+from fastapi import FastAPI, HTTPException, Request
 from api.http.auth_middleware import AuthMiddlewareDependencies, install as install_auth_middleware
 from api.modules.common.serializers import (
     chat_json as _chat_json,
@@ -59,38 +57,29 @@ from api.modules.chats.runtime.stream import StreamDependencies, stream_chat as 
 from agent_core.runtime.agent import AgentDependencies, agent_system_prompt as _agent_system_prompt, build_agent as _make_agent, selected_settings as _selected_settings
 from agent_core.content.indexing import enqueue_artifact_index as _enqueue_artifact_index, queue_pending_artifacts
 from api.modules.chats.runtime.turn import run_agent_turn as _run_agent_turn
-from api.modules.projects.service import delete_project as _delete_project_service
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import FileResponse, RedirectResponse
-from pydantic import BaseModel, Field, field_validator
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy import or_, select
+from sqlalchemy import select
 
 from agent_core.ai.agent import Agent, AgentCancelled
-from agent_core.content.artifacts import PREVIEW_LIMIT, ArtifactEditContext, ArtifactService, build_artifact_tool
+from agent_core.content.artifacts import ArtifactEditContext, ArtifactService
 from agent_core.runtime.config import Settings, load_settings
 from agent_core.runtime.credentials import CredentialError, UserCredentialService
 from agent_core.knowledge.rag import NO_DOCUMENTS_RESULT, KnowledgeService, build_knowledge_tool
-from agent_core.content.media import MediaService
-from agent_core.content.file_storage import FileStorageService
-from agent_core.content.library import LibraryService
 from agent_core.knowledge.memory import MemoryService
 from agent_core.ai.ollama import OllamaCatalog, OllamaError
-from agent_core.knowledge.personalization import PersonalizationService
-from agent_core.integrations.google_workspace import GOOGLE_WORKSPACE_SLUG, GoogleConnectorError, GoogleWorkspaceExecutor, GoogleWorkspaceService
+from agent_core.integrations.google_workspace import GOOGLE_WORKSPACE_SLUG, GoogleConnectorError
 from agent_core.integrations.github_app import GITHUB_SLUG, GitHubAppExecutor, GitHubAppService, GitHubConnectorError
 from agent_core.integrations.plugin_catalog import CATALOG, catalog_json, find_catalog_plugin
 from agent_core.integrations.plugin_execution import EXECUTORS
-from agent_core.ai.prompts import DEFAULT_SYSTEM_PROMPT, OLLAMA_SYSTEM_PROMPT
 from agent_core.ai.providers import build_client
 from agent_core.ai.images import ImageGenerationError
-from agent_core.persistence.store import ArtifactChunk, AuthRepository, BackgroundJob, BackgroundJobRepository, Chat, ChatMessage, ChatRepository, ChatShare, ConnectorRepository, Database, Document, KnowledgeCollection, LibraryAsset, MediaAttachment, MediaRepository, ModelRegistryRepository, Plugin, Project, PromptTemplate, Schedule, ScheduleRepository, ScheduleRun, User, Workspace, WorkspaceInvitation, WorkspaceMember, WorkspaceRepository, current_user_id, current_workspace_id
-from agent_core.runtime.auth import AuthError, AuthService, SESSION_COOKIE
+from agent_core.persistence.store import BackgroundJob, BackgroundJobRepository, Chat, ChatMessage, ChatRepository, Database, Document, LibraryAsset, MediaAttachment, Plugin, Project, PromptTemplate, Schedule, ScheduleRepository, User, Workspace, WorkspaceInvitation, WorkspaceMember, WorkspaceRepository, current_user_id, current_workspace_id
+from agent_core.runtime.auth import SESSION_COOKIE
 from agent_core.runtime.services import Services, build_services
 from agent_core.tools import ToolRegistry, ToolSpec, build_default_registry
-from agent_core.integrations.notifications import EmailNotificationService, public_chat_url, schedule_run_email
-from agent_core.integrations.web_search import WebSearchService, build_web_search_tool, sources_from_web_steps
+from agent_core.integrations.notifications import public_chat_url, schedule_run_email
+from agent_core.integrations.web_search import WebSearchService, sources_from_web_steps
 
 VIETNAM_TIMEZONE = "Asia/Ho_Chi_Minh"
 NOT_FOUND_MARKER = "Không tìm thấy"
@@ -154,12 +143,10 @@ chat_runs = ChatRunRegistry()
 
 
 from api.contracts.requests import (
-    AdminModelStatusRequest, AdminUserStatusRequest, ApiKeyRequest, BranchChatRequest,
-    ChatRequest, CollectionDocumentsRequest, CreateChatRequest, DeleteProjectRequest,
-    FeedbackRequest, KnowledgeCollectionRequest, PinMessageRequest, PluginRequest,
-    ExternalActionProposalRequest, PluginUpdateRequest, ProjectConnectorScopeRequest, ProjectRequest, PromptTemplateRequest, ScheduleProposalPayload,
-    ScheduleRequest, ScheduleUpdateRequest, ShareRequest, UpdateArtifactRequest,
-    UpdateChatRequest, WorkspaceInvitationRequest, WorkspaceMemberRoleRequest, WorkspaceRequest,
+    BranchChatRequest, ChatRequest, CollectionDocumentsRequest, FeedbackRequest,
+    KnowledgeCollectionRequest, ProjectRequest, ScheduleProposalPayload, ScheduleRequest,
+    ScheduleUpdateRequest, ShareRequest, UpdateArtifactRequest, UpdateChatRequest,
+    WorkspaceInvitationRequest,
 )
 from api.modules.chats.image_service import run_image_turn
 
@@ -310,46 +297,11 @@ def invitation_json(item: WorkspaceInvitation) -> dict[str, Any]:
     return {"id": item.id, "email": item.email, "role": item.role, "expiresAt": item.expires_at.isoformat(), "createdAt": item.created_at.isoformat()}
 
 
-def require_workspace_owner(request: Request) -> WorkspaceMember:
-    membership = getattr(request.state, "workspace_membership", None)
-    if membership is None or membership.role != "owner":
-        raise HTTPException(status_code=403, detail="Chỉ owner workspace mới được thực hiện thao tác này.")  # NOSONAR - protected routes declare API_ERROR_RESPONSES
-    return membership
-
-
 def require_system_admin(request: Request):
     user = getattr(request.state, "user", None)
     if user is None or not services().auth.is_system_admin(user):
         raise HTTPException(status_code=403, detail="Chỉ system admin mới được truy cập.")  # NOSONAR - protected routes declare API_ERROR_RESPONSES
     return user
-
-
-def create_workspace_invitation(payload: WorkspaceInvitationRequest, request: Request) -> dict[str, Any]:
-    require_workspace_owner(request)
-    email = payload.email.strip().lower()
-    if "@" not in email:
-        raise HTTPException(status_code=422, detail="Email lời mời không hợp lệ.")
-    item = services().workspace.invite(current_workspace_id.get(), email, payload.role, request.state.user.id, datetime.now(UTC) + timedelta(days=7))
-    record_workspace_activity("workspace.invitation_created", "workspace_invitation", item.id, f"Đã mời {email} vào workspace với quyền {payload.role}.")
-    result = invitation_json(item)
-    invite_url = f"{services().settings.app_web_url}/?invite={item.id}"
-    if services().email.enabled:
-        try:
-            services().email.send(email, "Lời mời vào Agent Series workspace", f"Bạn được mời vào workspace Agent Series với quyền {payload.role}.\n\nĐăng nhập Google bằng đúng email này rồi mở lời mời:\n{invite_url}\n\nLời mời hết hạn sau 7 ngày.")
-            result["emailStatus"] = "sent"
-        except Exception:  # Invitation remains valid; owner can share the URL manually.
-            result["emailStatus"] = "pending"
-    else:
-        result["emailStatus"] = "pending"
-    result["inviteUrl"] = invite_url
-    return result
-
-
-def cancel_workspace_invitation(invitation_id: str, request: Request) -> None:
-    require_workspace_owner(request)
-    if not services().workspace.cancel_invitation(current_workspace_id.get(), invitation_id):
-        raise HTTPException(status_code=404, detail="Không tìm thấy lời mời.")
-    record_workspace_activity("workspace.invitation_revoked", "workspace_invitation", invitation_id, "Đã thu hồi lời mời vào workspace.")
 
 
 def selected_settings(provider: str, model: str, user_id: str | None) -> Settings:
@@ -440,651 +392,6 @@ def queue_file_cleanup(session, files: list[dict[str, str]], dedupe_key: str) ->
             max_attempts=10,
         )
     )
-
-
-def list_chats(
-    offset: int = Query(default=0, ge=0, description="Vị trí bắt đầu của trang lịch sử."),
-    limit: int = Query(default=40, ge=1, le=100, description="Số chat tối đa mỗi lần tải."),
-) -> dict[str, Any]:
-    items, total = services().chats.list(offset=offset, limit=limit)
-    next_offset = offset + len(items)
-    return {
-        "items": [chat_json(chat) for chat in items],
-        "total": total,
-        "nextOffset": next_offset if next_offset < total else None,
-    }
-
-
-def create_chat(payload: CreateChatRequest) -> dict[str, Any]:
-    settings = services().settings
-    available = available_provider_models(current_user_id.get())
-    provider = payload.provider or (settings.provider if settings.provider in available else next(iter(available), settings.provider))
-    model = payload.model or (settings.active_model if settings.active_model in available.get(provider, []) else (available.get(provider) or [settings.active_model])[0])
-    try:
-        selected = selected_settings(provider, model, current_user_id.get())
-    except (ValueError, CredentialError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    source_id = payload.context_source_chat_id
-    if source_id and services().chats.get(source_id) is None:
-        raise HTTPException(status_code=422, detail="Không tìm thấy chat nguồn để kế thừa context.")
-    if payload.project_id and services().workspace.get(Project, payload.project_id) is None:
-        raise HTTPException(status_code=422, detail=SELECTED_PROJECT_NOT_FOUND_ERROR)
-    if payload.collection_id:
-        collection = services().knowledge.get_collection(payload.collection_id)
-        if collection is None or collection.project_id != payload.project_id:
-            raise HTTPException(status_code=422, detail="Collection phải thuộc Project đã chọn.")
-    return chat_json(services().chats.create(selected.provider, selected.active_model, source_id, payload.project_id, payload.collection_id, payload.mode))
-
-
-def update_library_asset(asset_id: str, payload: UpdateArtifactRequest) -> dict[str, Any]:
-    values = payload.model_dump(exclude_unset=True)
-    project_id = values.get("project_id")
-    if project_id and services().workspace.get(Project, project_id) is None:
-        raise HTTPException(status_code=422, detail=SELECTED_PROJECT_NOT_FOUND_ERROR)
-    try:
-        item = services().library.update(
-            asset_id,
-            name=values.get("name"),
-            project_id=project_id,
-            is_project_source=values.get("is_project_source"),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if item is None:
-        raise HTTPException(status_code=404, detail=ARTIFACT_NOT_FOUND_ERROR)
-    enqueue_artifact_index(item)
-    if getattr(item, "project_id", None):
-        if "is_project_source" in values:
-            event = "project_source.pinned" if item.is_project_source else "project_source.unpinned"
-            summary = f"Đã {'ghim' if item.is_project_source else 'bỏ ghim'} file {item.name} làm nguồn Project."
-        else:
-            event, summary = "artifact.updated", f"Đã cập nhật file {item.name}."
-        record_project_activity(item.project_id, event, "artifact", item.id, summary)
-    return library_asset_json(item)
-
-
-def restore_library_asset_version(asset_id: str) -> dict[str, Any]:
-    """Restore a chosen version by copying it into a new latest version."""
-    try:
-        item = services().library.restore_version(asset_id)
-    except ValueError as exc:
-        message = str(exc)
-        raise HTTPException(status_code=404 if NOT_FOUND_MARKER in message else 422, detail=message) from exc
-    enqueue_artifact_index(item)
-    if getattr(item, "project_id", None):
-        record_project_activity(item.project_id, "artifact.restored", "artifact", item.id, f"Đã khôi phục {item.name} thành version {item.version}.")
-    return library_asset_json(item)
-
-
-def get_chat(chat_id: str) -> dict[str, Any]:
-    chat = services().chats.get(chat_id)
-    if chat is None:
-        raise HTTPException(status_code=404, detail=CHAT_NOT_FOUND_ERROR)
-    return chat_json(chat)
-
-
-def messages(chat_id: str) -> list[dict[str, Any]]:
-    if services().chats.get(chat_id) is None:
-        raise HTTPException(status_code=404, detail=CHAT_NOT_FOUND_ERROR)
-    backfill_links = getattr(services().chats, "backfill_artifact_links", None)
-    if backfill_links is not None:
-        backfill_links(chat_id)
-    history = [item for item in services().chats.history(chat_id) if item["role"] in {"user", "assistant"}]
-    artifact_lookup = getattr(services().chats, "artifacts_by_assistant_message", None)
-    artifacts_by_message = artifact_lookup(
-        chat_id,
-        [item["message_id"] for item in history if item["role"] == "assistant" and item.get("message_id")],
-    ) if artifact_lookup is not None else {}
-    feedback = services().personalization.feedback_by_message_ids(
-        [item["message_id"] for item in history if item["role"] == "assistant" and item.get("message_id")]
-    )
-    trace_lookup = getattr(getattr(services(), "workspace", None), "retrieval_traces", None)
-    traces_by_message = trace_lookup(
-        [item["message_id"] for item in history if item["role"] == "assistant" and item.get("message_id")]
-    ) if trace_lookup is not None else {}
-    return [
-        message_json({
-            **item,
-            "feedback_kind": feedback.get(item.get("message_id")),
-            "artifacts": [library_asset_json(asset) for asset in artifacts_by_message.get(item.get("message_id", ""), [])],
-            "retrievalTrace": [retrieval_trace_json(trace) for trace in traces_by_message.get(item.get("message_id", ""), [])],
-        } if item["role"] == "assistant" else item)
-        for item in history
-    ]
-
-
-def mark_chat_read(chat_id: str) -> dict[str, Any]:
-    chat = services().chats.set_unread(chat_id, False)
-    if chat is None:
-        raise HTTPException(status_code=404, detail=CHAT_NOT_FOUND_ERROR)
-    return chat_json(chat)
-
-
-def pin_message(message_id: str, payload: PinMessageRequest) -> dict[str, Any]:
-    message = services().chats.set_message_pin(message_id, payload.pinned)
-    if message is None:
-        raise HTTPException(status_code=404, detail="Chỉ có thể ghim message của bạn.")
-    return {"messageId": message.id, "pinned": message.pinned}
-
-
-def create_response_feedback(message_id: str, payload: FeedbackRequest) -> dict[str, Any]:
-    try:
-        item = services().personalization.record_feedback(message_id, payload.kind, payload.note)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"id": item.id, "messageId": item.message_id, "kind": item.kind, "note": item.note}
-
-
-def create_chat_branch(chat_id: str, payload: BranchChatRequest) -> dict[str, Any]:
-    try:
-        return chat_json(services().chats.create_branch(chat_id, payload.assistant_message_id))
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-def prepare_chat_regeneration(chat_id: str, payload: BranchChatRequest) -> dict[str, str]:
-    try:
-        return {"content": services().chats.prepare_regeneration(chat_id, payload.assistant_message_id)}
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-def list_chat_pins(chat_id: str) -> list[dict[str, Any]]:
-    if services().chats.get(chat_id) is None:
-        raise HTTPException(status_code=404, detail=CHAT_NOT_FOUND_ERROR)
-    return [{"messageId": message.id, "position": message.position, "content": message.content} for message in services().chats.chat_pins(chat_id)]
-
-
-def list_templates(project_id: str | None = Query(default=None, alias="projectId")) -> list[dict[str, Any]]:
-    with services().chats.database.session() as session:
-        statement = select(PromptTemplate).order_by(PromptTemplate.updated_at.desc())
-        if project_id:
-            statement = statement.where(PromptTemplate.project_id.in_((None, project_id)))
-        else:
-            statement = statement.where(PromptTemplate.project_id.is_(None))
-        return [template_json(item) for item in session.scalars(statement)]
-
-
-def create_template(payload: PromptTemplateRequest) -> dict[str, Any]:
-    if payload.project_id and services().workspace.get(Project, payload.project_id) is None:
-        raise HTTPException(status_code=422, detail=SELECTED_PROJECT_NOT_FOUND_ERROR)
-    return template_json(services().workspace.create(PromptTemplate, **payload.model_dump()))
-
-
-def update_template(template_id: str, payload: PromptTemplateRequest) -> dict[str, Any]:
-    if payload.project_id and services().workspace.get(Project, payload.project_id) is None:
-        raise HTTPException(status_code=422, detail=SELECTED_PROJECT_NOT_FOUND_ERROR)
-    item = services().workspace.update(PromptTemplate, template_id, **payload.model_dump())
-    if item is None:
-        raise HTTPException(status_code=404, detail="Không tìm thấy template.")
-    return template_json(item)
-
-
-def delete_template(template_id: str) -> None:
-    if not services().workspace.delete(PromptTemplate, template_id):
-        raise HTTPException(status_code=404, detail="Không tìm thấy template.")
-
-
-def _record_chat_project_move(chat: Chat, previous_project_id: str | None) -> None:
-    if previous_project_id == chat.project_id:
-        return
-    if previous_project_id:
-        record_project_activity(previous_project_id, "chat.removed", "chat", chat.id, f"Đã chuyển chat {chat.title} ra khỏi Project.")
-    if chat.project_id:
-        record_project_activity(chat.project_id, "chat.added", "chat", chat.id, f"Đã thêm chat {chat.title} vào Project.")
-
-
-def update_chat(chat_id: str, payload: UpdateChatRequest) -> dict[str, Any]:
-    try:
-        chat = services().chats.get(chat_id)
-        if chat is None:
-            raise HTTPException(status_code=404, detail=CHAT_NOT_FOUND_ERROR)
-        provider, model = payload.provider or chat.provider, payload.model or chat.model
-        previous_project_id = chat.project_id
-        selected_settings(provider, model, current_user_id.get())
-        if payload.project_id and services().workspace.get(Project, payload.project_id) is None:
-            raise HTTPException(status_code=422, detail=SELECTED_PROJECT_NOT_FOUND_ERROR)
-        values = {"provider": provider, "model": model}
-        if "collection_id" in payload.model_fields_set and payload.collection_id:
-            collection = services().knowledge.get_collection(payload.collection_id)
-            target_project = payload.project_id if "project_id" in payload.model_fields_set else chat.project_id
-            if collection is None or collection.project_id != target_project:
-                raise HTTPException(status_code=422, detail="Collection phải thuộc Project của chat.")
-        for field in ("title", "pinned", "archived", "project_id", "collection_id", "mode"):
-            if field in payload.model_fields_set:
-                values[field] = getattr(payload, field)
-        if "project_id" in payload.model_fields_set and "collection_id" not in payload.model_fields_set:
-            values["collection_id"] = None
-        chat = services().chats.update(chat_id, **values)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if chat is None:
-        raise HTTPException(status_code=404, detail=CHAT_NOT_FOUND_ERROR)
-    if "project_id" in payload.model_fields_set:
-        _record_chat_project_move(chat, previous_project_id)
-    return chat_json(chat)
-
-
-def delete_chat(chat_id: str) -> None:
-    if not services().chats.delete(chat_id):
-        raise HTTPException(status_code=404, detail=CHAT_NOT_FOUND_ERROR)
-
-
-def share_chat(chat_id: str, payload: ShareRequest | None = None) -> dict[str, Any]:
-    expires_at = payload.expires_at if payload else None
-    if expires_at and expires_at <= datetime.now(UTC):
-        raise HTTPException(status_code=422, detail="Thời hạn chia sẻ phải ở tương lai.")
-    share = services().chats.create_or_update_share(chat_id, expires_at)
-    if share is None:
-        raise HTTPException(status_code=404, detail=CHAT_NOT_FOUND_ERROR)
-    chat = services().chats.get(chat_id)
-    if chat and chat.project_id:
-        record_project_activity(chat.project_id, "chat.shared", "chat", chat.id, f"Đã tạo hoặc cập nhật liên kết chia sẻ cho chat {chat.title}.")
-    return share_json(share)
-
-
-def revoke_share(chat_id: str) -> None:
-    chat = services().chats.get(chat_id)
-    if not services().chats.revoke_share(chat_id):
-        raise HTTPException(status_code=404, detail="Chat chưa có liên kết chia sẻ.")
-    if chat and chat.project_id:
-        record_project_activity(chat.project_id, "chat.share_revoked", "chat", chat.id, f"Đã thu hồi liên kết chia sẻ của chat {chat.title}.")
-
-
-def public_share(token: str) -> dict[str, Any]:
-    share = services().chats.get_share(token)
-    if share is None or (share.expires_at and share.expires_at <= datetime.now(UTC)):
-        raise HTTPException(status_code=404, detail="Liên kết chia sẻ không tồn tại hoặc đã bị thu hồi.")
-    return share_json(share)
-
-
-def documents() -> list[dict[str, Any]]:
-    jobs = BackgroundJobRepository(services().chats.database)
-    return [document_json(item, jobs.latest_for_document(item.id)) for item in services().knowledge.list_documents()]
-
-
-def list_collections(project_id: str) -> list[dict[str, Any]]:
-    if services().workspace.get(Project, project_id) is None:
-        raise HTTPException(status_code=404, detail="Không tìm thấy Project.")
-    return [collection_json(item, services().knowledge.collection_documents(item.id)) for item in services().knowledge.list_collections(project_id)]
-
-
-def create_collection(project_id: str, payload: KnowledgeCollectionRequest) -> dict[str, Any]:
-    if services().workspace.get(Project, project_id) is None:
-        raise HTTPException(status_code=404, detail="Không tìm thấy Project.")
-    try:
-        item = services().knowledge.create_collection(project_id, payload.name, payload.description)
-        record_project_activity(project_id, "collection.created", "collection", item.id, f"Đã tạo collection {item.name}.")
-        return collection_json(item, [])
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-def update_collection(collection_id: str, payload: KnowledgeCollectionRequest) -> dict[str, Any]:
-    try:
-        item = services().knowledge.update_collection(collection_id, payload.name, payload.description)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if item is None:
-        raise HTTPException(status_code=404, detail=COLLECTION_NOT_FOUND_ERROR)
-    record_project_activity(item.project_id, "collection.updated", "collection", item.id, f"Đã cập nhật collection {item.name}.")
-    return collection_json(item, services().knowledge.collection_documents(item.id))
-
-
-def set_collection_documents(collection_id: str, payload: CollectionDocumentsRequest) -> dict[str, Any]:
-    try:
-        item = services().knowledge.get_collection(collection_id)
-        if item is None:
-            raise HTTPException(status_code=404, detail=COLLECTION_NOT_FOUND_ERROR)
-        documents = services().knowledge.set_collection_documents(collection_id, payload.document_ids)
-        record_project_activity(item.project_id, "collection.documents_updated", "collection", item.id, f"Đã cập nhật tài liệu cho collection {item.name}.")
-        return collection_json(item, documents)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-def delete_collection(collection_id: str) -> None:
-    item = services().knowledge.get_collection(collection_id)
-    if item is None or not services().knowledge.delete_collection(collection_id):
-        raise HTTPException(status_code=404, detail=COLLECTION_NOT_FOUND_ERROR)
-    record_project_activity(item.project_id, "collection.deleted", "collection", collection_id, f"Đã xóa collection {item.name}.")
-
-
-def document_file(document_id: str) -> Response:
-    document = services().knowledge.ensure_remote(document_id)
-    if document is None:
-        raise HTTPException(status_code=404, detail=DOCUMENT_NOT_FOUND_ERROR)
-    if document.storage_provider == "imagekit":
-        return RedirectResponse(services().knowledge.storage.signed_url(document.storage_provider, document.stored_name, document.storage_file_id), status_code=307)
-    path = Path(services().settings.knowledge_dir) / document.stored_name
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Không tìm thấy file tài liệu.")
-    return FileResponse(path, media_type="application/pdf", filename=document.original_name, content_disposition_type="inline")
-
-
-def worker_status() -> dict[str, Any]:
-    return BackgroundJobRepository(services().chats.database).worker_status(datetime.now(UTC))
-
-
-async def upload_documents(files: list[UploadFile] = File(...), project_id: str | None = Form(default=None)) -> list[dict[str, Any]]:
-    if project_id and services().workspace.get(Project, project_id) is None:
-        raise HTTPException(status_code=422, detail=SELECTED_PROJECT_NOT_FOUND_ERROR)
-    uploaded: list[Document] = []
-    try:
-        for file in files:
-            document, created = services().knowledge.upload(file.filename or "document.pdf", await file.read(), project_id)
-            if created or document.status != "ready":
-                enqueue_document_index(document)
-            uploaded.append(document)
-            if project_id:
-                record_project_activity(project_id, "document.uploaded", "document", document.id, f"Đã thêm tài liệu {document.original_name}.")
-    except (ValueError, RuntimeError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    jobs = BackgroundJobRepository(services().chats.database)
-    return [document_json(item, jobs.latest_for_document(item.id)) for item in uploaded]
-
-
-def reindex_document(document_id: str) -> dict[str, Any]:
-    document = next((item for item in services().knowledge.list_documents() if item.id == document_id), None)
-    if document is None:
-        raise HTTPException(status_code=404, detail=DOCUMENT_NOT_FOUND_ERROR)
-    job = enqueue_document_index(document)
-    return document_json(document, job)
-
-
-def delete_document(document_id: str) -> None:
-    with services().chats.database.session() as session:
-        document = session.get(Document, document_id)
-        if document is None:
-            raise HTTPException(status_code=404, detail=DOCUMENT_NOT_FOUND_ERROR)
-        project_id, document_name = document.project_id, document.original_name
-        jobs = session.scalars(
-            select(BackgroundJob).where(
-                BackgroundJob.type == "document_index",
-                BackgroundJob.dedupe_key == f"document:{document.id}",
-                BackgroundJob.status.in_(("queued", "running")),
-            )
-        ).all()
-        for job in jobs:
-            job.status, job.locked_at, job.last_error = "cancelled", None, "Tài liệu đã bị xóa."
-        queue_file_cleanup(session, [{"storage": "knowledge", "stored_name": document.stored_name, "storage_provider": document.storage_provider, "storage_file_id": document.storage_file_id}], f"document-cleanup:{document.id}")
-        session.delete(document)
-        session.commit()
-    if project_id:
-        record_project_activity(project_id, "document.deleted", "document", document_id, f"Đã xóa tài liệu {document_name}.")
-
-
-def list_projects() -> list[dict[str, Any]]:
-    return [project_json(item) for item in services().workspace.list(Project)]
-
-
-def create_project(payload: ProjectRequest) -> dict[str, Any]:
-    project = services().workspace.create(Project, **payload.model_dump())
-    record_project_activity(project.id, "project.created", "project", project.id, f"Đã tạo Project {project.name}.")
-    return project_json(project)
-
-
-def get_project(project_id: str) -> dict[str, Any]:
-    project = services().workspace.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail=PROJECT_NOT_FOUND_ERROR)
-    with services().chats.database.session() as session:
-        project_chats = list(session.scalars(select(Chat).where(Chat.project_id == project_id).order_by(Chat.updated_at.desc())))
-        project_documents = list(session.scalars(select(Document).where(Document.project_id == project_id).order_by(Document.created_at.desc())))
-        project_assets = list(session.scalars(select(LibraryAsset).where(LibraryAsset.project_id == project_id).order_by(LibraryAsset.created_at.desc())))
-        project_schedules = list(session.scalars(select(Schedule).where(Schedule.project_id == project_id).order_by(Schedule.starts_at.desc())))
-    jobs = BackgroundJobRepository(services().chats.database)
-    scopes = services().workspace.connector_scopes(project_id)
-    activity = services().workspace.project_activity(project_id)
-    actor_ids = [item.actor_user_id for item in activity if item.actor_user_id]
-    with services().chats.database.session() as session:
-        actors = {item.id: item for item in session.scalars(select(User).where(User.id.in_(actor_ids))).all()} if actor_ids else {}
-    return {"project": project_json(project), "chats": [chat_json(item) for item in project_chats[:8]], "documents": [document_json(item, jobs.latest_for_document(item.id)) for item in project_documents], "assets": [library_asset_json(item) for item in project_assets[:12]], "projectSources": [library_asset_json(item) for item in project_assets if item.is_project_source], "schedules": [schedule_json(item) for item in project_schedules[:8]], "activity": [project_activity_json(item, actors.get(item.actor_user_id)) for item in activity], "connectorScopes": [{"connectorSlug": item.connector_slug, "config": item.config} for item in scopes]}
-
-
-def save_project_connector_scope(project_id: str, payload: ProjectConnectorScopeRequest) -> dict[str, Any]:
-    if services().workspace.get(Project, project_id) is None:
-        raise HTTPException(status_code=404, detail=PROJECT_NOT_FOUND_ERROR)
-    scope = services().workspace.save_connector_scope(project_id, payload.connector_slug, payload.config)
-    record_project_activity(project_id, "connector.scope_updated", "connector", scope.id, f"Đã cập nhật nguồn {payload.connector_slug} cho Project.")
-    return {"connectorSlug": scope.connector_slug, "config": scope.config}
-
-
-def create_external_action_proposal(payload: ExternalActionProposalRequest) -> dict[str, Any]:
-    asset = services().library.ensure_remote(payload.asset_id)
-    if asset is None:
-        raise HTTPException(status_code=404, detail=ARTIFACT_NOT_FOUND_ERROR)
-    proposal = services().workspace.create_external_proposal(payload.action_type, {"assetId": asset.id, "name": asset.name, "folderId": payload.folder_id}, asset.project_id)
-    record_project_activity(asset.project_id, "external_action.proposed", "artifact", asset.id, f"Đang chờ xác nhận upload {asset.name} lên Google Drive.")
-    return {"proposalId": proposal.id, "status": proposal.status, "actionType": proposal.action_type, "assetId": asset.id, "name": asset.name, "folderId": payload.folder_id, "expiresAt": proposal.expires_at.isoformat()}
-
-
-def confirm_external_action_proposal(proposal_id: str) -> dict[str, Any]:
-    proposal = services().workspace.claim_external_proposal(proposal_id)
-    if proposal is None:
-        raise HTTPException(status_code=409, detail="Đề xuất đã hết hạn hoặc đã được xử lý.")
-    if proposal.action_type != "google_drive_upload":
-        raise HTTPException(status_code=422, detail="Loại action chưa hỗ trợ.")
-    asset_id = str(proposal.config.get("assetId") or "")
-    asset = services().library.ensure_remote(asset_id)
-    if asset is None:
-        raise HTTPException(status_code=404, detail=ARTIFACT_NOT_FOUND_ERROR)
-    try:
-        data = services().library.storage.read(asset.storage_provider, asset.stored_name, asset.storage_file_id)
-        result = services().google_workspace.upload_drive_file(asset.name, data, asset.mime_type, proposal.config.get("folderId"))
-    except GoogleConnectorError as exc:
-        services().workspace.finish_external_proposal(proposal.id, str(exc))
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        services().workspace.finish_external_proposal(proposal.id, str(exc))
-        raise HTTPException(status_code=502, detail="Không thể upload lên Google Drive.") from exc
-    services().workspace.finish_external_proposal(proposal.id)
-    record_project_activity(asset.project_id, "external_action.completed", "artifact", asset.id, f"Đã upload {asset.name} lên Google Drive sau xác nhận.")
-    return {"proposalId": proposal.id, "status": "completed", "result": result}
-
-
-def update_project(project_id: str, payload: ProjectRequest) -> dict[str, Any]:
-    item = services().workspace.update(Project, project_id, **payload.model_dump())
-    if item is None:
-        raise HTTPException(status_code=404, detail=PROJECT_NOT_FOUND_ERROR)
-    record_project_activity(project_id, "project.updated", "project", project_id, f"Đã cập nhật Project {item.name}.")
-    return project_json(item)
-
-
-def delete_project(project_id: str, payload: DeleteProjectRequest) -> dict[str, Any]:
-    try:
-        return _delete_project_service(services().chats.database, project_id, payload.confirm_name, queue_file_cleanup, PROJECT_NOT_FOUND_ERROR)
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-def list_schedules() -> list[dict[str, Any]]:
-    return [schedule_json(item) for item in services().workspace.list(Schedule)]
-
-
-def create_schedule(payload: ScheduleRequest) -> dict[str, Any]:
-    if payload.ends_at and payload.ends_at < payload.starts_at:
-        raise HTTPException(status_code=422, detail="Thời điểm kết thúc phải sau thời điểm bắt đầu.")
-    if payload.project_id and services().workspace.get(Project, payload.project_id) is None:
-        raise HTTPException(status_code=422, detail=SELECTED_PROJECT_NOT_FOUND_ERROR)
-    values = payload.model_dump()
-    try:
-        values["provider"], values["model"] = resolve_schedule_selection(payload.provider, payload.model, current_user_id.get())
-    except (ValueError, CredentialError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    values["next_run_at"] = values["next_run_at"] or values["starts_at"]
-    schedule = services().workspace.create(Schedule, **values)
-    if schedule.project_id:
-        record_project_activity(schedule.project_id, "schedule.created", "schedule", schedule.id, f"Đã tạo lịch {schedule.title}.")
-    return schedule_json(schedule)
-
-
-def _schedule_proposal_block(session, chat_id: str, proposal_id: str):
-    messages = session.scalars(
-        select(ChatMessage).where(ChatMessage.chat_id == chat_id, ChatMessage.role == "assistant").order_by(ChatMessage.position).with_for_update()
-    ).all()
-    for message in messages:
-        blocks = deepcopy(message.content_blocks or [])
-        for block in blocks:
-            config = block.get("config") if isinstance(block, dict) else None
-            if isinstance(config, dict) and block.get("type") == "schedule-proposal" and config.get("proposalId") == proposal_id:
-                return message, blocks, config
-    raise HTTPException(status_code=404, detail="Không tìm thấy đề xuất lịch trình.")
-
-
-def _confirm_schedule_proposal(session, source_chat: Chat, message: ChatMessage, blocks: list[dict], config: dict, proposal_id: str) -> dict[str, Any]:
-    status = config.get("status")
-    if status == "confirmed":
-        return {"status": "confirmed", "proposalId": proposal_id, "scheduleId": config.get("scheduleId")}
-    if status != "pending":
-        raise HTTPException(status_code=409, detail="Đề xuất này đã bị hủy.")
-    try:
-        proposal = ScheduleProposalPayload.model_validate(config)
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail="Đề xuất lịch trình không hợp lệ.") from exc
-    schedule = Schedule(title=proposal.title, prompt=proposal.prompt, starts_at=proposal.starts_at, recurrence=proposal.recurrence, timezone=proposal.timezone, project_id=config.get("projectId"), provider=source_chat.provider, model=source_chat.model, status="active", next_run_at=proposal.starts_at)
-    session.add(schedule)
-    session.flush()
-    config.update(status="confirmed", scheduleId=schedule.id)
-    message.content_blocks = blocks
-    session.commit()
-    return {"status": "confirmed", "proposalId": proposal_id, "scheduleId": schedule.id, "schedule": schedule_json(schedule)}
-
-
-def mutate_schedule_proposal(chat_id: str, proposal_id: str, action: Literal["confirm", "dismiss"]) -> dict[str, Any]:
-    """Confirm/dismiss exactly one content block, atomically with Schedule creation."""
-    source_chat = services().chats.get(chat_id)
-    if source_chat is None:
-        raise HTTPException(status_code=404, detail=CHAT_NOT_FOUND_ERROR)
-    with services().chats.database.session() as session:
-        message, blocks, config = _schedule_proposal_block(session, chat_id, proposal_id)
-        if action == "confirm":
-            return _confirm_schedule_proposal(session, source_chat, message, blocks, config, proposal_id)
-        if config.get("status") == "pending":
-            config["status"] = "dismissed"
-            message.content_blocks = blocks
-            session.commit()
-        return {"status": config.get("status"), "proposalId": proposal_id}
-
-
-def confirm_chat_schedule_proposal(chat_id: str, proposal_id: str) -> dict[str, Any]:
-    return mutate_schedule_proposal(chat_id, proposal_id, "confirm")
-
-
-def dismiss_chat_schedule_proposal(chat_id: str, proposal_id: str) -> dict[str, Any]:
-    return mutate_schedule_proposal(chat_id, proposal_id, "dismiss")
-
-
-def _validate_schedule_update(current: Schedule, values: dict[str, Any]) -> None:
-    starts_at = values.get("starts_at", current.starts_at)
-    ends_at = values.get("ends_at", current.ends_at)
-    if ends_at and ends_at < starts_at:
-        raise HTTPException(status_code=422, detail="Thời điểm kết thúc phải sau thời điểm bắt đầu.")
-    project_id = values.get("project_id", current.project_id)
-    if project_id and services().workspace.get(Project, project_id) is None:
-        raise HTTPException(status_code=422, detail=SELECTED_PROJECT_NOT_FOUND_ERROR)
-    if values.get("status") == "active" and current.status == "completed" and current.recurrence == "once":
-        raise HTTPException(status_code=422, detail="Lịch một lần đã hoàn tất; hãy tạo lịch mới để chạy lại.")
-
-
-def _resolve_schedule_update_model(current: Schedule, values: dict[str, Any]) -> None:
-    if not {"provider", "model"}.intersection(values):
-        return
-    provider = values.get("provider", current.provider)
-    model = values.get("model")
-    if "model" not in values:
-        model = current.model if "provider" not in values else None
-    try:
-        values["provider"], values["model"] = resolve_schedule_selection(provider, model, current_user_id.get())
-    except (ValueError, CredentialError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-def _reset_next_run_if_timing_changed(current: Schedule, values: dict[str, Any]) -> None:
-    timing_changed = any(key in values and values[key] != getattr(current, key) for key in ("starts_at", "recurrence"))
-    if timing_changed and "next_run_at" not in values:
-        values["next_run_at"] = values.get("starts_at", current.starts_at)
-
-
-def update_schedule(schedule_id: str, payload: ScheduleUpdateRequest) -> dict[str, Any]:
-    current = services().workspace.get(Schedule, schedule_id)
-    if current is None:
-        raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND_ERROR)
-    values = payload.model_dump(exclude_unset=True)
-    _validate_schedule_update(current, values)
-    _resolve_schedule_update_model(current, values)
-    _reset_next_run_if_timing_changed(current, values)
-    item = services().workspace.update(Schedule, schedule_id, **values)
-    if item and {"provider", "model"}.intersection(values) and item.chat_id:
-        services().chats.update(item.chat_id, provider=item.provider, model=item.model)
-    if item and item.project_id:
-        record_project_activity(item.project_id, "schedule.updated", "schedule", item.id, f"Đã cập nhật lịch {item.title}.")
-    return schedule_json(item)
-
-
-def delete_schedule(schedule_id: str) -> None:
-    current = services().workspace.get(Schedule, schedule_id)
-    if current is None or not services().workspace.delete(Schedule, schedule_id):
-        raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND_ERROR)
-    if current.project_id:
-        record_project_activity(current.project_id, "schedule.deleted", "schedule", schedule_id, f"Đã xóa lịch {current.title}.")
-
-
-def list_schedule_runs(schedule_id: str, limit: int = Query(default=30, ge=1, le=100)) -> list[dict[str, Any]]:
-    if services().workspace.get(Schedule, schedule_id) is None:
-        raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND_ERROR)
-    return [schedule_run_json(item) for item in ScheduleRepository(services().chats.database).list_runs(schedule_id, limit)]
-
-
-def resend_schedule_run_email(schedule_id: str, run_id: str) -> dict[str, Any]:
-    """Retry only the notification of a finished run, never the AI work itself."""
-    schedule = services().workspace.get(Schedule, schedule_id)
-    if schedule is None:
-        raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND_ERROR)
-    runs = ScheduleRepository(services().chats.database)
-    run = runs.get_run(schedule_id, run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Không tìm thấy lần chạy.")
-    if run.status != "succeeded":
-        raise HTTPException(status_code=409, detail="Chỉ gửi lại email cho lần chạy đã hoàn tất.")
-    if run.email_status == "sent":
-        raise HTTPException(status_code=409, detail="Email của lần chạy này đã được gửi.")
-    user = services().auth.repository.get_user(current_user_id.get())
-    email = services().email
-    if not email.enabled or user is None or not user.email:
-        raise HTTPException(status_code=422, detail="Chưa cấu hình SMTP hoặc tài khoản không có email.")
-    subject, body = schedule_run_email(
-        schedule.title,
-        run.finished_at or run.started_at,
-        run.summary,
-        public_chat_url(services().settings.app_web_url, schedule.chat_id) if schedule.chat_id else None,
-    )
-    try:
-        email.send(user.email, subject, body)
-    except Exception as exc:  # noqa: BLE001
-        runs.record_email(run_id, status="failed", error=str(exc))
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return schedule_run_json(runs.record_email(run_id, status="sent"))
-
-
-def run_schedule_now(schedule_id: str) -> dict[str, str]:
-    schedule = services().workspace.get(Schedule, schedule_id)
-    if schedule is None:
-        raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND_ERROR)
-    from agent_core.jobs.scheduler import ScheduleWorker
-
-    worker = ScheduleWorker(services())
-    try:
-        prepared = worker.start_manual(schedule_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if prepared is None:
-        raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND_ERROR)
-    scheduled, chat, run_id = prepared
-    Thread(target=worker.execute, args=(scheduled, run_id, True), daemon=True).start()
-    return {"status": "running", "chatId": chat.id, "runId": run_id}
 
 
 def connector_audit_json(item) -> dict[str, Any]:
