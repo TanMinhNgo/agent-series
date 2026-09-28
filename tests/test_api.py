@@ -12,27 +12,31 @@ import api.main as main_module
 from pydantic import ValidationError
 from types import SimpleNamespace
 
-from api.main import (
+import api.modules.chats.module as chat_runtime
+from agent_core.ai.history import created_artifact_ids, ollama_recent_history, persisted_history, recent_chat_history
+from api.contracts.requests import (
     BranchChatRequest,
     ChatRequest,
+    CollectionDocumentsRequest,
     FeedbackRequest,
+    KnowledgeCollectionRequest,
     ProjectRequest,
     ScheduleRequest,
     ScheduleProposalPayload,
     ScheduleUpdateRequest,
     ShareRequest,
-    app,
-    created_artifact_ids,
-    detach_response_sources,
-    make_agent,
-    message_json,
-    model_error_message,
-    ollama_recent_history,
-    small_talk_response,
-    persisted_history,
-    project_activity_json,
-    recent_chat_history,
+    UpdateArtifactRequest,
+    UpdateChatRequest,
+    WorkspaceInvitationRequest,
 )
+from api.main import app
+from api.modules.chats.module import ChatRunRegistry, detach_response_sources
+from api.modules.chats.runtime.generation import is_ollama_tool_echo, model_error_message, should_search_web, small_talk_response
+from api.modules.common.serializers import chat_json, project_activity_json
+
+chat_module = main_module.chat_module
+make_agent = chat_module.make_agent
+message_json = chat_module.message_json
 from agent_core.jobs.background import BackgroundWorker
 from agent_core.content.artifacts import ArtifactEditContext, ArtifactService, extract_artifact_text
 from agent_core.integrations.plugin_catalog import CATALOG, find_catalog_plugin
@@ -219,8 +223,8 @@ def test_project_activity_endpoint_mutations_are_recorded(monkeypatch) -> None:
     monkeypatch.setattr(main_module, "_enqueue_artifact_index", lambda *_args: None)
     monkeypatch.setattr(main_module, "_selected_settings", lambda *_args: None)
 
-    route("update_library_asset")("asset-1", main_module.UpdateArtifactRequest(isProjectSource=True))
-    updated = route("update_chat")("chat-1", main_module.UpdateChatRequest(projectId="project-1"))
+    route("update_library_asset")("asset-1", UpdateArtifactRequest(isProjectSource=True))
+    updated = route("update_chat")("chat-1", UpdateChatRequest(projectId="project-1"))
     route("share_chat")("chat-1")
     route("revoke_share")("chat-1")
     main_module.record_workspace_activity("workspace.invitation_created", "workspace_invitation", "invite-1", "Đã mời thành viên.")
@@ -269,10 +273,10 @@ def test_project_collections_and_overview_record_and_return_project_data(monkeyp
     service = SimpleNamespace(workspace=Workspace(), knowledge=Knowledge(), chats=SimpleNamespace(database=database))
     use_services(monkeypatch, service)
 
-    payload = main_module.KnowledgeCollectionRequest(name="Nguồn")
+    payload = KnowledgeCollectionRequest(name="Nguồn")
     assert route("create_collection")("project-1", payload)["id"] == "collection-1"
     assert route("update_collection")("collection-1", payload)["id"] == "collection-1"
-    assert route("set_collection_documents")("collection-1", main_module.CollectionDocumentsRequest(documentIds=[]))["documentIds"] == []
+    assert route("set_collection_documents")("collection-1", CollectionDocumentsRequest(documentIds=[]))["documentIds"] == []
     route("delete_collection")("collection-1")
     detail = route("get_project")("project-1")
 
@@ -300,7 +304,7 @@ def test_workspace_invitation_activity_is_recorded(monkeypatch) -> None:
     try:
         owner = SimpleNamespace(user_id="owner-1", role="owner")
         request = SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id="owner-1"), workspace_membership=owner))
-        result = route("create_workspace_invitation")(main_module.WorkspaceInvitationRequest(email="member@example.com"), request)
+        result = route("create_workspace_invitation")(WorkspaceInvitationRequest(email="member@example.com"), request)
         route("cancel_workspace_invitation")("invite-1", request)
     finally:
         main_module.current_workspace_id.reset(token)
@@ -349,7 +353,7 @@ def test_chat_request_accepts_a_client_run_id() -> None:
 
 
 def test_chat_run_registry_cancels_only_the_owner() -> None:
-    registry = main_module.ChatRunRegistry()
+    registry = ChatRunRegistry()
     event = registry.start("chat-1", "run-1", "user-1")
 
     assert not registry.cancel("chat-1", "run-1", "user-2")
@@ -358,7 +362,7 @@ def test_chat_run_registry_cancels_only_the_owner() -> None:
 
 
 def test_chat_run_registry_serializes_turns_for_one_chat() -> None:
-    registry = main_module.ChatRunRegistry()
+    registry = ChatRunRegistry()
     registry.start("chat-1", "run-1", "user-1")
     with pytest.raises(ValueError, match="đang tạo phản hồi"):
         registry.start("chat-1", "run-2", "user-1")
@@ -371,7 +375,7 @@ def test_rejected_chat_stream_does_not_register_a_run() -> None:
     from fastapi import HTTPException
     from api.modules.chats.controller import ChatStreamController
 
-    registry = main_module.ChatRunRegistry()
+    registry = ChatRunRegistry()
     chat = Chat(id="chat-1", user_id="user-1", provider="openai", model="test", mode="plan")
     services = SimpleNamespace(chats=SimpleNamespace(get=lambda _: chat),
         media=SimpleNamespace(for_prompt=lambda _: []),
@@ -388,7 +392,7 @@ def test_disconnected_stream_cancels_its_agent_turn() -> None:
     from agent_core.ai.agent import AgentCancelled
     from agent_core.persistence.store import current_workspace_id
 
-    registry = main_module.ChatRunRegistry()
+    registry = ChatRunRegistry()
     cancelled = registry.start("chat-1", "run-1", "user-1")
     chat = Chat(id="chat-1", user_id="user-1", provider="openai", model="test")
     def blocked_turn(*args):
@@ -416,8 +420,8 @@ def test_disconnected_stream_cancels_its_agent_turn() -> None:
 
 
 def test_ollama_web_search_ignores_greetings_and_detects_fresh_questions() -> None:
-    assert not main_module.should_search_web("Hôm nay bạn khỏe không?")
-    assert main_module.should_search_web("Tin tức AI mới nhất hôm nay là gì?")
+    assert not should_search_web("Hôm nay bạn khỏe không?")
+    assert should_search_web("Tin tức AI mới nhất hôm nay là gì?")
 
 
 def test_ollama_small_talk_uses_a_natural_fast_response() -> None:
@@ -441,16 +445,16 @@ def test_ollama_history_is_limited_without_mutating_persisted_messages() -> None
 
 
 def test_ollama_tool_echo_is_rejected_before_rendering() -> None:
-    assert main_module.is_ollama_tool_echo('{"type":"function","function":{"name":"calculator"}}')
-    assert not main_module.is_ollama_tool_echo("Đây là câu trả lời bình thường.")
+    assert is_ollama_tool_echo('{"type":"function","function":{"name":"calculator"}}')
+    assert not is_ollama_tool_echo("Đây là câu trả lời bình thường.")
 
 
 def test_stream_chat_answers_ollama_small_talk_without_model_or_memory(monkeypatch) -> None:
     chat = Chat(id="chat-1", user_id="user-1", provider="ollama", model="llama3.2:3b")
     saved: list[dict] = []
-    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(chats=SavingChats(chat, saved)))
+    monkeypatch.setattr(chat_module, "services", lambda: SimpleNamespace(chats=SavingChats(chat, saved)))
 
-    events = list(main_module.stream_chat("chat-1", "cảm ơn nhiều nha", []))
+    events = list(chat_module.stream_chat("chat-1", "cảm ơn nhiều nha", []))
 
     assert saved[-1]["content"] == "Không có gì nha, mình rất vui được giúp bạn."
     assert any("event: message" in event for event in events)
@@ -459,10 +463,10 @@ def test_stream_chat_answers_ollama_small_talk_without_model_or_memory(monkeypat
 def test_stream_chat_answers_cloud_small_talk_without_provider_call(monkeypatch) -> None:
     chat = Chat(id="chat-1", user_id="user-1", provider="openai", model="gpt-5.6-terra")
     saved: list[dict] = []
-    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(chats=SavingChats(chat, saved)))
-    monkeypatch.setattr(main_module, "build_client", lambda _settings: (_ for _ in ()).throw(AssertionError("LLM must not run")))
+    monkeypatch.setattr(chat_module, "services", lambda: SimpleNamespace(chats=SavingChats(chat, saved)))
+    monkeypatch.setattr(chat_runtime, "build_client", lambda _settings: (_ for _ in ()).throw(AssertionError("LLM must not run")))
 
-    events = list(main_module.stream_chat("chat-1", "Dạo này ổn không?", []))
+    events = list(chat_module.stream_chat("chat-1", "Dạo này ổn không?", []))
 
     assert saved[-1]["content"] == "Mình vẫn ổn và luôn sẵn sàng hỗ trợ bạn. Còn bạn thì sao?"
     assert any("event: done" in event for event in events)
@@ -470,11 +474,11 @@ def test_stream_chat_answers_cloud_small_talk_without_provider_call(monkeypatch)
 
 def test_stream_chat_does_not_persist_a_pre_cancelled_run(monkeypatch) -> None:
     chat = Chat(id="chat-1", user_id="user-1", provider="openai", model="gpt-5.6-terra")
-    monkeypatch.setattr(main_module, "services", lambda: SimpleNamespace(chats=SimpleNamespace(get=lambda _id: chat)))
+    monkeypatch.setattr(chat_module, "services", lambda: SimpleNamespace(chats=SimpleNamespace(get=lambda _id: chat)))
     cancel_event = Event()
     cancel_event.set()
 
-    events = list(main_module.stream_chat("chat-1", "Xin chào", [], cancel_event=cancel_event))
+    events = list(chat_module.stream_chat("chat-1", "Xin chào", [], cancel_event=cancel_event))
 
     assert any("event: cancelled" in event for event in events)
 
@@ -531,7 +535,7 @@ def test_chat_json_exposes_unread_state() -> None:
         collection_id=None,
     )
 
-    assert main_module.chat_json(chat)["isUnread"] is True
+    assert chat_json(chat)["isUnread"] is True
 
 
 def test_schedule_worker_restores_owner_and_replaces_legacy_chat(monkeypatch) -> None:
@@ -1084,11 +1088,11 @@ def test_stream_chat_restores_the_chat_owner_in_its_worker_thread(monkeypatch) -
         def replace_history(self, _chat_id, _history): pass
 
     service = agent_services(Chats())
-    monkeypatch.setattr(main_module, "services", lambda: service)
-    monkeypatch.setattr(main_module, "make_agent", lambda *_args, **_kwargs: FixedReplyAgent("RAG là gì?", "world"))
-    monkeypatch.setattr(main_module, "BackgroundJobRepository", StubJobs)
+    monkeypatch.setattr(chat_module, "services", lambda: service)
+    monkeypatch.setattr(chat_module, "make_agent", lambda *_args, **_kwargs: FixedReplyAgent("RAG là gì?", "world"))
+    monkeypatch.setattr(chat_runtime, "BackgroundJobRepository", StubJobs)
 
-    events = list(main_module.stream_chat("chat-1", "RAG là gì?", []))
+    events = list(chat_module.stream_chat("chat-1", "RAG là gì?", []))
 
     assert observed == ["user-1"]
     message_event = next(event for event in events if 'event: message' in event)
@@ -1105,14 +1109,14 @@ def test_stream_chat_retrieves_the_global_library_before_creating_the_agent(monk
             return "[Nguồn 1: [rag.md](/api/documents/doc-1/file), đoạn 1]\\nRAG dùng truy hồi."
 
     service = agent_services(HistoryChats(chat, []), knowledge=Knowledge())
-    monkeypatch.setattr(main_module, "services", lambda: service)
+    monkeypatch.setattr(chat_module, "services", lambda: service)
     def make_agent_stub(*args, **kwargs):
         observed["context"] = args[3]
         return FixedReplyAgent("RAG là gì?", "RAG")
-    monkeypatch.setattr(main_module, "make_agent", make_agent_stub)
-    monkeypatch.setattr(main_module, "BackgroundJobRepository", StubJobs)
+    monkeypatch.setattr(chat_module, "make_agent", make_agent_stub)
+    monkeypatch.setattr(chat_runtime, "BackgroundJobRepository", StubJobs)
 
-    list(main_module.stream_chat("chat-1", "RAG là gì?", []))
+    list(chat_module.stream_chat("chat-1", "RAG là gì?", []))
 
     assert observed["search"] == ("RAG là gì?", 4, None, None)
     assert "RAG dùng truy hồi" in str(observed["context"])
@@ -1200,10 +1204,10 @@ def test_make_agent_does_not_mutate_the_history_being_persisted(monkeypatch) -> 
         media=SimpleNamespace(hydrate_history=lambda value: value),
         knowledge=SimpleNamespace(),
     )
-    monkeypatch.setattr(main_module, "_selected_settings", lambda *_args: SimpleNamespace(max_steps=5))
-    monkeypatch.setattr(main_module, "build_client", lambda _settings: object())
-    monkeypatch.setattr(main_module, "build_knowledge_tool", lambda *_args: None)
-    monkeypatch.setattr(main_module, "build_default_registry", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(chat_runtime, "selected_settings", lambda *_args: SimpleNamespace(max_steps=5))
+    monkeypatch.setattr(chat_runtime, "build_client", lambda _settings: object())
+    monkeypatch.setattr(chat_runtime, "build_knowledge_tool", lambda *_args: None)
+    monkeypatch.setattr(chat_runtime, "build_default_registry", lambda *_args, **_kwargs: object())
 
     agent = make_agent(services, chat, history=history)
     agent.history.append({"role": "assistant", "content": "Câu trả lời mới"})
@@ -1233,12 +1237,12 @@ def test_make_agent_uses_a_version_only_tool_for_an_artifact_edit(monkeypatch) -
             or SimpleNamespace(id="asset-v2", artifact_id="artifact-1", name="ke-hoach.md", version=2),
         ),
     )
-    monkeypatch.setattr(main_module, "_selected_settings", lambda *_args: SimpleNamespace(max_steps=5))
-    monkeypatch.setattr(main_module, "build_client", lambda _settings: object())
-    monkeypatch.setattr(main_module, "build_knowledge_tool", lambda *_args: None)
-    monkeypatch.setattr(main_module, "build_default_registry", lambda _knowledge, extra_tools: captured_tools.extend(extra_tools) or object())
-    monkeypatch.setattr(main_module, "enqueue_artifact_index", lambda *_args: None)
-    monkeypatch.setattr(main_module, "library_asset_json", lambda asset: {"id": asset.id, "artifactId": asset.artifact_id})
+    monkeypatch.setattr(chat_runtime, "selected_settings", lambda *_args: SimpleNamespace(max_steps=5))
+    monkeypatch.setattr(chat_runtime, "build_client", lambda _settings: object())
+    monkeypatch.setattr(chat_runtime, "build_knowledge_tool", lambda *_args: None)
+    monkeypatch.setattr(chat_runtime, "build_default_registry", lambda _knowledge, extra_tools: captured_tools.extend(extra_tools) or object())
+    monkeypatch.setattr(chat_runtime, "enqueue_artifact_index", lambda *_args: None)
+    monkeypatch.setattr(chat_runtime, "library_asset_json", lambda asset: {"id": asset.id, "artifactId": asset.artifact_id})
 
     make_agent(services, chat, history=[], artifact_edit=edit)
 
@@ -1555,7 +1559,7 @@ def test_exhausted_schedule_does_not_retry_or_send_success_email(monkeypatch):
 
 def test_api_agent_translates_domain_validation_error(monkeypatch):
     from fastapi import HTTPException
-    monkeypatch.setattr(main_module, "_selected_settings", lambda *_args: (_ for _ in ()).throw(ValueError("Model disabled")))
+    monkeypatch.setattr(chat_runtime, "selected_settings", lambda *_args: (_ for _ in ()).throw(ValueError("Model disabled")))
     with pytest.raises(HTTPException) as captured:
         make_agent(SimpleNamespace(), Chat(provider="openai", model="disabled"))
     assert captured.value.status_code == 422

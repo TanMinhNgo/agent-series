@@ -62,3 +62,19 @@ def project_activity_json(item: Any, actor: User | None = None) -> dict[str, Any
 
 def plugin_json(item: Plugin) -> dict[str, Any]:
     return {"id": item.id, "slug": item.slug, "name": item.name, "description": item.description, "enabled": item.enabled, "config": item.config, "catalogSlug": item.catalog_slug, "category": item.category, "capabilities": item.capabilities, "connectionStatus": item.connection_status, "createdAt": item.created_at.isoformat(), "updatedAt": item.updated_at.isoformat()}
+
+
+def workspace_json(item, membership) -> dict[str, Any]:
+    return {"id": item.id, "name": item.name, "isPersonal": item.is_personal, "role": membership.role}
+
+
+def invitation_json(item) -> dict[str, Any]:
+    return {"id": item.id, "email": item.email, "role": item.role, "expiresAt": item.expires_at.isoformat(), "createdAt": item.created_at.isoformat()}
+
+
+def credential_json(item) -> dict[str, Any]:
+    return {"provider": item.provider, "keyHint": item.key_hint, "validatedAt": item.validated_at.isoformat(), "updatedAt": item.updated_at.isoformat()}
+
+
+def connector_audit_json(item) -> dict[str, Any]:
+    return {"id": item.id, "eventType": item.event_type, "toolName": item.tool_name, "summary": item.summary, "createdAt": item.created_at.isoformat()}
