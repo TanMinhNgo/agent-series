@@ -54,6 +54,7 @@ class User(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     display_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     role: Mapped[str] = mapped_column(String(24), default="member")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -273,6 +274,11 @@ class UserPreference(UserOwned, Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     style_scores: Mapped[dict] = mapped_column(JSON, default=dict)
     topic_counts: Mapped[dict] = mapped_column(JSON, default=dict)
+    theme: Mapped[str] = mapped_column(String(16), default="system")
+    custom_instructions: Mapped[str] = mapped_column(Text, default="")
+    auto_learn: Mapped[bool] = mapped_column(Boolean, default=True)
+    default_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    default_model: Mapped[str | None] = mapped_column(String(160), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 

@@ -60,6 +60,18 @@ class AuthRepository:
             item = User(email=email, display_name=display_name, role=role)
             session.add(item); session.commit(); return item
 
+    def update_profile(self, user_id: str, *, display_name: str | None = None, avatar_url: str | None = None, update_avatar: bool = False) -> User:
+        with self.database.session() as session:
+            user = session.get(User, user_id, execution_options={"skip_user_scope": True})
+            if user is None:
+                raise ValueError("Không tìm thấy tài khoản.")
+            if display_name is not None:
+                user.display_name = display_name
+            if update_avatar:
+                user.avatar_url = avatar_url
+            session.commit()
+            return user
+
     def list_users(self, query: str | None, offset: int, limit: int) -> tuple[list[tuple[User, datetime | None]], int]:
         with self.database.session() as session:
             last_sign_in = select(AuthSession.user_id.label("user_id"), func.max(AuthSession.created_at).label("last_sign_in_at")).group_by(AuthSession.user_id).subquery()

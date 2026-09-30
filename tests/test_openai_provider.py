@@ -22,8 +22,12 @@ def _client(model: str):
     return client, completions
 
 
-def test_gpt_56_uses_current_completion_token_parameter():
-    client, completions = _client("gpt-5.6-terra")
+import pytest
+
+
+@pytest.mark.parametrize("model", ["gpt-5.6-terra", "gpt-6-sol"])
+def test_gpt_56_uses_current_completion_token_parameter(model):
+    client, completions = _client(model)
     assert client.complete("system", [], []).text == "ok"
     assert completions.kwargs["max_completion_tokens"] == 99
     assert "max_tokens" not in completions.kwargs

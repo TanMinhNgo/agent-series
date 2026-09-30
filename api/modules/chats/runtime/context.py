@@ -35,8 +35,6 @@ def load_generation_context(deps: ContextDependencies, app_services: Any, chat: 
 
 
 def load_memory_context(deps: ContextDependencies, app_services: Any, chat: Any, content: str, chat_id: str, events: Queue) -> str:
-    if chat.provider == "ollama":
-        return ""
     try:
         project = app_services.workspace.get(deps.project_model, chat.project_id) if chat.project_id else None
         return app_services.memory.recall(content, chat_id, chat.context_source_chat_id, project_id=chat.project_id, project_only=bool(project and project.memory_mode == "project_only"))

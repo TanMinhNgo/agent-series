@@ -29,7 +29,7 @@ def _dispatch_turn(deps: StreamDependencies, app_services: Any, chat: Any, chat_
     events.put(("status", {"message": "Agent đang suy nghĩ..."}))
     full_history = app_services.chats.history(chat_id)
     if getattr(chat, "mode", "standard") == "image":
-        deps.run_image_turn(app_services, chat_id, content, attachments, full_history, events, deps.message_json)
+        deps.run_image_turn(app_services, chat, chat_id, content, attachments, full_history, events, deps.message_json)
         return
     static_response = None if attachments or artifact_edit is not None else deps.small_talk_response(content)
     if static_response is not None:

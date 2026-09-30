@@ -24,8 +24,13 @@ class ChatCrudDependencies:
 def _selected_chat_settings(deps: ChatCrudDependencies, payload: CreateChatRequest) -> Any:
     settings = deps.services().settings
     available = deps.available_provider_models(deps.current_user_id.get())
-    provider = payload.provider or (settings.provider if settings.provider in available else next(iter(available), settings.provider))
-    model = payload.model or (settings.active_model if settings.active_model in available.get(provider, []) else (available.get(provider) or [settings.active_model])[0])
+    account = deps.services().personalization.settings(deps.current_user_id.get())
+    preferred_provider = account["defaultProvider"]
+    preferred_model = account["defaultModel"]
+    if preferred_model not in available.get(preferred_provider, []):
+        preferred_provider = preferred_model = None
+    provider = payload.provider or preferred_provider or (settings.provider if settings.provider in available else next(iter(available), settings.provider))
+    model = payload.model or (preferred_model if provider == preferred_provider else None) or (settings.active_model if settings.active_model in available.get(provider, []) else (available.get(provider) or [settings.active_model])[0])
     try:
         selected = deps.selected_settings(provider, model, deps.current_user_id.get())
     except (ValueError, CredentialError) as exc:

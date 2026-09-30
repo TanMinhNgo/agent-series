@@ -23,6 +23,7 @@ type Props = {
   editingArtifact?: LibraryAsset | null;
   onCancelArtifactEdit?: () => void;
   onStop?: () => void;
+  clearAttachmentsOnSubmit?: boolean;
   mode: 'standard' | 'plan' | 'deep' | 'research' | 'image';
   onModeChange: (mode: 'standard' | 'plan' | 'deep' | 'research' | 'image') => void;
   researchWeb: boolean;
@@ -42,6 +43,7 @@ export function ChatComposer({
   editingArtifact,
   onCancelArtifactEdit,
   onStop,
+  clearAttachmentsOnSubmit,
   mode,
   onModeChange,
   researchWeb,
@@ -170,6 +172,7 @@ export function ChatComposer({
         onSubmit={onSubmit}
         busy={busy}
         onStop={onStop}
+        clearAttachmentsOnSubmit={clearAttachmentsOnSubmit}
         placeholder={
           editingArtifact
             ? 'Mô tả thay đổi bạn muốn áp dụng cho file này...'

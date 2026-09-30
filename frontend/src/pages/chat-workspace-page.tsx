@@ -26,6 +26,8 @@ import { request } from '@/src/hooks/client';
 import { queryKeys } from '@/src/hooks/query-keys';
 import type { Chat, LibraryAsset, Message, Theme } from '@/src/types';
 import { SettingsApiKeysPage } from '@/src/pages/settings-api-keys-page';
+import { SettingsAccountPage } from '@/src/pages/settings-account-page';
+import { useAccountSettings } from '@/src/hooks/use-account-settings';
 import { statusForStreamEvent } from '@/src/pages/chat-stream-status';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -59,37 +61,25 @@ type ChatWorkspaceProps = {
   navigate: (to: string) => void;
 };
 
-const NEW_CHAT_SELECTION_KEY = 'agent-series.new-chat-selection';
 const ARTIFACT_PANEL_OPEN_KEY = 'agent-series.artifact-panel.open';
 const SELECTED_ARTIFACT_KEY = 'agent-series.artifact-panel.selected-artifact';
 const SIDEBAR_COLLAPSED_KEY = 'agent-series.sidebar.collapsed';
 
 type DraftSelection = { provider: string; model: string; mode: Chat['mode'] };
+type PendingFirstSend = {
+  chat: Chat;
+  content: string;
+  files: File[];
+  outgoing: Message;
+  artifactEdit: LibraryAsset | null;
+  researchWeb: boolean;
+};
 type TemplateDraft = {
   id?: string;
   name: string;
   content: string;
   projectId: string | null;
 };
-
-function savedNewChatSelection(): DraftSelection {
-  try {
-    const value = sessionStorage.getItem(NEW_CHAT_SELECTION_KEY);
-    if (!value) return { provider: '', model: '', mode: 'standard' };
-    const selection: unknown = JSON.parse(value);
-    if (
-      typeof selection === 'object' &&
-      selection !== null &&
-      typeof (selection as DraftSelection).provider === 'string' &&
-      typeof (selection as DraftSelection).model === 'string'
-    ) {
-      return { ...(selection as DraftSelection), mode: (selection as DraftSelection).mode || 'standard' };
-    }
-  } catch {
-    // A malformed browser value should fall back to the configured default.
-  }
-  return { provider: '', model: '', mode: 'standard' };
-}
 
 function savedArtifactPanelState() {
   try {
@@ -121,13 +111,14 @@ export function ChatWorkspace({
   navigate,
 }: ChatWorkspaceProps) {
   const auth = useAuth();
-  const [theme, setTheme] = useState<Theme>(
-    () => (localStorage.getItem('agent-series.theme') as Theme) || 'system',
-  );
+  const account = useAccountSettings();
+  const [themeOverride, setThemeOverride] = useState<Theme | null>(null);
+  const theme = themeOverride || account.settings.data?.theme || (localStorage.getItem('agent-series.theme') as Theme) || 'system';
   const [prompt, setPrompt] = useState('');
-  const [draftSelection, setDraftSelection] = useState(savedNewChatSelection);
+  const [draftSelection, setDraftSelection] = useState<DraftSelection>({ provider: '', model: '', mode: 'standard' });
   const [researchWeb, setResearchWeb] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [isCreatingChat, setIsCreatingChat] = useState(false);
   const [isResponding, setIsResponding] = useState(false);
   const [pendingUser, setPendingUser] = useState<Message | null>(null);
   const [uiError, setUiError] = useState<string | null>(null);
@@ -144,6 +135,7 @@ export function ChatWorkspace({
   // React state updates asynchronously, so `streamChat.isPending` alone cannot
   // stop an Enter key and a click (or two rapid clicks) from starting two turns.
   const sendLock = useRef(false);
+  const pendingFirstSend = useRef<{ chatId: string; run: () => void } | null>(null);
   const logoutToLogin = () => auth.logout.mutate(undefined, { onSuccess: () => navigate('/login') });
   const activeNavigation: SidebarNavigation | undefined = libraryPage
     ? 'library'
@@ -206,7 +198,7 @@ export function ChatWorkspace({
   const draftModels = config.data?.providers[draftProvider] || [];
   const draftModel = draftModels.includes(draftSelection.model)
     ? draftSelection.model
-    : draftModels[0] || config.data?.defaultModel || draftSelection.model;
+    : (draftProvider === config.data?.defaultProvider ? config.data?.defaultModel : undefined) || draftModels[0] || draftSelection.model;
   const activeMode = activeChat?.mode || draftSelection.mode;
 
   useEffect(() => {
@@ -317,13 +309,20 @@ export function ChatWorkspace({
     setPrompt('');
     setStatus(null);
     setRunwayChatId(null);
-    if (activeChat) {
-      const selection = { provider: activeChat.provider, model: activeChat.model, mode: activeChat.mode };
-      sessionStorage.setItem(NEW_CHAT_SELECTION_KEY, JSON.stringify(selection));
-      setDraftSelection(selection);
-    }
+    setDraftSelection({ provider: '', model: '', mode: 'standard' });
     setSidebarOpen(false);
     navigate('/');
+  };
+  const changeTheme = async (next: Theme) => {
+    setThemeOverride(next);
+    try {
+      const current = account.settings.data || (await account.settings.refetch()).data;
+      if (current) await account.save.mutateAsync({ ...current, theme: next });
+    } catch (reason) {
+      setUiError(reason instanceof Error ? reason.message : 'Không thể lưu chủ đề.');
+    } finally {
+      setThemeOverride(null);
+    }
   };
   const changeModel = async (model: string) => {
     if (!activeChat) {
@@ -441,47 +440,19 @@ export function ChatWorkspace({
     ]);
     return uploadedImages;
   };
-  const send = async (contentValue: string, files: File[]) => {
-    if (
-      (!contentValue.trim() && !files.length) ||
-      sendLock.current ||
-      createChat.isPending ||
-      chatActions.update.isPending ||
-      streamChat.isPending
-    )
-      return;
-    sendLock.current = true;
+  const finishSend = async ({
+    chat,
+    content,
+    files,
+    outgoing,
+    artifactEdit,
+    researchWeb: useWeb,
+  }: PendingFirstSend) => {
+    setIsCreatingChat(false);
     setIsResponding(true);
-    const content = contentValue.trim() || 'Hãy phân tích các tệp đính kèm này.';
-    const outgoing: Message = {
-      messageId: `optimistic-${crypto.randomUUID()}`,
-      role: 'user',
-      content,
-      optimistic: true,
-      createdAt: new Date().toISOString(),
-    };
     setPendingUser(outgoing);
-    const artifactEdit = editingArtifact;
-    setPrompt('');
-    setEditingArtifact(null);
-    setStatus(activeChat ? 'Agent đang suy nghĩ...' : 'Đang tạo cuộc trò chuyện...');
-    setUiError(null);
+    setStatus('Agent đang suy nghĩ...');
     try {
-      const chat =
-        activeChat ||
-        (await createChat.mutateAsync({
-          provider: draftProvider || undefined,
-          model: draftModel || undefined,
-          mode: draftSelection.mode,
-        }));
-      if (!activeChat) {
-        // Seed the route caches before starting uploads/SSE so the new chat
-        // frame renders first instead of waiting for the first AI event.
-        queryClient.setQueryData(queryKeys.chat(chat.id), chat);
-        queryClient.setQueryData(queryKeys.messages(chat.id), [outgoing]);
-        navigate(`/chat/${chat.id}`);
-      }
-      setStatus('Agent đang suy nghĩ...');
       const uploadedImages = await uploadAttachments(files, chat.projectId);
       await streamChat.mutateAsync({
         chatId: chat.id,
@@ -489,7 +460,7 @@ export function ChatWorkspace({
         runId: crypto.randomUUID(),
         attachments: uploadedImages,
         editAssetId: artifactEdit?.id,
-        researchWeb,
+        researchWeb: useWeb,
         optimisticMessageId: outgoing.messageId,
         onEvent: handleStreamEvent,
         onUserMessageQueued: () => {
@@ -506,6 +477,61 @@ export function ChatWorkspace({
       sendLock.current = false;
       setIsResponding(false);
       setPendingUser(null);
+    }
+  };
+  useEffect(() => {
+    const pending = pendingFirstSend.current;
+    if (!pending || chatId !== pending.chatId) return;
+    pendingFirstSend.current = null;
+    pending.run();
+  }, [chatId]);
+  const send = async (contentValue: string, files: File[]) => {
+    if (
+      (!contentValue.trim() && !files.length) ||
+      sendLock.current ||
+      createChat.isPending ||
+      chatActions.update.isPending ||
+      streamChat.isPending
+    )
+      return;
+    sendLock.current = true;
+    const content = contentValue.trim() || 'Hãy phân tích các tệp đính kèm này.';
+    const outgoing: Message = {
+      messageId: `optimistic-${crypto.randomUUID()}`,
+      role: 'user',
+      content,
+      optimistic: true,
+      createdAt: new Date().toISOString(),
+    };
+    const artifactEdit = editingArtifact;
+    setUiError(null);
+    const firstSend = { content, files, outgoing, artifactEdit, researchWeb };
+    if (activeChat) {
+      setPrompt('');
+      setEditingArtifact(null);
+      await finishSend({ ...firstSend, chat: activeChat });
+      return;
+    }
+    setIsCreatingChat(true);
+    try {
+      const chat = await createChat.mutateAsync({
+        provider: draftProvider || undefined,
+        model: draftModel || undefined,
+        mode: draftSelection.mode,
+      });
+      queryClient.setQueryData(queryKeys.chat(chat.id), chat);
+      queryClient.setQueryData(queryKeys.messages(chat.id), [outgoing]);
+      pendingFirstSend.current = {
+        chatId: chat.id,
+        run: () => void finishSend({ ...firstSend, chat }),
+      };
+      setPrompt('');
+      setEditingArtifact(null);
+      navigate(`/chat/${chat.id}`);
+    } catch (reason) {
+      sendLock.current = false;
+      setIsCreatingChat(false);
+      setUiError(reason instanceof Error ? reason.message : 'Không thể tạo cuộc trò chuyện.');
     }
   };
 
@@ -526,7 +552,7 @@ export function ChatWorkspace({
         onSelectChat={(chat: Chat) => {
           navigate(`/chat/${chat.id}`);
         }}
-        onThemeChange={setTheme}
+        onThemeChange={(next) => { void changeTheme(next); }}
         onRename={(chat, title) => void renameChat(chat, title)}
         onUpdate={(chat, values) => void updateChat(chat, values)}
         onDelete={(chat) => void deleteChat(chat)}
@@ -544,6 +570,7 @@ export function ChatWorkspace({
         }}
         user={auth.session.user}
         onOpenApiKeys={() => navigate('/settings/api-keys')}
+        onOpenSettings={() => navigate('/settings')}
         onLogout={logoutToLogin}
         workspaces={workspaces.data || []}
         activeWorkspaceId={activeWorkspaceId}
@@ -584,7 +611,7 @@ export function ChatWorkspace({
               setSidebarOpen(false);
               navigate(`/chat/${chat.id}`);
             }}
-            onThemeChange={setTheme}
+            onThemeChange={(next) => { void changeTheme(next); }}
             onRename={(chat, title) => void renameChat(chat, title)}
             onUpdate={(chat, values) => void updateChat(chat, values)}
             onDelete={(chat) => void deleteChat(chat)}
@@ -609,6 +636,10 @@ export function ChatWorkspace({
             onOpenApiKeys={() => {
               setSidebarOpen(false);
               navigate('/settings/api-keys');
+            }}
+            onOpenSettings={() => {
+              setSidebarOpen(false);
+              navigate('/settings');
             }}
             onLogout={logoutToLogin}
             workspaces={workspaces.data || []}
@@ -644,7 +675,7 @@ export function ChatWorkspace({
         modelsRefreshFailed={config.isRefetchError}
         provider={draftProvider}
         model={draftModel}
-        busy={createChat.isPending || chatActions.update.isPending || streamChat.isPending}
+        busy={isCreatingChat || createChat.isPending || chatActions.update.isPending || streamChat.isPending}
         onOpenSidebar={() => setSidebarOpen(true)}
         onProviderChange={(event) => void changeProvider(event)}
         onModelChange={(event) => void changeModel(event)}
@@ -710,11 +741,17 @@ export function ChatWorkspace({
           </div>
         </div>
         <div className="mx-auto w-full max-w-5xl px-4 sm:px-8 lg:px-12">
+          {isCreatingChat && !activeChat ? (
+            <p role="status" className="mb-2 text-sm text-muted-foreground">
+              Đang tạo cuộc trò chuyện...
+            </p>
+          ) : null}
           <ChatComposer
             key={activeChat?.id || 'new-chat'}
             prompt={prompt}
             busy={
               chatActions.update.isPending ||
+              isCreatingChat ||
               streamChat.isPending ||
               isResponding ||
               uploadDocuments.isPending ||
@@ -731,7 +768,8 @@ export function ChatWorkspace({
             onDeleteTemplate={(id) => deleteTemplate.mutate(id)}
             editingArtifact={editingArtifact}
             onCancelArtifactEdit={() => setEditingArtifact(null)}
-            onStop={() => void stopResponse()}
+            onStop={isCreatingChat ? undefined : () => void stopResponse()}
+            clearAttachmentsOnSubmit={Boolean(activeChat)}
             mode={activeMode}
             onModeChange={(mode) => {
               setResearchWeb(false);
@@ -774,7 +812,7 @@ export function ChatWorkspace({
           <AdminPage view={adminView || 'overview'} navigate={navigate} />
         </Suspense>
       );
-    if (settingsPage) return <SettingsApiKeysPage />;
+    if (settingsPage) return window.location.pathname.startsWith('/settings/api-keys') ? <SettingsApiKeysPage /> : <SettingsAccountPage navigate={navigate} />;
     return renderChatView();
   };
 

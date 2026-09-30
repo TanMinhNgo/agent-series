@@ -32,6 +32,7 @@ type Props = {
   onOpenAdmin?: () => void;
   user?: AuthUser | null;
   onOpenApiKeys?: () => void;
+  onOpenSettings?: () => void;
   onLogout?: () => void;
   workspaces?: AppWorkspace[];
   activeWorkspaceId?: string | null;
@@ -62,6 +63,7 @@ export function AppSidebar({
   onOpenAdmin,
   user,
   onOpenApiKeys,
+  onOpenSettings,
   onLogout,
   workspaces = [],
   activeWorkspaceId,
@@ -137,6 +139,7 @@ export function AppSidebar({
         theme={theme}
         onThemeChange={onThemeChange}
         onOpenApiKeys={onOpenApiKeys}
+        onOpenSettings={onOpenSettings}
         onLogout={onLogout}
         workspaces={workspaces}
         activeWorkspaceId={activeWorkspaceId}

@@ -158,15 +158,15 @@ def load_settings() -> Settings:
         provider=provider,
         # Gemini 3.5 Flash cân bằng tốt cho chat/tool calling ở bản mới.
         gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash").strip(),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip(),
         # Anthropic (Claude): mặc định model mạnh nhất; muốn rẻ hơn đổi sang
         # 'claude-haiku-4-5' trong .env. Xem chú thích ở .env.example.
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", "").strip(),
-        anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5").strip(),
+        anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5").strip(),
         # OpenAI (Codex/GPT): mặc định model gọn nhẹ; bạn tự đổi theo model mình có.
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-5.6-terra").strip(),
-        openai_image_model=os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1.5").strip(),
+        openai_model=os.getenv("OPENAI_MODEL", "gpt-6-sol").strip(),
+        openai_image_model=os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2.5-sunburst").strip(),
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip().rstrip("/"),
         ollama_model=os.getenv("OLLAMA_MODEL", "").strip(),
         temperature=float(os.getenv("AGENT_TEMPERATURE", "0.2")),
@@ -186,9 +186,9 @@ def load_settings() -> Settings:
         imagekit_private_key=os.getenv("IMAGEKIT_PRIVATE_KEY", "").strip(),
         imagekit_url_endpoint=os.getenv("IMAGEKIT_URL_ENDPOINT", "").strip().rstrip("/"),
         provider_models={
-            "gemini": _model_list("GEMINI_MODELS", os.getenv("GEMINI_MODEL", "gemini-3.5-flash")),
-            "anthropic": _model_list("ANTHROPIC_MODELS", os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")),
-            "openai": _model_list("OPENAI_MODELS", os.getenv("OPENAI_MODEL", "gpt-5.6-terra")),
+            "gemini": _model_list("GEMINI_MODELS", os.getenv("GEMINI_MODEL", "gemini-3.8-flash")),
+            "anthropic": _model_list("ANTHROPIC_MODELS", os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5")),
+            "openai": _model_list("OPENAI_MODELS", os.getenv("OPENAI_MODEL", "gpt-6-sol")),
         },
         google_oauth_client_id=os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip(),
         google_oauth_client_secret=os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "").strip(),

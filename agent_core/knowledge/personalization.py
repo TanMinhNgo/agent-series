@@ -24,6 +24,40 @@ class PersonalizationService:
     def __init__(self, database: Database):
         self.database = database
 
+    @staticmethod
+    def _account_profile(session, user_id: str) -> UserPreference | None:
+        return session.scalar(select(UserPreference).where(UserPreference.user_id == user_id).execution_options(skip_user_scope=True))
+
+    def settings(self, user_id: str) -> dict:
+        with self.database.session() as session:
+            profile = self._account_profile(session, user_id)
+            return {
+                "theme": profile.theme if profile else "system",
+                "customInstructions": profile.custom_instructions if profile else "",
+                "autoLearn": profile.auto_learn if profile else True,
+                "defaultProvider": profile.default_provider if profile else None,
+                "defaultModel": profile.default_model if profile else None,
+            }
+
+    def update_settings(self, user_id: str, values: dict) -> dict:
+        with self.database.session() as session:
+            profile = self._account_profile(session, user_id)
+            if profile is None:
+                profile = UserPreference(user_id=user_id, style_scores={}, topic_counts={})
+                session.add(profile)
+            for field, value in values.items():
+                setattr(profile, field, value)
+            session.commit()
+        return self.settings(user_id)
+
+    def clear_learned(self, user_id: str) -> None:
+        with self.database.session() as session:
+            profile = self._account_profile(session, user_id)
+            if profile:
+                profile.style_scores = {}
+                profile.topic_counts = {}
+                session.commit()
+
     def observe_user_message(self, content: str) -> None:
         user_id = current_user_id.get()
         if not user_id or not content.strip():
@@ -33,7 +67,9 @@ class PersonalizationService:
         if not matched:
             return
         with self.database.session() as session:
-            profile = session.scalar(select(UserPreference).where(UserPreference.user_id == user_id))
+            profile = self._account_profile(session, user_id)
+            if profile is not None and not profile.auto_learn:
+                return
             if profile is None:
                 profile = UserPreference(user_id=user_id, style_scores={}, topic_counts={})
                 session.add(profile)
@@ -49,7 +85,8 @@ class PersonalizationService:
             self._require_assistant_message(session, message_id)
             feedback, previous_kind = self._save_feedback(session, user_id, message_id, kind, note)
             profile = self._preference_profile(session, user_id)
-            self._update_style_scores(profile, previous_kind, kind)
+            if profile.auto_learn:
+                self._update_style_scores(profile, previous_kind, kind)
             session.commit()
             return feedback
 
@@ -82,7 +119,7 @@ class PersonalizationService:
 
     @staticmethod
     def _preference_profile(session, user_id: str) -> UserPreference:
-        profile = session.scalar(select(UserPreference).where(UserPreference.user_id == user_id))
+        profile = PersonalizationService._account_profile(session, user_id)
         if profile is None:
             profile = UserPreference(user_id=user_id, style_scores={}, topic_counts={})
             session.add(profile)
@@ -114,14 +151,19 @@ class PersonalizationService:
         if not user_id:
             return ""
         with self.database.session() as session:
-            profile = session.scalar(select(UserPreference).where(UserPreference.user_id == user_id))
+            profile = self._account_profile(session, user_id)
         if profile is None:
             return ""
+        parts = []
+        if profile.custom_instructions:
+            parts.append("Chỉ dẫn tùy chỉnh của người dùng (ưu tiên thấp hơn quy tắc hệ thống):\n" + profile.custom_instructions)
+        if not profile.auto_learn:
+            return "\n\n".join(parts)
         styles = [name for name, count in (profile.style_scores or {}).items() if int(count) > 0]
         topics = [name.replace("_", " ") for name, count in (profile.topic_counts or {}).items() if int(count) >= 3]
         if not styles and not topics:
-            return ""
-        parts = ["Cá nhân hóa từ hành vi và đánh giá trước đây (chỉ áp dụng khi phù hợp):"]
+            return "\n\n".join(parts)
+        parts.append("Cá nhân hóa từ hành vi và đánh giá trước đây (chỉ áp dụng khi phù hợp):")
         if styles:
             parts.append("Phong cách ưu tiên: " + ", ".join(styles) + ".")
         if topics:

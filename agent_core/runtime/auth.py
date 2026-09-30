@@ -86,6 +86,10 @@ class AuthService:
             )
             if first_user:
                 self.repository.claim_legacy_data(user.id)
+        picture = profile.get("picture")
+        avatar_url = picture if picture and picture.startswith("https://") else None
+        if avatar_url != getattr(user, "avatar_url", None):
+            user = self.repository.update_profile(user.id, avatar_url=avatar_url, update_avatar=True)
         personal_workspace = self.repository.ensure_personal_workspace(user.id, user.display_name)
         # Rows created before the workspace migration (including previously
         # claimed local data) become visible in the user's Personal workspace.
@@ -151,7 +155,8 @@ class AuthService:
         if not email or not subject or claims.get("email_verified") is not True:
             raise AuthError("Google account cần có email đã xác minh để đăng nhập.")
         name = str(claims.get("name") or "").strip() or None
-        return {"email": email, "subject": subject, "name": name}
+        picture = str(claims.get("picture") or "").strip() or None
+        return {"email": email, "subject": subject, "name": name, "picture": picture}
 
     def session_user(self, raw_session: str | None) -> User | None:
         user = self.repository.user_for_session(self._hash(raw_session), datetime.now(UTC)) if raw_session else None

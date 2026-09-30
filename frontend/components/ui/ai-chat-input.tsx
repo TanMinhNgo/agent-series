@@ -26,6 +26,7 @@ export type PromptInputProps = {
   className?: string;
   maxAttachments?: number;
   onStop?: () => void;
+  clearAttachmentsOnSubmit?: boolean;
 };
 
 export function PromptInput({
@@ -37,6 +38,7 @@ export function PromptInput({
   className,
   maxAttachments = 6,
   onStop,
+  clearAttachmentsOnSubmit = true,
 }: PromptInputProps) {
   const [attachments, setAttachments] = React.useState<Attachment[]>([]);
   const [recording, setRecording] = React.useState(false);
@@ -75,8 +77,7 @@ export function PromptInput({
       value.trim(),
       attachments.map((item) => item.file),
     );
-    attachments.forEach((item) => URL.revokeObjectURL(item.url));
-    setAttachments([]);
+    if (clearAttachmentsOnSubmit) setAttachments([]);
   };
   const startVoice = () => {
     const ctor =

@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils';
 import { RichResponseLazy } from '@/src/components/rich-response-lazy';
 import { AssistantMessageActions } from '@/src/components/assistant-message-actions';
+import { ImageLightbox } from '@/src/components/image-lightbox';
 import type { LibraryAsset, Message } from '@/src/types';
 
 gsap.registerPlugin(useGSAP, ScrollToPlugin);
@@ -52,30 +53,14 @@ function MessageMedia({ message }: { message: Message }) {
       {message.attachments?.length ? (
         <div className={cn('mt-3 flex flex-wrap gap-2', message.role === 'user' && 'justify-end')}>
           {message.attachments.map((item) => (
-            <a
-              key={item.id}
-              href={item.url}
-              target="_blank"
-              rel="noreferrer"
-              className="overflow-hidden rounded-lg border border-white/30 bg-muted"
-            >
-              <img src={item.url} alt={item.name} className="size-20 object-cover" />
-            </a>
+            <ImageLightbox key={item.id} image={item} className="size-20 object-cover" />
           ))}
         </div>
       ) : null}
       {message.generatedAssets?.length ? (
         <div className="mt-3 flex flex-wrap gap-2">
           {message.generatedAssets.map((asset) => (
-            <a
-              key={asset.id}
-              href={asset.url}
-              target="_blank"
-              rel="noreferrer"
-              className="overflow-hidden rounded-lg border bg-muted"
-            >
-              <img src={asset.url} alt={asset.name} className="max-h-80 max-w-full object-cover" />
-            </a>
+            <ImageLightbox key={asset.id} image={asset} className="max-h-80 max-w-full object-cover" />
           ))}
         </div>
       ) : null}

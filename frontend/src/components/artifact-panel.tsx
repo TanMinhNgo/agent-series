@@ -1,5 +1,7 @@
 import { type PointerEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ChevronDown,
+  Download,
   FilePenLine,
   FileText,
   GitCompareArrows,
@@ -13,6 +15,15 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { request } from '@/src/hooks/client';
 import type { LibraryAsset, LibraryAssetDiff, LibraryAssetPreview, Message } from '@/src/types';
 
@@ -77,9 +88,7 @@ function ArtifactPreview({ preview, selected, fullscreen = false }: ArtifactPrev
   } else if (preview.data?.kind === 'image') {
     content = (
       <img
-        className={
-          fullscreen ? 'max-h-full max-w-full object-contain' : 'max-h-[55dvh] max-w-full object-contain'
-        }
+        className={fullscreen ? 'max-h-full max-w-full object-contain' : 'mx-auto max-w-full object-contain'}
         src={selected.url}
         alt={selected.name}
       />
@@ -88,9 +97,7 @@ function ArtifactPreview({ preview, selected, fullscreen = false }: ArtifactPrev
     content = (
       <iframe
         className={
-          fullscreen
-            ? 'h-full min-h-[60dvh] w-full rounded border bg-white'
-            : 'h-[52dvh] w-full rounded border bg-white'
+          fullscreen ? 'h-full min-h-[60dvh] w-full rounded border bg-white' : 'h-full w-full bg-white'
         }
         src={selected.url}
         title={`Preview ${selected.name}`}
@@ -102,7 +109,7 @@ function ArtifactPreview({ preview, selected, fullscreen = false }: ArtifactPrev
         className={
           fullscreen
             ? 'h-full w-full overflow-auto whitespace-pre-wrap text-xs leading-5'
-            : 'max-h-[52dvh] overflow-auto whitespace-pre-wrap text-xs leading-5'
+            : 'whitespace-pre-wrap break-words text-xs leading-5'
         }
       >
         {preview.data.content}
@@ -111,183 +118,70 @@ function ArtifactPreview({ preview, selected, fullscreen = false }: ArtifactPrev
   } else {
     content = <p className="text-sm text-muted-foreground">Định dạng này chưa preview trực tiếp được.</p>;
   }
+  const truncated = preview.data?.truncated ? (
+    <p className="mt-2 text-xs text-muted-foreground">Preview đã được rút gọn.</p>
+  ) : null;
+  if (!fullscreen) {
+    return (
+      <div className={preview.data?.kind === 'pdf' ? 'h-full' : ''}>
+        {content}
+        {truncated}
+      </div>
+    );
+  }
   return (
-    <div className={`min-h-0 ${fullscreen ? 'flex flex-1 flex-col overflow-hidden p-4 sm:p-6' : ''}`}>
-      <div
-        className={`min-h-48 border bg-muted/20 p-3 ${fullscreen ? 'flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-xl' : 'rounded-lg'}`}
-      >
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4 sm:p-6">
+      <div className="flex min-h-48 min-h-0 flex-1 items-center justify-center overflow-auto rounded-xl border bg-muted/20 p-3">
         {content}
       </div>
-      {preview.data?.truncated ? (
-        <p className="mt-2 text-xs text-muted-foreground">Preview đã được rút gọn.</p>
-      ) : null}
+      {truncated}
     </div>
   );
 }
 
 type ArtifactGroup = { messageId: string; createdAt?: string; artifacts: LibraryAsset[] };
 
-function ArtifactGroupList({
-  groups,
-  generatedArtifacts,
-  selectedId,
-  onSelect,
-}: {
-  groups: ArtifactGroup[];
-  generatedArtifacts: LibraryAsset[];
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-}) {
-  if (!generatedArtifacts.length) {
-    return <p className="p-2 text-sm text-muted-foreground">Chat này chưa có file nào do AI tạo.</p>;
-  }
-  return (
-    <div className="space-y-4">
-      {groups.map((group) => (
-        <section key={group.messageId}>
-          <p className="mb-2 px-1 text-xs font-medium text-muted-foreground">
-            Phản hồi {group.createdAt ? formatDate(group.createdAt) : 'vừa tạo'}
-          </p>
-          <div className="space-y-2">
-            {group.artifacts.map((asset) => (
-              <button
-                key={asset.id}
-                type="button"
-                className={`w-full rounded-lg border p-3 text-left transition-colors hover:bg-muted ${selectedId === asset.id ? 'border-primary bg-primary/5' : ''}`}
-                onClick={() => onSelect(asset.id)}
-              >
-                <div className="flex items-start gap-2">
-                  <FileText className="mt-0.5 shrink-0 text-muted-foreground" size={16} />
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium">{asset.name}</span>
-                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px]">
-                    v{asset.version}
-                  </span>
-                </div>
-                <p className="mt-1 truncate pl-6 text-xs text-muted-foreground">
-                  {formatDate(asset.createdAt)} · {formatSize(asset.sizeBytes)}
-                </p>
-              </button>
-            ))}
-          </div>
-        </section>
-      ))}
-    </div>
-  );
-}
-
 type ArtifactDetailsProps = {
   selected: LibraryAsset;
-  versions: LibraryAsset[] | undefined;
   latestVersion: number;
   preview: { isLoading: boolean; data?: LibraryAssetPreview };
   diff: { isLoading: boolean; data?: LibraryAssetDiff; error?: unknown };
   restorePending: boolean;
   restoreError: unknown;
-  canEditArtifacts: boolean;
   showDiff: boolean;
-  onEdit: (asset: LibraryAsset) => void;
-  onSelectVersion: (id: string) => void;
   onRestore: (id: string) => void;
-  onToggleDiff: () => void;
-  onOpenFullscreen: () => void;
 };
 
 function ArtifactDetails({
   selected,
-  versions,
   latestVersion,
   preview,
   diff,
   restorePending,
   restoreError,
-  canEditArtifacts,
   showDiff,
-  onEdit,
-  onSelectVersion,
   onRestore,
-  onToggleDiff,
-  onOpenFullscreen,
 }: ArtifactDetailsProps) {
   return (
     <>
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="truncate font-medium">{selected.name}</h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Tạo lúc {formatDate(selected.createdAt)} · version {selected.version}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {isEditableArtifact(selected) ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={!canEditArtifacts}
-              onClick={() => onEdit(selected)}
-              title={canEditArtifacts ? 'Sửa file này bằng AI' : 'Ollama local chưa hỗ trợ sửa file'}
-            >
-              <FilePenLine size={15} /> Sửa file này
-            </Button>
-          ) : null}
+      {selected.version < latestVersion ? (
+        <div className="mb-3 flex items-center justify-between gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-xs">
+          <span className="text-muted-foreground">Đang xem version cũ (v{selected.version}).</span>
           <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={onOpenFullscreen}
-            aria-label="Mở rộng xem nội dung"
-            title="Mở rộng xem nội dung"
+            size="sm"
+            variant="outline"
+            disabled={restorePending}
+            onClick={() => onRestore(selected.id)}
           >
-            <Maximize2 size={16} />
+            <RotateCcw size={14} />
+            {restorePending ? 'Đang khôi phục...' : `Khôi phục v${selected.version}`}
           </Button>
         </div>
-      </div>
-      {versions && versions.length > 1 ? (
-        <div className="mb-3 flex flex-wrap gap-2" aria-label="Lịch sử phiên bản">
-          {versions.map((asset) => (
-            <Button
-              key={asset.id}
-              size="sm"
-              variant={asset.id === selected.id ? 'secondary' : 'outline'}
-              onClick={() => onSelectVersion(asset.id)}
-            >
-              v{asset.version}
-            </Button>
-          ))}
-        </div>
-      ) : null}
-      {selected.version < latestVersion ? (
-        <Button
-          className="mb-3"
-          size="sm"
-          variant="outline"
-          disabled={restorePending}
-          onClick={() => onRestore(selected.id)}
-        >
-          <RotateCcw size={15} />
-          {restorePending ? 'Đang khôi phục...' : `Khôi phục v${selected.version} thành version mới`}
-        </Button>
       ) : null}
       {restoreError ? (
         <p className="mb-3 text-sm text-destructive">Không thể khôi phục version này.</p>
       ) : null}
-      {isEditableArtifact(selected) && selected.version > 1 ? (
-        <Button
-          className="mb-3"
-          size="sm"
-          variant={showDiff ? 'secondary' : 'outline'}
-          onClick={onToggleDiff}
-        >
-          <GitCompareArrows size={15} /> {showDiff ? 'Xem nội dung' : 'Xem thay đổi'}
-        </Button>
-      ) : null}
       <ArtifactBody showDiff={showDiff} diff={diff} preview={preview} selected={selected} />
-      <a
-        className="mt-3 inline-block text-sm text-primary hover:underline"
-        href={selected.url}
-        target="_blank"
-        rel="noreferrer"
-      >
-        Mở hoặc tải file gốc
-      </a>
     </>
   );
 }
@@ -300,7 +194,7 @@ function ArtifactBody({
 }: Pick<ArtifactDetailsProps, 'showDiff' | 'diff' | 'preview' | 'selected'>) {
   if (!showDiff) return <ArtifactPreview preview={preview} selected={selected} />;
   return (
-    <div className="max-h-[52dvh] overflow-auto rounded-lg border bg-muted/20 p-3">
+    <div>
       <DiffContent diff={diff} />
       {diff.error ? <p className="mt-2 text-sm text-destructive">Không thể tải diff.</p> : null}
     </div>
@@ -317,6 +211,163 @@ function DiffContent({ diff }: Pick<ArtifactDetailsProps, 'diff'>) {
   }
   if (diff.data?.diff) return <pre className="whitespace-pre-wrap text-xs leading-5">{diff.data.diff}</pre>;
   return <p className="text-sm text-muted-foreground">Không có thay đổi giữa hai version.</p>;
+}
+
+type ArtifactHeaderProps = {
+  groups: ArtifactGroup[];
+  selected: LibraryAsset | null;
+  versions: LibraryAsset[] | undefined;
+  showDiff: boolean;
+  canEditArtifacts: boolean;
+  onSelect: (id: string) => void;
+  onEdit: (asset: LibraryAsset) => void;
+  onToggleDiff: () => void;
+  onOpenFullscreen: () => void;
+  onClose: () => void;
+};
+
+function ArtifactHeader({
+  groups,
+  selected,
+  versions,
+  showDiff,
+  canEditArtifacts,
+  onSelect,
+  onEdit,
+  onToggleDiff,
+  onOpenFullscreen,
+  onClose,
+}: ArtifactHeaderProps) {
+  const fileCount = groups.reduce((total, group) => total + group.artifacts.length, 0);
+  const title = (
+    <>
+      <FileText className="shrink-0 text-muted-foreground" size={16} />
+      <span className="min-w-0 truncate text-sm font-medium">{selected?.name ?? 'File AI tạo'}</span>
+    </>
+  );
+  return (
+    <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+      <div className="flex min-w-0 items-center gap-1">
+        {fileCount > 1 ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="min-w-0 max-w-full gap-1.5 px-2"
+                  aria-label="Chọn file"
+                />
+              }
+            >
+              {title}
+              <ChevronDown className="shrink-0 text-muted-foreground" size={14} />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="max-h-80 w-72 overflow-y-auto">
+              <DropdownMenuRadioGroup value={selected?.id ?? ''} onValueChange={onSelect}>
+                {groups.map((group) => (
+                  <DropdownMenuGroup key={group.messageId}>
+                    <DropdownMenuLabel>
+                      Phản hồi {group.createdAt ? formatDate(group.createdAt) : 'vừa tạo'}
+                    </DropdownMenuLabel>
+                    {group.artifacts.map((asset) => (
+                      <DropdownMenuRadioItem key={asset.id} value={asset.id}>
+                        <FileText className="text-muted-foreground" size={14} />
+                        <span className="min-w-0 flex-1 truncate">{asset.name}</span>
+                        <span className="text-xs text-muted-foreground">v{asset.version}</span>
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuGroup>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <div className="flex min-w-0 items-center gap-1.5 px-2">{title}</div>
+        )}
+        {selected && versions && versions.length > 1 ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0 gap-1"
+                  aria-label="Lịch sử phiên bản"
+                />
+              }
+            >
+              v{selected.version}
+              <ChevronDown size={12} />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-44">
+              <DropdownMenuRadioGroup value={selected.id} onValueChange={onSelect}>
+                {versions.map((asset) => (
+                  <DropdownMenuRadioItem key={asset.id} value={asset.id}>
+                    v{asset.version}
+                    <span className="text-xs text-muted-foreground">{formatDate(asset.createdAt)}</span>
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 items-center gap-0.5">
+        {selected && isEditableArtifact(selected) ? (
+          <>
+            {selected.version > 1 ? (
+              <Button
+                variant={showDiff ? 'secondary' : 'ghost'}
+                size="icon-sm"
+                onClick={onToggleDiff}
+                aria-label={showDiff ? 'Xem nội dung' : 'Xem thay đổi'}
+                title={showDiff ? 'Xem nội dung' : 'Xem thay đổi'}
+              >
+                <GitCompareArrows size={16} />
+              </Button>
+            ) : null}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              disabled={!canEditArtifacts}
+              onClick={() => onEdit(selected)}
+              aria-label="Sửa file này"
+              title={canEditArtifacts ? 'Sửa file này bằng AI' : 'Ollama local chưa hỗ trợ sửa file'}
+            >
+              <FilePenLine size={16} />
+            </Button>
+          </>
+        ) : null}
+        {selected ? (
+          <>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              nativeButton={false}
+              render={<a href={selected.url} target="_blank" rel="noreferrer" />}
+              aria-label="Mở hoặc tải file gốc"
+              title="Mở hoặc tải file gốc"
+            >
+              <Download size={16} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onOpenFullscreen}
+              aria-label="Mở rộng xem nội dung"
+              title="Mở rộng xem nội dung"
+            >
+              <Maximize2 size={16} />
+            </Button>
+          </>
+        ) : null}
+        <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Đóng file AI tạo">
+          <X size={16} />
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 export function ArtifactPanel({
@@ -358,16 +409,15 @@ export function ArtifactPanel({
   );
   const generatedArtifacts = useMemo(() => groups.flatMap((group) => group.artifacts), [groups]);
   const initialSelected = generatedArtifacts.find((asset) => asset.id === selectedArtifactId) ?? null;
+  const activeId = selectedArtifactId ?? generatedArtifacts.at(-1)?.id ?? null;
   const versions = useQuery({
-    queryKey: ['artifact-versions', selectedArtifactId],
-    queryFn: () => request<LibraryAsset[]>({ url: `/library/assets/${selectedArtifactId}/versions` }),
-    enabled: Boolean(selectedArtifactId),
+    queryKey: ['artifact-versions', activeId],
+    queryFn: () => request<LibraryAsset[]>({ url: `/library/assets/${activeId}/versions` }),
+    enabled: Boolean(activeId),
   });
   const selected = useMemo(
-    () =>
-      [...generatedArtifacts, ...(versions.data ?? [])].find((asset) => asset.id === selectedArtifactId) ??
-      null,
-    [generatedArtifacts, selectedArtifactId, versions.data],
+    () => [...generatedArtifacts, ...(versions.data ?? [])].find((asset) => asset.id === activeId) ?? null,
+    [generatedArtifacts, activeId, versions.data],
   );
   const preview = useQuery({
     queryKey: ['artifact-preview', selected?.id],
@@ -462,48 +512,37 @@ export function ArtifactPanel({
 
   const body = (
     <>
-      <div className="flex items-start justify-between gap-3 border-b px-4 py-3">
-        <div>
-          <h2 className="font-semibold">File AI tạo</h2>
-          <p className="text-xs text-muted-foreground">Chọn một file để xem lại đúng nội dung đã tạo.</p>
-        </div>
-        <Button variant="ghost" size="icon" onClick={() => onOpenChange(false)} aria-label="Đóng file AI tạo">
-          <X size={18} />
-        </Button>
-      </div>
-      <div className="grid min-h-0 flex-1 grid-rows-[minmax(150px,0.8fr)_minmax(220px,1.2fr)]">
-        <div className="min-h-0 overflow-y-auto border-b p-3">
-          <ArtifactGroupList
-            groups={groups}
-            generatedArtifacts={generatedArtifacts}
-            selectedId={selected?.id || null}
-            onSelect={selectArtifact}
+      <ArtifactHeader
+        groups={groups}
+        selected={selected}
+        versions={versions.data}
+        showDiff={showDiff}
+        canEditArtifacts={canEditArtifacts}
+        onSelect={selectArtifact}
+        onEdit={onEditArtifact}
+        onToggleDiff={() => setShowDiff((value) => !value)}
+        onOpenFullscreen={() => setIsFullscreen(true)}
+        onClose={() => onOpenChange(false)}
+      />
+      <div
+        className={`min-h-0 flex-1 ${selected && preview.data?.kind === 'pdf' && !showDiff ? 'overflow-hidden' : 'overflow-auto p-4'}`}
+      >
+        {!selected ? (
+          <div className="grid h-full place-items-center text-center text-sm text-muted-foreground">
+            Chat này chưa có file nào do AI tạo.
+          </div>
+        ) : (
+          <ArtifactDetails
+            selected={selected}
+            latestVersion={latestVersion}
+            preview={preview}
+            diff={diff}
+            restorePending={restoreVersion.isPending}
+            restoreError={restoreVersion.error}
+            showDiff={showDiff}
+            onRestore={(assetId) => restoreVersion.mutate(assetId)}
           />
-        </div>
-        <div className="min-h-0 overflow-auto p-4">
-          {!selected ? (
-            <div className="grid h-full place-items-center text-center text-sm text-muted-foreground">
-              Chọn một file ở phía trên để xem nội dung.
-            </div>
-          ) : (
-            <ArtifactDetails
-              selected={selected}
-              versions={versions.data}
-              latestVersion={latestVersion}
-              preview={preview}
-              diff={diff}
-              restorePending={restoreVersion.isPending}
-              restoreError={restoreVersion.error}
-              canEditArtifacts={canEditArtifacts}
-              showDiff={showDiff}
-              onEdit={onEditArtifact}
-              onSelectVersion={selectArtifact}
-              onRestore={(assetId) => restoreVersion.mutate(assetId)}
-              onToggleDiff={() => setShowDiff((value) => !value)}
-              onOpenFullscreen={() => setIsFullscreen(true)}
-            />
-          )}
-        </div>
+        )}
       </div>
     </>
   );

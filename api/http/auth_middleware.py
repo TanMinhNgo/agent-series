@@ -31,7 +31,8 @@ def install(app: Any, deps: AuthMiddlewareDependencies) -> None:
         accepting_invitation = path.endswith("/accept")
         if membership is None and not (path == "/api/workspaces" or accepting_invitation):
             return Response(content=json.dumps({"detail": "Không tìm thấy workspace bạn có quyền truy cập."}, ensure_ascii=False), status_code=403, media_type=deps.json_media_type)
-        if membership and request.method in {"POST", "PATCH", "PUT", "DELETE"} and membership.role == "viewer" and not accepting_invitation and path != "/api/workspaces":
+        personal_settings = path == "/api/settings" or path.startswith("/api/settings/")
+        if membership and request.method in {"POST", "PATCH", "PUT", "DELETE"} and membership.role == "viewer" and not accepting_invitation and path != "/api/workspaces" and not personal_settings:
             return Response(content=json.dumps({"detail": "Bạn chỉ có quyền xem trong workspace này."}, ensure_ascii=False), status_code=403, media_type=deps.json_media_type)
         token = deps.current_user_id.set(user.id)
         workspace_token = deps.current_workspace_id.set(membership.workspace_id) if membership else None

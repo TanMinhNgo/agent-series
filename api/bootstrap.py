@@ -114,7 +114,7 @@ def media_json(media: MediaAttachment) -> dict[str, Any]:
 
 def user_json(user) -> dict[str, Any]:
     role = "system_admin" if services().auth.is_system_admin(user) else user.role
-    return {"id": user.id, "email": user.email, "displayName": user.display_name, "role": role, "isActive": user.is_active}
+    return {"id": user.id, "email": user.email, "displayName": user.display_name, "avatarUrl": user.avatar_url, "role": role, "isActive": user.is_active}
 
 
 def record_project_activity(project_id: str | None, event_type: str, subject_type: str, subject_id: str | None, summary: str) -> None:
@@ -232,7 +232,7 @@ for _router in (
     build_chat_stream_router(chat_module.controller, errors),
     build_system_router(SystemRouteDependencies(services, ollama_status, provider_models, SESSION_COOKIE, errors, BackgroundJobRepository, lambda: datetime.now(UTC))),
     build_auth_router(AuthRouteDependencies(services, user_json, SESSION_COOKIE, errors)),
-    build_settings_router(SettingsRouteDependencies(services, credential_json, AUTHENTICATION_REQUIRED_ERROR, errors)),
+    build_settings_router(SettingsRouteDependencies(services, credential_json, AUTHENTICATION_REQUIRED_ERROR, errors, provider_models)),
     build_admin_router(AdminRouteDependencies(services, require_system_admin, user_json, errors)),
     build_media_router(MediaRouteDependencies(services, media_json, errors)),
     build_memory_router(MemoryRouteDependencies(services, errors)),
