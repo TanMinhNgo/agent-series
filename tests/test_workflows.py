@@ -28,8 +28,10 @@ def test_github_pagination_boundaries_dedup_and_types(monkeypatch):
     service, owners = connector(monkeypatch, [first, [issue(3), issue(4, END)]])
     result = service.list_updated_issues("org/repo", START, END, "runner")
     assert [item["number"] for item in result] == [2, 3]
-    assert result[0]["kind"] == "pr" and result[0]["url"] == "https://github.com/org/repo/pull/2"
-    assert result[0]["bodyTruncated"] and len(result[0]["body"]) == 1000
+    assert result[0]["kind"] == "pr"
+    assert result[0]["url"] == "https://github.com/org/repo/pull/2"
+    assert result[0]["bodyTruncated"]
+    assert len(result[0]["body"]) == 1000
     assert owners == ["runner"]
 
 
@@ -98,8 +100,10 @@ def test_project_report_reads_only_pinned_indexed_content():
         session=lambda: nullcontext(Session()))), library=SimpleNamespace(list=lambda **_: [selected, other])))
     run = SimpleNamespace(snapshot={"template": "project-report"}, project_id="project")
     sources = executor._collect_sources(run)
-    assert len(sources) == 1 and sources[0]["body"] == "actual note"
-    assert sources[0]["version"] == 2 and sources[0]["url"].endswith("asset-1/preview")
+    assert len(sources) == 1
+    assert sources[0]["body"] == "actual note"
+    assert sources[0]["version"] == 2
+    assert sources[0]["url"].endswith("asset-1/preview")
     selected.index_status = "queued"
     with pytest.raises(ValueError, match="chưa index"):
         executor._collect_sources(run)

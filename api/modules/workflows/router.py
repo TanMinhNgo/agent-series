@@ -11,6 +11,14 @@ from sqlalchemy import select
 
 
 
+_ACCESS_ERRORS = {
+    403: {"description": "Không có quyền truy cập project."},
+    404: {"description": "Không tìm thấy project hoặc workflow."},
+    409: {"description": "Xung đột trạng thái workflow."},
+    422: {"description": "Dữ liệu không hợp lệ."},
+}
+
+
 @contextmanager
 def _access(services: Callable, project_id: str, write: bool = False):
     try:
@@ -56,7 +64,7 @@ def _create_schedule(services: Callable, project_id: str, workflow_id: str, payl
 
 
 def build_router(error_responses: dict, services=None) -> APIRouter:
-    router = APIRouter(tags=["Workflows"], responses=error_responses)
+    router = APIRouter(tags=["Workflows"], responses={**error_responses, **_ACCESS_ERRORS})
 
     @router.get("/api/workflow-recipes")
     def workflow_recipes() -> list[dict[str, object]]:

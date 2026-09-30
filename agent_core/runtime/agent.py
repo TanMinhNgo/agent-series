@@ -90,14 +90,32 @@ def _schedule_tool(deps: AgentDependencies, chat: Chat, schedule_proposals: list
     return ToolSpec(name="propose_schedule", description="Tạo thẻ xác nhận lịch trình, không tự lưu lịch.", parameters={"type": "object", "properties": {"title": {"type": "string"}, "prompt": {"type": "string"}, "startsAt": {"type": "string"}}, "required": ["title", "prompt", "startsAt"]}, func=propose_schedule)
 
 
+def _source_context(deps: AgentDependencies, app_services: Services, chat: Chat) -> str:
+    if not chat.context_source_chat_id:
+        return ""
+    turns = [item for item in deps.recent_chat_history(app_services.chats.history(chat.context_source_chat_id)) if item["role"] in {"user", "assistant"}]
+    if not turns:
+        return ""
+    return "\n\nNgữ cảnh kế thừa từ cuộc trò chuyện trước (ẩn với người dùng):\n" + "\n".join(f"{item['role']}: {item['content']}" for item in turns)
+
+
+def _tool_registry(deps, app_services, chat, knowledge_tool, plugin_tools, web_tool, schedule_tool, version_tool, export_tool, web_bundle_tool):
+    """Pick the tool set for the chat's provider and mode; returns (registry, web_tool, schedule_tool)."""
+    artifact_tools = [build_artifact_tool(app_services.artifacts, chat.project_id)] if chat.project_id else []
+    if chat.provider == "ollama":
+        return ToolRegistry([]), None, schedule_tool
+    if getattr(chat, "mode", "standard") == "plan":
+        read_tools = artifact_tools + [*(plugin_tools or [])] + ([web_tool] if web_tool is not None else [])
+        return deps.build_default_registry(knowledge_tool, read_tools), web_tool, None
+    extra_tools = artifact_tools + [version_tool or export_tool] + ([] if version_tool is not None else [web_bundle_tool]) + [*(plugin_tools or [])]
+    extra_tools += [tool for tool in (schedule_tool, web_tool) if tool is not None]
+    return deps.build_default_registry(knowledge_tool, extra_tools), web_tool, schedule_tool
+
+
 def build_agent(deps: AgentDependencies, app_services: Services, chat: Chat, memory_context: str = "", knowledge_context: str = "", personalization_context: str = "", plugin_tools: list[ToolSpec] | None = None, history: list[dict[str, Any]] | None = None, schedule_proposals: list[dict[str, Any]] | None = None, allow_schedule_proposals: bool = True, artifact_edit: ArtifactEditContext | None = None, web_context: str = "", allow_web: bool = True) -> Agent:
     project = validate_agent_context(app_services, chat)
     settings = deps.selected_settings(chat.provider, chat.model, chat.user_id)
-    source_context = ""
-    if chat.context_source_chat_id:
-        turns = [item for item in deps.recent_chat_history(app_services.chats.history(chat.context_source_chat_id)) if item["role"] in {"user", "assistant"}]
-        if turns:
-            source_context = "\n\nNgữ cảnh kế thừa từ cuộc trò chuyện trước (ẩn với người dùng):\n" + "\n".join(f"{item['role']}: {item['content']}" for item in turns)
+    source_context = _source_context(deps, app_services, chat)
     def create_project_export(name: str, format: str, content: str) -> str:
         asset = app_services.library.create_export(name, format, content, project_id=chat.project_id)
         deps.enqueue_artifact_index(asset, app_services)
@@ -116,23 +134,10 @@ def build_agent(deps: AgentDependencies, app_services: Services, chat: Chat, mem
         web_tool = None
     knowledge_tool = deps.build_knowledge_tool(app_services.knowledge, chat.project_id, chat.collection_id)
     schedule_tool = _schedule_tool(deps, chat, schedule_proposals) if chat.provider != "ollama" and allow_schedule_proposals and schedule_proposals is not None else None
-    if chat.provider == "ollama":
-        registry = ToolRegistry([])
-        web_tool = None
-    elif getattr(chat, "mode", "standard") == "plan":
-        read_tools = ([build_artifact_tool(app_services.artifacts, chat.project_id)] if chat.project_id else []) + [*(plugin_tools or [])]
-        if web_tool is not None:
-            read_tools.append(web_tool)
-        registry = deps.build_default_registry(knowledge_tool, read_tools)
-        schedule_tool = None
-    else:
-        file_tool = version_tool or export_tool
-        extra_tools = ([build_artifact_tool(app_services.artifacts, chat.project_id)] if chat.project_id else []) + [file_tool] + ([] if version_tool is not None else [web_bundle_tool]) + [*(plugin_tools or [])]
-        if schedule_tool is not None:
-            extra_tools.append(schedule_tool)
-        if web_tool is not None:
-            extra_tools.append(web_tool)
-        registry = deps.build_default_registry(knowledge_tool, extra_tools)
+    registry, web_tool, schedule_tool = _tool_registry(
+        deps, app_services, chat, knowledge_tool, plugin_tools, web_tool, schedule_tool,
+        version_tool, export_tool, web_bundle_tool,
+    )
     agent = Agent(deps.build_client(settings), registry, system_prompt=agent_system_prompt(chat, project, web_tool, schedule_tool, source_context, artifact_edit_context, knowledge_context, web_context, personalization_context, memory_context), max_steps=settings.max_steps)
     stored_history = history if history is not None else app_services.chats.history(chat.id)
     prompt_history = deps.ollama_recent_history(stored_history) if chat.provider == "ollama" else deps.recent_chat_history(stored_history)

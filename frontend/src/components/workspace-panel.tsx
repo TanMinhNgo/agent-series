@@ -2138,18 +2138,17 @@ function WorkspaceError({ message }: { message: string }) {
   );
 }
 
+const WORKSPACE_VIEWS: Record<WorkspaceView, ReactNode> = {
+  projects: <ProjectsView />,
+  schedules: <SchedulesView />,
+  members: <MembersView />,
+  plugins: <PluginsView />,
+};
+
 export function WorkspacePanel({ view }: { view: WorkspaceView }) {
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-8 lg:px-12 lg:py-10">
-      {view === 'projects' ? (
-        <ProjectsView />
-      ) : view === 'schedules' ? (
-        <SchedulesView />
-      ) : view === 'members' ? (
-        <MembersView />
-      ) : (
-        <PluginsView />
-      )}
+      {WORKSPACE_VIEWS[view]}
     </div>
   );
 }

@@ -73,8 +73,6 @@
 
 * {
   border-color: var(--border);
-}
-* {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--foreground) 22%, transparent) transparent;
 }

@@ -75,7 +75,8 @@ def test_lease_fences_every_write_before_and_after_reclaim(state):
         with pytest.raises(LeaseLost):
             operation()
     new = s.repo.claim()
-    assert new.id == old.id and new.lease_token != old.lease_token
+    assert new.id == old.id
+    assert new.lease_token != old.lease_token
     # A late worker stops quietly without changing its successor's checkpoints.
     s.executor.execute(old)
     assert s.repo.detail("project", old.id)[0].lease_token == new.lease_token
@@ -123,7 +124,8 @@ def test_retry_source_failure_resets_unstarted_steps(state):
     result, steps = s.repo.detail("project", s.run.id)
     assert result.status == "succeeded"
     assert [step.status for step in steps] == ["succeeded"] * 4
-    assert s.model.call_count == 1 and s.email.call_count == 1
+    assert s.model.call_count == 1
+    assert s.email.call_count == 1
     assert '"kind": "pr"' in s.model.call_args.args[1][0]["content"]
     assert "merged" in s.model.call_args.args[0]
 
@@ -168,7 +170,8 @@ def test_artifact_upload_crash_reuses_object_and_checkpoint(state, monkeypatch):
     monkeypatch.setattr(s.executor.runs, "publish_artifact", publish)
     s.executor.run_once()
     result, steps = s.repo.detail("project", s.run.id)
-    assert result.status == "succeeded" and steps[2].output["artifactId"] == result.artifact_id
+    assert result.status == "succeeded"
+    assert steps[2].output["artifactId"] == result.artifact_id
     assert list(s.services.library.directory.iterdir()) == files
     with s.db.session() as session:
         assert len(list(session.scalars(select(LibraryAsset)))) == 1
@@ -184,13 +187,15 @@ def test_email_crash_becomes_unknown_and_explicit_resend_only(state):
     s.email.side_effect = None
     s.executor.run_once()
     result, steps = s.repo.detail("project", s.run.id)
-    assert result.status == "succeeded" and steps[3].status == "unknown"
+    assert result.status == "succeeded"
+    assert steps[3].status == "unknown"
     assert s.email.call_count == 1
     with pytest.raises(WorkflowConflict):
         s.repo.retry_run("project", s.run.id, "notification")
     s.repo.retry_run("project", s.run.id, "notification", confirm_resend=True)
     s.executor.run_once()
-    assert s.email.call_count == 2 and s.model.call_count == 1
+    assert s.email.call_count == 2
+    assert s.model.call_count == 1
     assert s.repo.detail("project", s.run.id)[0].artifact_id == result.artifact_id
 
 
@@ -199,11 +204,14 @@ def test_email_rejected_retry_never_repeats_ai(state):
     s.email.side_effect = EmailDeliveryError("rejected")
     s.executor.run_once()
     result, steps = s.repo.detail("project", s.run.id)
-    assert result.status == "succeeded" and steps[3].status == "failed"
+    assert result.status == "succeeded"
+    assert steps[3].status == "failed"
     s.repo.retry_run("project", result.id, "notification")
     s.email.side_effect = None
     s.executor.run_once()
-    assert s.model.call_count == 1 and s.source.call_count == 1 and s.email.call_count == 2
+    assert s.model.call_count == 1
+    assert s.source.call_count == 1
+    assert s.email.call_count == 2
 
 
 def test_resumed_side_effect_does_not_require_provider_credentials(state, monkeypatch):
@@ -231,7 +239,8 @@ def test_workflow_api_idempotency_and_viewer_actions(state, monkeypatch):
         base = f"/api/projects/project/workflows/{s.workflow.id}/runs"
         first = client.post(base, json=s.period.model_dump(mode="json"), headers={"Idempotency-Key": "request"})
         again = client.post(base, json=s.period.model_dump(mode="json"), headers={"Idempotency-Key": "request"})
-        assert first.status_code == 202 and again.json()["id"] == first.json()["id"]
+        assert first.status_code == 202
+        assert again.json()["id"] == first.json()["id"]
         changed = s.period.model_copy(update={"startsAt": s.period.startsAt - timedelta(days=1)})
         assert client.post(base, json=changed.model_dump(mode="json"), headers={"Idempotency-Key": "request"}).status_code == 409
         detail = f"/api/projects/project/workflow-runs/{s.run.id}"
@@ -265,7 +274,8 @@ def test_schedule_api_dispatches_workflow_without_chat(state):
     with TestClient(app) as client:
         response = client.post(f"/api/schedules/{schedule.id}/run-now")
         assert response.status_code == 202
-        assert response.json()["workflowRunId"] and "chatId" not in response.json()
+        assert response.json()["workflowRunId"]
+        assert "chatId" not in response.json()
         assert client.patch(f"/api/schedules/{schedule.id}", json={"prompt": "change"}).status_code == 409
 
 
@@ -296,7 +306,8 @@ def test_cancel_queued_and_cancel_during_agent(state):
     s.model.side_effect = cancel
     s.executor.run_once()
     result, _ = s.repo.detail("project", s.run.id)
-    assert result.status == "cancelled" and result.artifact_id is None
+    assert result.status == "cancelled"
+    assert result.artifact_id is None
     s.email.assert_not_called()
 
 
@@ -324,14 +335,17 @@ def test_schedule_enqueue_and_advance_are_atomic(state, monkeypatch):
     schedules.claim_due(now)
     with s.db.session() as session:
         runs = list(session.scalars(select(WorkflowRun).where(WorkflowRun.id != s.run.id)))
-        assert len(runs) == 1 and runs[0].user_id == "user" and runs[0].workspace_id == "workspace"
+        assert len(runs) == 1
+        assert runs[0].user_id == "user"
+        assert runs[0].workspace_id == "workspace"
         assert aware(runs[0].starts_at) == datetime(2026, 9, 13, 17, tzinfo=UTC)
         assert aware(runs[0].ends_at) == datetime(2026, 9, 20, 17, tzinfo=UTC)
         assert len(list(session.scalars(select(ScheduleRun)))) == 1
     with pytest.raises(ValueError, match="Project"):
         schedules.claim_manual(schedule.id, now)
     manual = schedules.enqueue_workflow_manual(schedule.id, now)
-    assert manual.project_id == "project" and manual.status == "queued"
+    assert manual.project_id == "project"
+    assert manual.status == "queued"
     with s.db.session() as session:
         assert aware(session.get(Schedule, schedule.id).next_run_at) == datetime(2026, 9, 28, 1, tzinfo=UTC)
 
@@ -341,8 +355,10 @@ def test_transient_provider_failure_keeps_source_checkpoint(state):
     s.model.side_effect = httpx.ReadTimeout("secret")
     s.executor.run_once()
     run, steps = s.repo.detail("project", s.run.id)
-    assert run.status == "retrying" and steps[0].status == "succeeded"
-    assert steps[1].attempt == 1 and "secret" not in steps[1].error
+    assert run.status == "retrying"
+    assert steps[0].status == "succeeded"
+    assert steps[1].attempt == 1
+    assert "secret" not in steps[1].error
     assert s.executor.run_once() is False
     s.repo.cancel("project", run.id)
     assert s.repo.detail("project", run.id)[0].status == "cancelled"

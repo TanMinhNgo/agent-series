@@ -68,7 +68,7 @@ export function WorkflowRunPage() {
       <Link className="text-sm underline" to={`/projects/${projectId}`}>
         ← Project
       </Link>
-      {run.isLoading && <p role="status">Đang tải lần chạy...</p>}
+      {run.isLoading && <output className="block">Đang tải lần chạy...</output>}
       {run.error && <p role="alert">{run.error.message}</p>}
       {actionError && <p role="alert">{actionError.message}</p>}
       {run.data && (

@@ -252,6 +252,7 @@ function FeedbackButton({
 }) {
   const isHelpful = savedKind === 'helpful';
   const hasNegativeFeedback = Boolean(savedKind && !isHelpful);
+  const ratingText = isHelpful ? 'trả lời tốt' : 'trả lời tệ';
   const FeedbackIcon = hasNegativeFeedback ? ThumbsDown : ThumbsUp;
   return (
     <DropdownMenu>
@@ -261,9 +262,7 @@ function FeedbackButton({
             size="icon-sm"
             variant="ghost"
             className={cn('size-7 rounded-md', savedKind && 'text-primary hover:text-primary')}
-            aria-label={
-              savedKind ? `Đã đánh giá: ${isHelpful ? 'trả lời tốt' : 'trả lời tệ'}` : 'Đánh giá phản hồi'
-            }
+            aria-label={savedKind ? `Đã đánh giá: ${ratingText}` : 'Đánh giá phản hồi'}
           />
         }
       >

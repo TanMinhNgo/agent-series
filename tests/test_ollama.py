@@ -36,8 +36,9 @@ def test_ollama_catalog_discovers_installed_models(monkeypatch):
 def test_ollama_catalog_reports_offline_runtime(monkeypatch):
     monkeypatch.setattr("agent_core.ai.ollama.urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(URLError("offline")))
 
+    catalog = OllamaCatalog("http://127.0.0.1:11434")
     with pytest.raises(OllamaUnavailableError, match="Không thể kết nối Ollama"):
-        OllamaCatalog("http://127.0.0.1:11434").models()
+        catalog.models()
 
 
 def test_ollama_client_normalizes_tool_calls(monkeypatch):

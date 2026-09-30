@@ -19,6 +19,13 @@ from .repository import WorkflowRepository, LeaseLost, RunCancelled, completed
 logger = logging.getLogger(__name__)
 
 
+SOURCE_NOTES = {
+    "github-weekly-summary": "Trạng thái tại lúc lấy nguồn; không tái dựng lịch sử. Mô tả nguồn có thể được rút gọn tới 1.000 ký tự.",
+    "daily-ai-digest": "Nguồn web là đoạn trích từ kết quả tìm kiếm tại lúc lấy nguồn; chưa xác minh ngày xuất bản hay toàn bộ nội dung trang.",
+}
+DEFAULT_SOURCE_NOTE = "Nguồn là trích đoạn từ phiên bản tài liệu đã index tại lúc lấy nguồn; không thể hiện toàn bộ tài liệu hay lịch sử thay đổi trong kỳ."
+
+
 def transient_error(exc):
     """Inspect typed provider errors, including wrapped connector exceptions."""
     seen = set()
@@ -195,11 +202,7 @@ class WorkflowExecutor:
         self.runs.step(run.id, "artifact", "running", lease_token=lease)
         authorize(self.services, run.project_id, write=True)
         source_label = run.snapshot.get("repository") or run.snapshot.get("template", "Project")
-        source_note = ("Trạng thái tại lúc lấy nguồn; không tái dựng lịch sử. Mô tả nguồn có thể được rút gọn tới 1.000 ký tự."
-            if run.snapshot["template"] == "github-weekly-summary" else
-            "Nguồn web là đoạn trích từ kết quả tìm kiếm tại lúc lấy nguồn; chưa xác minh ngày xuất bản hay toàn bộ nội dung trang."
-            if run.snapshot["template"] == "daily-ai-digest" else
-            "Nguồn là trích đoạn từ phiên bản tài liệu đã index tại lúc lấy nguồn; không thể hiện toàn bộ tài liệu hay lịch sử thay đổi trong kỳ.")
+        source_note = SOURCE_NOTES.get(run.snapshot["template"], DEFAULT_SOURCE_NOTE)
         heading = f"# {run.snapshot['name']}\n\nNguồn: {source_label}\n\nKhoảng thời gian UTC: [{run.starts_at.isoformat()}, {run.ends_at.isoformat()})\n\nLấy nguồn lúc: {fetched_at}\n\n{source_note}\n\n"
         storage = self.services.library.storage
         intent = self.runs.artifact_intent(run.id, lease, heading + report, storage)

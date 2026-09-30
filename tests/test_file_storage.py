@@ -8,7 +8,7 @@ from agent_core.content.file_storage import FileStorageService
 
 def test_local_storage_upload_read_and_delete(tmp_path: Path) -> None:
     storage = FileStorageService(tmp_path)
-    saved = storage.upload(b"hello", "note.txt", "library")
+    saved = storage.upload(b"hello", "library")
 
     assert saved.provider == "local"
     assert storage.read(saved.provider, saved.stored_name, saved.file_id) == b"hello"
@@ -34,7 +34,7 @@ def test_imagekit_storage_uses_private_upload_and_signed_url(tmp_path: Path) -> 
 
     storage = FileStorageService(tmp_path, "private-key", "https://ik.example")
     storage._client = SimpleNamespace(files=Files(), helper=Helper())
-    saved = storage.upload(b"png", "photo.png", "chat")
+    saved = storage.upload(b"png", "chat")
 
     assert saved.provider == "imagekit"
     assert calls[0][1]["is_private_file"] is True
@@ -46,7 +46,7 @@ def test_imagekit_storage_uses_private_upload_and_signed_url(tmp_path: Path) -> 
 def test_local_file_is_migrated_only_after_imagekit_is_enabled(tmp_path: Path) -> None:
     (tmp_path / "old.pdf").write_bytes(b"old")
     storage = FileStorageService(tmp_path)
-    assert storage.migrate_local("old.pdf", "document.pdf", "knowledge") is None
+    assert storage.migrate_local("old.pdf", "knowledge") is None
 
 
 @pytest.mark.parametrize("stored_name", ("../secret.txt", "nested/file.txt", "nested\\file.txt", ""))
@@ -68,8 +68,10 @@ def test_workflow_upload_reconciles_lost_imagekit_response(tmp_path, monkeypatch
     monkeypatch.setattr(storage, "read", lambda *_: b"report")
     first = storage.upload_once(b"report", "asset", "imagekit")
     assert storage.upload_once(b"report", "asset", "imagekit") == first
-    assert len(uploads) == 1 and not uploads[0]["overwrite_file"]
-    assert uploads[0]["is_private_file"] and not uploads[0]["use_unique_file_name"]
+    assert len(uploads) == 1
+    assert not uploads[0]["overwrite_file"]
+    assert uploads[0]["is_private_file"]
+    assert not uploads[0]["use_unique_file_name"]
 
 
 def test_workflow_upload_never_reuses_corrupted_local_content(tmp_path):

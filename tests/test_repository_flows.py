@@ -24,7 +24,8 @@ def test_job_deduplication_retry_and_worker_status(database):
     first, created = jobs.enqueue_unique("document_index", {"id": "one"}, "document:one")
     assert created
     same, created = jobs.enqueue_unique("document_index", {"id": "one"}, "document:one")
-    assert not created and same.id == first.id
+    assert not created
+    assert same.id == first.id
     assert jobs.latest_for_document("one").id == first.id
     assert jobs.claim(now + timedelta(seconds=1)).id == first.id
     jobs.fail(first.id, "temporary", now)
@@ -36,10 +37,12 @@ def test_job_deduplication_retry_and_worker_status(database):
     assert jobs.worker_status(now)["lastError"] == "permanent"
     jobs.heartbeat(now, "document_index", "worker error")
     status = jobs.worker_status(now)
-    assert status["online"] and status["lastError"] == "worker error"
+    assert status["online"]
+    assert status["lastError"] == "worker error"
     assert status["currentJobType"] == "document_index"
     replacement, created = jobs.enqueue_unique("document_index", {"id": "one"}, "document:one")
-    assert created and replacement.id != first.id
+    assert created
+    assert replacement.id != first.id
     assert jobs.cancel_document_jobs(["one"]) == 1
     assert jobs.claim(now + timedelta(minutes=1)) is None
 
@@ -115,7 +118,8 @@ def test_schedule_retries_keep_one_run_and_heartbeat_prevents_recovery(database)
     assert schedules.claim_due(now) == []
     assert schedules.get_run(schedule.id, run.id).status == "running"
     due, attempt = schedules.schedule_retry(run.id, "rate limited", (1,), now)
-    assert attempt == 1 and due == now + timedelta(minutes=1)
+    assert attempt == 1
+    assert due == now + timedelta(minutes=1)
     assert schedules.claim_due_retries(now) == []
     assert schedules.claim_due_retries(due)[0][1].id == run.id
     assert schedules.schedule_retry(run.id, "again", (1,), due) is None
@@ -127,8 +131,9 @@ def test_schedule_retries_keep_one_run_and_heartbeat_prevents_recovery(database)
     assert [item.id for item in schedules.list_runs(schedule.id)] == [run.id]
     manual = schedules.claim_manual(schedule.id, due + timedelta(minutes=2))
     assert manual[1].id != run.id
+    later = due + timedelta(minutes=3)
     with pytest.raises(ValueError, match="đang chạy"):
-        schedules.claim_manual(schedule.id, due + timedelta(minutes=3))
+        schedules.claim_manual(schedule.id, later)
     assert schedules.recover_stale_runs(due + timedelta(hours=1)) == 1
 
 
@@ -145,7 +150,8 @@ def test_connector_metadata_never_exposes_secret_and_oauth_state_is_one_time(dat
     finally:
         current_user_id.reset(token)
     rows, total = connectors.list_connection_metadata(0, 10, query="connector@", connector_slug="github", status="connected")
-    assert total == 1 and rows[0]["user_email"] == owner.email
+    assert total == 1
+    assert rows[0]["user_email"] == owner.email
     assert "encrypted_token" not in rows[0]
     connectors.audit("github", "connected", connection.id)
     assert connectors.list_audit("github")[0].event_type == "connected"
@@ -210,7 +216,8 @@ def test_chat_share_rotation_and_artifact_provenance(database):
     assert [item["role"] for item in share.messages] == ["user", "assistant"]
     assert chats.get_share(share.token).id == share.id
     rotated = chats.create_or_update_share(chat.id)
-    assert rotated.id == share.id and rotated.token != share.token
+    assert rotated.id == share.id
+    assert rotated.token != share.token
     assert chats.get_share(share.token) is None
     asset = LibraryAsset(name="output.txt", stored_name="output-one", mime_type="text/plain", size_bytes=4)
     with database.session() as session:
@@ -319,7 +326,8 @@ def test_workspace_invitation_and_activity_are_scoped_to_project(database):
     workspace = workspaces.create_workspace(owner.id, "Team")
     invitation = workspaces.invite(workspace.id, "new@example.com", "viewer", owner.id, now + timedelta(days=1))
     changed = workspaces.invite(workspace.id, "new@example.com", "editor", owner.id, now + timedelta(days=2))
-    assert changed.id == invitation.id and changed.role == "editor"
+    assert changed.id == invitation.id
+    assert changed.role == "editor"
     assert workspaces.cancel_invitation(workspace.id, invitation.id)
     assert workspaces.invitations(workspace.id) == []
     assert workspaces.accept_invitation(invitation.id, owner.id, "new@example.com", now) is None

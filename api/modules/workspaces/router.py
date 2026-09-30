@@ -51,14 +51,15 @@ def _find_invitable_users(deps: WorkspaceDependencies, q: str) -> list[dict[str,
         return [{"id": user.id, "email": user.email, "displayName": user.display_name} for user in session.scalars(statement) if user.email.lower() != admin_email]
 
 
+def owner(request: Request):
+    membership = getattr(request.state, "workspace_membership", None)
+    if membership is None or membership.role != "owner":
+        raise HTTPException(status_code=403, detail="Chỉ owner workspace mới được thực hiện thao tác này.")
+    return membership
+
+
 def build_router(deps: WorkspaceDependencies) -> APIRouter:
     router = APIRouter(tags=["Workspaces"])
-
-    def owner(request: Request):
-        membership = getattr(request.state, "workspace_membership", None)
-        if membership is None or membership.role != "owner":
-            raise HTTPException(status_code=403, detail="Chỉ owner workspace mới được thực hiện thao tác này.")
-        return membership
 
     @router.get("/api/workspaces", responses=deps.api_error_responses)
     def list_workspaces(request: Request) -> list[dict[str, Any]]:

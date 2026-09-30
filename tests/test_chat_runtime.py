@@ -113,8 +113,9 @@ def test_rejected_chat_stream_does_not_register_a_run() -> None:
         media=SimpleNamespace(for_prompt=lambda _: []),
         artifacts=SimpleNamespace(edit_context=lambda *_: SimpleNamespace(id="asset-1")))
     controller = ChatStreamController(lambda: services, lambda *_: iter(()), registry, "Missing", "Missing")
+    request = ChatRequest(content="Edit", editAssetId="asset-1", runId="run-1")
     with pytest.raises(HTTPException) as error:
-        controller.stream("chat-1", ChatRequest(content="Edit", editAssetId="asset-1", runId="run-1"))
+        controller.stream("chat-1", request)
     assert error.value.status_code == 422
     registry.start("chat-1", "run-1", "user-1")
 
@@ -447,7 +448,8 @@ def test_project_connector_tools_only_expose_explicitly_scoped_reads() -> None:
 def test_api_agent_translates_domain_validation_error(monkeypatch):
     from fastapi import HTTPException
     monkeypatch.setattr(chat_runtime, "selected_settings", lambda *_args: (_ for _ in ()).throw(ValueError("Model disabled")))
+    chat = Chat(provider="openai", model="disabled")
     with pytest.raises(HTTPException) as captured:
-        make_agent(SimpleNamespace(), Chat(provider="openai", model="disabled"))
+        make_agent(SimpleNamespace(), chat)
     assert captured.value.status_code == 422
     assert captured.value.detail == "Model disabled"

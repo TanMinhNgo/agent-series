@@ -194,7 +194,7 @@ class ArtifactService:
             asset = session.get(LibraryAsset, asset_id)
             if asset is None or asset.storage_provider != "local":
                 return asset
-            stored = self.storage.migrate_local(asset.stored_name, asset.name, "library")
+            stored = self.storage.migrate_local(asset.stored_name, "library")
             if stored is None:
                 return asset
             asset.storage_provider, asset.stored_name, asset.storage_file_id = stored.provider, stored.stored_name, stored.file_id

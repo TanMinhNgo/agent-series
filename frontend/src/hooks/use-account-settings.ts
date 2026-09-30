@@ -19,7 +19,8 @@ export function useAccountSettings() {
   const client = useQueryClient();
   const settings = useQuery({ queryKey: key, queryFn: () => request<AccountSettings>({ url: '/settings' }) });
   const save = useMutation({
-    mutationFn: (data: AccountSettings) => request<AccountSettings>({ url: '/settings', method: 'PUT', data }),
+    mutationFn: (data: AccountSettings) =>
+      request<AccountSettings>({ url: '/settings', method: 'PUT', data }),
     onSuccess: (data) => {
       client.setQueryData(key, data);
       void client.invalidateQueries({ queryKey: ['config'] });

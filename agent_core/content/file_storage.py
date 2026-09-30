@@ -60,7 +60,7 @@ class FileStorageService:
             output.write(data)
             return Path(output.name).name
 
-    def upload(self, data: bytes, original_name: str, storage_area: str) -> StoredFile:
+    def upload(self, data: bytes, storage_area: str) -> StoredFile:
         # The stored object name is never derived from a client-supplied file name.
         if not self.imagekit_enabled:
             return StoredFile("local", self._store_local(data))
@@ -74,14 +74,14 @@ class FileStorageService:
         except Exception as exc:  # noqa: BLE001 - SDK normalizes provider-specific errors poorly.
             raise RuntimeError("Không thể upload file lên ImageKit.") from exc
 
-    def migrate_local(self, stored_name: str, original_name: str, storage_area: str) -> StoredFile | None:
+    def migrate_local(self, stored_name: str, storage_area: str) -> StoredFile | None:
         """Copy an old local object on first access; callers persist returned metadata."""
         if not self.imagekit_enabled:
             return None
         path = self._local_path(stored_name)
         if not path.is_file():
             return None
-        return self.upload(path.read_bytes(), original_name, storage_area)
+        return self.upload(path.read_bytes(), storage_area)
 
     def upload_once(self, data: bytes, asset_id: str, provider: str) -> StoredFile:
         """Reconcile an immutable workflow object after an interrupted upload."""
@@ -93,17 +93,7 @@ class FileStorageService:
             raise ValueError("Storage của artifact không còn được cấu hình.")
         client = self._imagekit()
         folder = self._imagekit_folder("library")
-
-        def existing():
-            for item in client.assets.list(path=folder, search_query=f'name = "{name}"', limit=2):
-                if getattr(item, "file_path", None) == f"{folder}/{name}":
-                    stored = StoredFile("imagekit", item.file_path, item.file_id)
-                    if self.read(stored.provider, stored.stored_name, stored.file_id) != data:
-                        raise ValueError("Nội dung artifact đã lưu không khớp checkpoint.")
-                    return stored
-            return None
-
-        found = existing()
+        found = self._find_imagekit(client, folder, name, data)
         if found:
             return found
         try:
@@ -111,11 +101,21 @@ class FileStorageService:
                 is_private_file=True, use_unique_file_name=False, overwrite_file=False)
         except Exception:
             # The response may have been lost after a successful upload.
-            found = existing()
+            found = self._find_imagekit(client, folder, name, data)
             if found:
                 return found
             raise
         return StoredFile("imagekit", str(result.file_path), str(result.file_id))
+
+    def _find_imagekit(self, client, folder: str, name: str, data: bytes) -> StoredFile | None:
+        for item in client.assets.list(path=folder, search_query=f'name = "{name}"', limit=2):
+            if getattr(item, "file_path", None) != f"{folder}/{name}":
+                continue
+            stored = StoredFile("imagekit", item.file_path, item.file_id)
+            if self.read(stored.provider, stored.stored_name, stored.file_id) != data:
+                raise ValueError("Nội dung artifact đã lưu không khớp checkpoint.")
+            return stored
+        return None
 
     def _upload_once_local(self, name: str, data: bytes) -> StoredFile:
         path = self._local_path(name)

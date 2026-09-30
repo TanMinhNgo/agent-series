@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Menu } from 'lucide-react';
 
 import { Separator } from '@/components/ui/separator';
-import { ModelPicker, type ModelPickerProvider } from '@/components/ui/model-picker';
+import { ModelPicker, type ModelCapability, type ModelPickerProvider } from '@/components/ui/model-picker';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { Chat, Config } from '@/src/types';
 
@@ -29,6 +29,17 @@ const PROVIDER_NAMES: Record<string, string> = {
   gemini: 'Google',
   ollama: 'Ollama',
 };
+
+function ollamaNotice(hasModels: boolean, available: boolean) {
+  if (hasModels) return 'Ollama đang kết nối.';
+  if (available) return 'Ollama chưa có model local. Hãy tải model trong Ollama rồi kiểm tra lại.';
+  return 'Ollama chưa kết nối. Bạn có thể tắt để tiết kiệm RAM, mở khi cần rồi kiểm tra lại.';
+}
+
+function modelCapabilities(imageModel: boolean, reasoningModel: boolean): ModelCapability[] | undefined {
+  if (imageModel) return ['image'];
+  return reasoningModel ? ['reasoning'] : undefined;
+}
 
 export function ChatHeader({
   chat,
@@ -64,13 +75,7 @@ export function ChatHeader({
         notice:
           providerId === 'ollama' ? (
             <div className="space-y-2" role="status">
-              <p>
-                {models.length
-                  ? 'Ollama đang kết nối.'
-                  : config.providerStatus?.ollama?.available
-                    ? 'Ollama chưa có model local. Hãy tải model trong Ollama rồi kiểm tra lại.'
-                    : 'Ollama chưa kết nối. Bạn có thể tắt để tiết kiệm RAM, mở khi cần rồi kiểm tra lại.'}
-              </p>
+              <p>{ollamaNotice(models.length > 0, Boolean(config.providerStatus?.ollama?.available))}</p>
               {modelsRefreshFailed && (
                 <p className="text-destructive">Không tải được cấu hình. Vui lòng thử lại.</p>
               )}
@@ -92,7 +97,7 @@ export function ChatHeader({
           return {
             id: modelId,
             name: modelId,
-            capabilities: imageModel ? ['image'] : reasoningModel ? ['reasoning'] : undefined,
+            capabilities: modelCapabilities(imageModel, reasoningModel),
             thinking: reasoningModel ? ['low', 'medium', 'high'] : undefined,
             defaultThinking: reasoningModel ? 'medium' : undefined,
           };

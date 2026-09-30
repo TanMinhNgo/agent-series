@@ -13,20 +13,22 @@ down_revision = "0033_artifact_message_links"
 branch_labels = None
 depends_on = None
 
+USERS_ID = "users.id"
+
 
 def upgrade() -> None:
     op.create_table(
         "project_activities",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("project_id", sa.String(36), sa.ForeignKey("projects.id", ondelete="CASCADE"), nullable=True),
-        sa.Column("actor_user_id", sa.String(36), sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True),
+        sa.Column("actor_user_id", sa.String(36), sa.ForeignKey(USERS_ID, ondelete="SET NULL"), nullable=True),
         sa.Column("event_type", sa.String(64), nullable=False),
         sa.Column("subject_type", sa.String(32), nullable=False),
         sa.Column("subject_id", sa.String(36), nullable=True),
         sa.Column("summary", sa.String(500), nullable=False),
         sa.Column("metadata_json", sa.JSON(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=True),
+        sa.Column("user_id", sa.String(36), sa.ForeignKey(USERS_ID, ondelete="CASCADE"), nullable=True),
         sa.Column("workspace_id", sa.String(36), sa.ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True),
     )
     op.create_table(
@@ -41,7 +43,7 @@ def upgrade() -> None:
         sa.Column("chunk_ref", sa.String(80), nullable=True),
         sa.Column("url", sa.String(500), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=True),
+        sa.Column("user_id", sa.String(36), sa.ForeignKey(USERS_ID, ondelete="CASCADE"), nullable=True),
         sa.Column("workspace_id", sa.String(36), sa.ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True),
     )
     for table, columns in {

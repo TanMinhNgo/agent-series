@@ -226,6 +226,49 @@ type ArtifactHeaderProps = {
   onClose: () => void;
 };
 
+function ArtifactPicker({
+  groups,
+  selected,
+  title,
+  onSelect,
+}: Pick<ArtifactHeaderProps, 'groups' | 'selected' | 'onSelect'> & { title: ReactNode }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="sm"
+            className="min-w-0 max-w-full gap-1.5 px-2"
+            aria-label="Chọn file"
+          />
+        }
+      >
+        {title}
+        <ChevronDown className="shrink-0 text-muted-foreground" size={14} />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-h-80 w-72 overflow-y-auto">
+        <DropdownMenuRadioGroup value={selected?.id ?? ''} onValueChange={onSelect}>
+          {groups.map((group) => (
+            <DropdownMenuGroup key={group.messageId}>
+              <DropdownMenuLabel>
+                Phản hồi {group.createdAt ? formatDate(group.createdAt) : 'vừa tạo'}
+              </DropdownMenuLabel>
+              {group.artifacts.map((asset) => (
+                <DropdownMenuRadioItem key={asset.id} value={asset.id}>
+                  <FileText className="text-muted-foreground" size={14} />
+                  <span className="min-w-0 flex-1 truncate">{asset.name}</span>
+                  <span className="text-xs text-muted-foreground">v{asset.version}</span>
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuGroup>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function ArtifactHeader({
   groups,
   selected,
@@ -249,39 +292,7 @@ function ArtifactHeader({
     <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
       <div className="flex min-w-0 items-center gap-1">
         {fileCount > 1 ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="min-w-0 max-w-full gap-1.5 px-2"
-                  aria-label="Chọn file"
-                />
-              }
-            >
-              {title}
-              <ChevronDown className="shrink-0 text-muted-foreground" size={14} />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="max-h-80 w-72 overflow-y-auto">
-              <DropdownMenuRadioGroup value={selected?.id ?? ''} onValueChange={onSelect}>
-                {groups.map((group) => (
-                  <DropdownMenuGroup key={group.messageId}>
-                    <DropdownMenuLabel>
-                      Phản hồi {group.createdAt ? formatDate(group.createdAt) : 'vừa tạo'}
-                    </DropdownMenuLabel>
-                    {group.artifacts.map((asset) => (
-                      <DropdownMenuRadioItem key={asset.id} value={asset.id}>
-                        <FileText className="text-muted-foreground" size={14} />
-                        <span className="min-w-0 flex-1 truncate">{asset.name}</span>
-                        <span className="text-xs text-muted-foreground">v{asset.version}</span>
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuGroup>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <ArtifactPicker groups={groups} selected={selected} title={title} onSelect={onSelect} />
         ) : (
           <div className="flex min-w-0 items-center gap-1.5 px-2">{title}</div>
         )}
@@ -569,12 +580,7 @@ export function ArtifactPanel({
               className={`absolute inset-y-0 -left-1 z-10 hidden w-2 cursor-col-resize touch-none lg:block ${
                 isResizing ? 'bg-primary/30' : 'hover:bg-primary/20'
               }`}
-              role="separator"
               aria-label="Điều chỉnh độ rộng File AI tạo"
-              aria-orientation="vertical"
-              aria-valuemin={MIN_PANEL_WIDTH}
-              aria-valuemax={MAX_PANEL_WIDTH}
-              aria-valuenow={Math.round(panelWidth)}
               onPointerDown={startResize}
               onPointerMove={resizePanel}
               onPointerUp={finishResize}
@@ -592,11 +598,15 @@ export function ArtifactPanel({
             />
             {body}
           </aside>
-          <div className="fixed inset-0 z-50 bg-black/50 p-3 lg:hidden" role="dialog" aria-modal="true">
+          <dialog
+            open
+            aria-modal="true"
+            className="fixed inset-0 z-50 m-0 h-full max-h-none w-full max-w-none border-0 bg-black/50 p-3 lg:hidden"
+          >
             <aside className="ml-auto flex h-full w-full max-w-md flex-col rounded-2xl border bg-background shadow-2xl">
               {body}
             </aside>
-          </div>
+          </dialog>
         </>
       ) : (
         <Button
@@ -609,9 +619,9 @@ export function ArtifactPanel({
         </Button>
       )}
       {isFullscreen && selected ? (
-        <div
-          className="fixed inset-0 z-[60] flex min-h-0 flex-col bg-background/95 backdrop-blur-sm"
-          role="dialog"
+        <dialog
+          open
+          className="fixed inset-0 z-[60] m-0 flex h-full max-h-none w-full max-w-none min-h-0 flex-col border-0 bg-background/95 p-0 text-foreground backdrop-blur-sm"
           aria-modal="true"
           aria-label={`Xem toàn màn hình ${selected.name}`}
         >
@@ -636,7 +646,7 @@ export function ArtifactPanel({
             </Button>
           </div>
           <ArtifactPreview preview={preview} selected={selected} fullscreen />
-        </div>
+        </dialog>
       ) : null}
     </>
   );

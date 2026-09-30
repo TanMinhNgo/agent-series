@@ -177,11 +177,8 @@ export function ModelPicker({
               ) : null}
             </div>
             {!query ? (
-              <div
-                className="mt-2 flex h-11 shrink-0 gap-1 overflow-x-auto"
-                role="group"
-                aria-label="Nhà cung cấp model"
-              >
+              <fieldset className="m-0 mt-2 flex h-11 min-w-0 shrink-0 gap-1 overflow-x-auto border-0 p-0">
+                <legend className="sr-only">Nhà cung cấp model</legend>
                 {availableProviders.map((provider) => (
                   <Tooltip.Root key={provider.id}>
                     <Tooltip.Trigger asChild>
@@ -212,7 +209,7 @@ export function ModelPicker({
                     </Tooltip.Portal>
                   </Tooltip.Root>
                 ))}
-              </div>
+              </fieldset>
             ) : null}
             <div className="mt-2 min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
               <div className="space-y-0.5">

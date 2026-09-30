@@ -33,7 +33,10 @@ def _resolve_update_selection(deps: ScheduleManagementDependencies, current: Any
     if not {"provider", "model"}.intersection(values):
         return
     provider = values.get("provider", current.provider)
-    model = values.get("model") if "model" in values else (current.model if "provider" not in values else None)
+    if "model" in values:
+        model = values["model"]
+    else:
+        model = current.model if "provider" not in values else None
     try:
         values["provider"], values["model"] = deps.resolve_schedule_selection(provider, model, deps.current_user_id())
     except Exception as exc:

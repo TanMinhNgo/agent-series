@@ -1,14 +1,20 @@
 """Execution of one non-image chat generation turn."""
 
+from dataclasses import dataclass
 from typing import Any, Callable
 
 
+@dataclass(frozen=True)
+class TurnDependencies:
+    load_generation_context: Callable[..., Any]
+    make_agent: Callable[..., Any]
+    project_connector_tools: Callable[..., Any]
+    persist_generation: Callable[..., Any]
+    agent_cancelled: type[BaseException]
+
+
 def run_agent_turn(
-    load_generation_context: Callable[..., Any],
-    make_agent: Callable[..., Any],
-    project_connector_tools: Callable[..., Any],
-    persist_generation: Callable[..., Any],
-    agent_cancelled: type[BaseException],
+    deps: TurnDependencies,
     app_services: Any,
     chat: Any,
     chat_id: str,
@@ -20,17 +26,17 @@ def run_agent_turn(
     events: Any,
     research_web: bool = False,
 ) -> None:
-    context = load_generation_context(app_services, chat, content, chat_id, full_history, events, research_web)
+    context = deps.load_generation_context(app_services, chat, content, chat_id, full_history, events, research_web)
     if cancel_event.is_set():
-        raise agent_cancelled()
+        raise deps.agent_cancelled()
     schedule_proposals: list[dict[str, Any]] = []
-    agent = make_agent(
+    agent = deps.make_agent(
         app_services,
         chat,
         context.memory,
         context.knowledge,
         personalization_context=context.personalization,
-        plugin_tools=project_connector_tools(app_services, chat),
+        plugin_tools=deps.project_connector_tools(app_services, chat),
         history=full_history,
         schedule_proposals=schedule_proposals,
         artifact_edit=artifact_edit,
@@ -40,5 +46,5 @@ def run_agent_turn(
     initial_history_length = len(agent.history)
     result = agent.run(content, attachments, on_step=lambda item: events.put((item["type"], item)), cancel_event=cancel_event)
     if cancel_event.is_set():
-        raise agent_cancelled()
-    persist_generation(app_services, chat, chat_id, full_history, agent, initial_history_length, result, schedule_proposals, context.web_sources, context.retrieval_traces, events)
+        raise deps.agent_cancelled()
+    deps.persist_generation(app_services, chat, chat_id, full_history, agent, initial_history_length, result, schedule_proposals, context.web_sources, context.retrieval_traces, events)

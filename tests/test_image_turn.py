@@ -32,7 +32,8 @@ def _patch_text_model(monkeypatch, reply=None, fail=False):
 def test_prompt_is_composed_from_chat_context(monkeypatch) -> None:
     seen = _patch_text_model(monkeypatch, reply="Sơ đồ luồng n8n nhận báo cáo issue")
     assert compose_image_prompt(None, _chat(), "tạo ảnh minh họa", HISTORY) == "Sơ đồ luồng n8n nhận báo cáo issue"
-    assert "n8n" in seen["prompt"] and "tạo ảnh minh họa" in seen["prompt"]
+    assert "n8n" in seen["prompt"]
+    assert "tạo ảnh minh họa" in seen["prompt"]
 
 
 def test_prompt_falls_back_without_context_or_on_error(monkeypatch) -> None:
@@ -66,4 +67,5 @@ def test_image_turn_saves_the_prompt_in_history(monkeypatch) -> None:
     assert generated["prompt"] == "Sơ đồ luồng n8n"
     assistant = stored["history"][-1]
     assert assistant["generated_asset_ids"] == ["a1"]
-    assert "Sơ đồ luồng n8n" in assistant["content"] and "ảnh" in assistant["content"]
+    assert "Sơ đồ luồng n8n" in assistant["content"]
+    assert "ảnh" in assistant["content"]

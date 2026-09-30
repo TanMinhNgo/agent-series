@@ -250,7 +250,10 @@ class WorkflowRepository:
     def finish(self, run_id, error=None, artifact_id=None, lease_token=None):
         with self.database.session() as session:
             run = self._owned(session, run_id, lease_token)
-            run.status = "cancelled" if run.cancel_requested else ("failed" if error else "succeeded")
+            if run.cancel_requested:
+                run.status = "cancelled"
+            else:
+                run.status = "failed" if error else "succeeded"
             run.error = RUN_CANCELLED if run.cancel_requested else error
             run.finished_at, run.lease_token, run.lease_until = utc_now(), None, None
             if artifact_id:

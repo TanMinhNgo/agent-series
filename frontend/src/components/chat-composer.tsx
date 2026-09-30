@@ -107,7 +107,7 @@ export function ChatComposer({
               disabled={busy}
               onChange={(event) => onResearchWebChange(event.target.checked)}
             />
-            Tìm web cho tin nhắn này
+            <span>Tìm web cho tin nhắn này</span>
           </label>
         ) : null}
       </div>

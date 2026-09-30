@@ -31,7 +31,7 @@ from api.modules.chats.runtime.generation import is_ollama_tool_echo, model_erro
 from api.modules.chats.runtime.persistence import PersistenceDependencies, persist_generation, persist_static_response
 from api.modules.chats.runtime.stream import StreamDependencies, stream_chat
 from api.modules.chats.runtime.tools import project_connector_tools
-from api.modules.chats.runtime.turn import run_agent_turn
+from api.modules.chats.runtime.turn import TurnDependencies, run_agent_turn
 from api.modules.common.serializers import library_asset_json
 
 OLLAMA_RAG_MAX_DISTANCE = 0.45
@@ -179,7 +179,7 @@ class ChatModule:
 
     def run_agent_turn(self, app_services, chat: Chat, chat_id: str, content: str, attachments: list[dict], artifact_edit: ArtifactEditContext | None, cancel_event: Event, full_history: list[dict[str, Any]], events: Queue, research_web: bool = False) -> None:
         return run_agent_turn(
-            self.load_generation_context, self.make_agent, project_connector_tools, self.persist_generation, AgentCancelled,
+            TurnDependencies(self.load_generation_context, self.make_agent, project_connector_tools, self.persist_generation, AgentCancelled),
             app_services, chat, chat_id, content, attachments, artifact_edit, cancel_event, full_history, events, research_web,
         )
 

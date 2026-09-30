@@ -60,7 +60,7 @@ function WorkflowForm({
       }}
     >
       <label className="grid gap-1 text-sm sm:col-span-2">
-        Recipe
+        <span>Recipe</span>
         <select
           className={inputClass}
           value={template}
@@ -79,7 +79,7 @@ function WorkflowForm({
         </select>
       </label>
       <label className="grid gap-1 text-sm">
-        Tên workflow
+        <span>Tên workflow</span>
         <input
           required
           maxLength={160}
@@ -89,7 +89,7 @@ function WorkflowForm({
         />
       </label>
       <label className="grid gap-1 text-sm">
-        Repository {requiresRepository ? '' : '(không bắt buộc)'}
+        <span>Repository {requiresRepository ? '' : '(không bắt buộc)'}</span>
         <select
           required={requiresRepository}
           className={inputClass}
@@ -103,7 +103,7 @@ function WorkflowForm({
         </select>
       </label>
       <label className="grid gap-1 text-sm">
-        Provider
+        <span>Provider</span>
         <select
           className={inputClass}
           value={provider}
@@ -118,7 +118,7 @@ function WorkflowForm({
         </select>
       </label>
       <label className="grid gap-1 text-sm">
-        Model
+        <span>Model</span>
         <select required className={inputClass} value={model} onChange={(e) => setModel(e.target.value)}>
           <option value="">Chọn model</option>
           {(config.providers[provider] ?? []).map((value) => (
@@ -127,7 +127,7 @@ function WorkflowForm({
         </select>
       </label>
       <label className="grid gap-1 text-sm sm:col-span-2">
-        Yêu cầu báo cáo
+        <span>Yêu cầu báo cáo</span>
         <textarea
           required
           maxLength={10000}
@@ -138,7 +138,7 @@ function WorkflowForm({
       </label>
       <label className="flex items-center gap-2 text-sm">
         <input type="checkbox" checked={notifyEmail} onChange={(e) => setNotifyEmail(e.target.checked)} />
-        Gửi email cho người chạy
+        <span>Gửi email cho người chạy</span>
       </label>
       <Button type="submit" disabled={pending || (requiresRepository && !repository) || !model}>
         {pending ? 'Đang lưu...' : 'Lưu workflow'}
@@ -170,11 +170,12 @@ export function ProjectWorkflows({ projectId, repositories }: { projectId: strin
   const [historyId, setHistoryId] = useState('');
   const [historyStatus, setHistoryStatus] = useState('');
   const [period, setPeriod] = useState(previousWeek);
+  const statusQuery = historyStatus ? `?status=${historyStatus}` : '';
   const runs = useQuery({
     queryKey: ['workflow-runs', projectId, historyId, historyStatus],
     queryFn: () =>
       request<WorkflowRun[]>({
-        url: `${base}/${historyId}/runs${historyStatus ? `?status=${historyStatus}` : ''}`,
+        url: `${base}/${historyId}/runs${statusQuery}`,
       }),
     enabled: Boolean(historyId),
   });
@@ -228,7 +229,7 @@ export function ProjectWorkflows({ projectId, repositories }: { projectId: strin
             {error.message}
           </p>
         )}
-        {workflows.isLoading && <p role="status">Đang tải workflow...</p>}
+        {workflows.isLoading && <output className="block">Đang tải workflow...</output>}
         {canWrite && (
           <>
             <Button
@@ -264,7 +265,7 @@ export function ProjectWorkflows({ projectId, repositories }: { projectId: strin
         {canWrite && (
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="grid gap-1 text-sm">
-              Từ ngày (giờ Việt Nam)
+              <span>Từ ngày (giờ Việt Nam)</span>
               <input
                 type="date"
                 className={inputClass}
@@ -273,7 +274,7 @@ export function ProjectWorkflows({ projectId, repositories }: { projectId: strin
               />
             </label>
             <label className="grid gap-1 text-sm">
-              Đến hết ngày (giờ Việt Nam)
+              <span>Đến hết ngày (giờ Việt Nam)</span>
               <input
                 type="date"
                 className={inputClass}

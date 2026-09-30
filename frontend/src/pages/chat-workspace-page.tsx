@@ -81,6 +81,19 @@ type TemplateDraft = {
   projectId: string | null;
 };
 
+/** Returns the artifact id from a create_file/create_artifact_version tool result, if any. */
+function createdArtifactId(data: Record<string, unknown>): string | null {
+  if (data.name !== 'create_file' && data.name !== 'create_artifact_version') return null;
+  try {
+    const result = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
+    const id = (result as { id?: unknown } | null)?.id;
+    return typeof id === 'string' ? id : null;
+  } catch {
+    // A non-JSON tool result is not an artifact; keep the normal tool status visible.
+    return null;
+  }
+}
+
 function savedArtifactPanelState() {
   try {
     return {
@@ -113,9 +126,17 @@ export function ChatWorkspace({
   const auth = useAuth();
   const account = useAccountSettings();
   const [themeOverride, setThemeOverride] = useState<Theme | null>(null);
-  const theme = themeOverride || account.settings.data?.theme || (localStorage.getItem('agent-series.theme') as Theme) || 'system';
+  const theme =
+    themeOverride ||
+    account.settings.data?.theme ||
+    (localStorage.getItem('agent-series.theme') as Theme) ||
+    'system';
   const [prompt, setPrompt] = useState('');
-  const [draftSelection, setDraftSelection] = useState<DraftSelection>({ provider: '', model: '', mode: 'standard' });
+  const [draftSelection, setDraftSelection] = useState<DraftSelection>({
+    provider: '',
+    model: '',
+    mode: 'standard',
+  });
   const [researchWeb, setResearchWeb] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [isCreatingChat, setIsCreatingChat] = useState(false);
@@ -196,9 +217,11 @@ export function ChatWorkspace({
       ? draftSelection.provider
       : (config.data?.defaultProvider ?? draftSelection.provider);
   const draftModels = config.data?.providers[draftProvider] || [];
+  const providerDefaultModel =
+    draftProvider === config.data?.defaultProvider ? config.data?.defaultModel : undefined;
   const draftModel = draftModels.includes(draftSelection.model)
     ? draftSelection.model
-    : (draftProvider === config.data?.defaultProvider ? config.data?.defaultModel : undefined) || draftModels[0] || draftSelection.model;
+    : providerDefaultModel || draftModels[0] || draftSelection.model;
   const activeMode = activeChat?.mode || draftSelection.mode;
 
   useEffect(() => {
@@ -240,21 +263,10 @@ export function ChatWorkspace({
     const nextStatus = statusForStreamEvent(name, data);
     if (nextStatus !== undefined) setStatus(nextStatus);
     if (name === 'tool_result') {
-      if (data.name === 'create_file' || data.name === 'create_artifact_version') {
-        try {
-          const result = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
-          if (
-            typeof result === 'object' &&
-            result !== null &&
-            typeof (result as { id?: unknown }).id === 'string'
-          ) {
-            const selectedArtifactId = (result as { id: string }).id;
-            setArtifactPanel({ open: true, selectedArtifactId });
-            void queryClient.invalidateQueries({ queryKey: ['generated-artifacts'] });
-          }
-        } catch {
-          // A non-JSON tool result is not an artifact; keep the normal tool status visible.
-        }
+      const selectedArtifactId = createdArtifactId(data);
+      if (selectedArtifactId) {
+        setArtifactPanel({ open: true, selectedArtifactId });
+        void queryClient.invalidateQueries({ queryKey: ['generated-artifacts'] });
       }
     }
     if (name === 'message') setStatus(null);
@@ -552,7 +564,9 @@ export function ChatWorkspace({
         onSelectChat={(chat: Chat) => {
           navigate(`/chat/${chat.id}`);
         }}
-        onThemeChange={(next) => { void changeTheme(next); }}
+        onThemeChange={(next) => {
+          void changeTheme(next);
+        }}
         onRename={(chat, title) => void renameChat(chat, title)}
         onUpdate={(chat, values) => void updateChat(chat, values)}
         onDelete={(chat) => void deleteChat(chat)}
@@ -611,7 +625,9 @@ export function ChatWorkspace({
               setSidebarOpen(false);
               navigate(`/chat/${chat.id}`);
             }}
-            onThemeChange={(next) => { void changeTheme(next); }}
+            onThemeChange={(next) => {
+              void changeTheme(next);
+            }}
             onRename={(chat, title) => void renameChat(chat, title)}
             onUpdate={(chat, values) => void updateChat(chat, values)}
             onDelete={(chat) => void deleteChat(chat)}
@@ -742,9 +758,7 @@ export function ChatWorkspace({
         </div>
         <div className="mx-auto w-full max-w-5xl px-4 sm:px-8 lg:px-12">
           {isCreatingChat && !activeChat ? (
-            <p role="status" className="mb-2 text-sm text-muted-foreground">
-              Đang tạo cuộc trò chuyện...
-            </p>
+            <output className="mb-2 block text-sm text-muted-foreground">Đang tạo cuộc trò chuyện...</output>
           ) : null}
           <ChatComposer
             key={activeChat?.id || 'new-chat'}
@@ -812,7 +826,12 @@ export function ChatWorkspace({
           <AdminPage view={adminView || 'overview'} navigate={navigate} />
         </Suspense>
       );
-    if (settingsPage) return window.location.pathname.startsWith('/settings/api-keys') ? <SettingsApiKeysPage /> : <SettingsAccountPage navigate={navigate} />;
+    if (settingsPage)
+      return window.location.pathname.startsWith('/settings/api-keys') ? (
+        <SettingsApiKeysPage />
+      ) : (
+        <SettingsAccountPage navigate={navigate} />
+      );
     return renderChatView();
   };
 

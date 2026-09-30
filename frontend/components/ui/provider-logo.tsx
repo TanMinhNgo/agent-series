@@ -13,14 +13,12 @@ export function ProviderLogo({ provider }: { provider: string }) {
       </svg>
     );
   }
-  const icon =
-    provider === 'anthropic'
-      ? siClaude
-      : provider === 'google' || provider === 'gemini'
-        ? siGooglegemini
-        : provider === 'ollama'
-          ? siOllama
-          : undefined;
+  const icon = {
+    anthropic: siClaude,
+    google: siGooglegemini,
+    gemini: siGooglegemini,
+    ollama: siOllama,
+  }[provider];
   if (!icon) return <Cpu aria-hidden="true" className="size-5 shrink-0" />;
   return (
     <svg

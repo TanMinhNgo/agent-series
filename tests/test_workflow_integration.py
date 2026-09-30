@@ -104,17 +104,21 @@ def test_snapshot_claim_lock_and_library_pipeline(setup):
     with ThreadPoolExecutor(max_workers=2) as pool:
         claimed = list(pool.map(lambda _: s.repo.claim(), range(2)))
     actual = [item for item in claimed if item is not None]
-    assert len(actual) == 1 and actual[0].id == run.id
-    assert actual[0].snapshot["revision"] == 1 and actual[0].snapshot["prompt"] != "changed"
+    assert len(actual) == 1
+    assert actual[0].id == run.id
+    assert actual[0].snapshot["revision"] == 1
+    assert actual[0].snapshot["prompt"] != "changed"
     WorkflowExecutor(s.services).execute(actual[0])
     result, steps = s.repo.detail(s.project, run.id)
-    assert result.status == "succeeded" and result.artifact_id
+    assert result.status == "succeeded"
+    assert result.artifact_id
     assert [step.status for step in steps] == ["succeeded", "succeeded", "succeeded", "skipped"]
     with s.database.session() as session:
         asset = session.get(LibraryAsset, result.artifact_id)
         assert (asset.user_id, asset.workspace_id, asset.project_id) == (s.user, s.workspace, s.project)
         text = s.services.library.storage.read(asset.storage_provider, asset.stored_name, asset.storage_file_id).decode()
-        assert "https://github.com/org/repo/issues/1" in text and "Trạng thái tại lúc" in text
+        assert "https://github.com/org/repo/issues/1" in text
+        assert "Trạng thái tại lúc" in text
     assert s.calls == [(s.user, "openai")]
 
 
@@ -138,7 +142,8 @@ def test_concurrent_idempotent_enqueue_and_lease_takeover(setup):
     with ThreadPoolExecutor(max_workers=2) as pool:
         claimed = list(pool.map(lambda _: s.repo.claim(), range(2)))
     winners = [item for item in claimed if item]
-    assert len(winners) == 1 and winners[0].id == old.id
+    assert len(winners) == 1
+    assert winners[0].id == old.id
     with pytest.raises(LeaseLost):
         s.repo.step(old.id, "source", "succeeded", {"sources": []}, lease_token=old.lease_token)
     WorkflowExecutor(s.services).execute(winners[0])
@@ -165,11 +170,14 @@ def test_failure_and_empty_paths(setup, monkeypatch, case):
     WorkflowExecutor(s.services).execute(claimed)
     result, steps = s.repo.detail(s.project, run.id)
     if case in {"exhausted", "provider_error"}:
-        assert result.status == "failed" and result.artifact_id is None
-        assert steps[1].status == "failed" and steps[2].status == "skipped"
+        assert result.status == "failed"
+        assert result.artifact_id is None
+        assert steps[1].status == "failed"
+        assert steps[2].status == "skipped"
         assert "secret" not in result.error
     else:
-        assert result.status == "succeeded" and result.artifact_id
+        assert result.status == "succeeded"
+        assert result.artifact_id
         assert steps[1 if case == "empty" else 3].status == ("skipped" if case == "empty" else "unknown")
 
 
@@ -228,8 +236,10 @@ def test_project_report_uses_only_latest_pinned_indexed_version(setup):
         asset_id = asset.id
     run = SimpleNamespace(snapshot={"template": "project-report"}, project_id=s.project)
     sources = WorkflowExecutor(s.services)._collect_sources(run)
-    assert len(sources) == 1 and sources[0]["body"] == "Verified project note"
-    assert sources[0]["version"] == 2 and asset_id in sources[0]["url"]
+    assert len(sources) == 1
+    assert sources[0]["body"] == "Verified project note"
+    assert sources[0]["version"] == 2
+    assert asset_id in sources[0]["url"]
 
 
 def test_library_source_is_not_visible_across_workspaces(setup):
@@ -279,6 +289,7 @@ def test_revoked_permission_stops_run_before_source_or_model(setup):
     s.services.github.list_updated_issues = lambda *_: pytest.fail("revoked user must not fetch sources")
     WorkflowExecutor(s.services).execute(claimed)
     result, steps = s.repo.detail(s.project, run.id)
-    assert result.status == "failed" and result.artifact_id is None
+    assert result.status == "failed"
+    assert result.artifact_id is None
     assert [step.status for step in steps] == ["failed", "skipped", "skipped", "skipped"]
     assert s.calls == []

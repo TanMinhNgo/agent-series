@@ -105,7 +105,8 @@ def test_schedule_worker_restores_owner_and_replaces_legacy_chat(monkeypatch) ->
 
     worker.execute(schedule, "run-1")
 
-    assert created and all(user_id == "user-1" for user_id in observed)
+    assert created
+    assert all(user_id == "user-1" for user_id in observed)
     assert [item["role"] for item in stored_history] == ["user", "assistant"]
     assert current_user_id.get() is None
 
@@ -276,7 +277,8 @@ def test_grounded_schedule_run_attaches_sources_and_sends_one_email(monkeypatch)
     assert state.history[0]["content"] == "Tổng hợp tin AI"
     assert state.history[-1]["sources"] == [{"name": "VnExpress", "url": "https://vnexpress.net/ai", "kind": "external"}]
     assert state.finished == [{"summary": "Bản tin."}]
-    assert state.sent == ["owner@example.com"] and state.emails == [("sent", None)]
+    assert state.sent == ["owner@example.com"]
+    assert state.emails == [("sent", None)]
 
 
 def test_missing_web_sources_fail_the_run_before_any_provider_call(monkeypatch) -> None:
@@ -288,7 +290,8 @@ def test_missing_web_sources_fail_the_run_before_any_provider_call(monkeypatch) 
 
     assert state.agent_calls == 0
     assert state.retries == 0
-    assert state.emails == [] and state.sent == []
+    assert state.emails == []
+    assert state.sent == []
     assert "Không lấy được nguồn web mới" in state.finished[0]["error"]
     assert "không lấy được nguồn web mới" in state.history[-1]["content"]
 
@@ -315,7 +318,8 @@ def test_schedule_without_email_notification_never_touches_smtp(monkeypatch) -> 
     worker.execute(schedule, "run-1")
 
     assert state.finished == [{"summary": "Bản tin."}]
-    assert state.emails == [] and state.sent == []
+    assert state.emails == []
+    assert state.sent == []
 
 
 def test_absent_web_sources_are_never_treated_as_a_transient_provider_error() -> None:
@@ -333,7 +337,8 @@ def test_run_heartbeat_reports_while_running_and_stops_on_exit() -> None:
         while not beats and time.monotonic() < deadline:
             time.sleep(0.01)
 
-    assert beats and beats[0] == "run-1"
+    assert beats
+    assert beats[0] == "run-1"
     settled = len(beats)
     time.sleep(0.05)
     assert len(beats) == settled, "heartbeat must stop once the run leaves the context"
