@@ -1,10 +1,10 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type SyntheticEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select';
 import { useAccountSettings, type AccountSettings } from '@/src/hooks/use-account-settings';
 import { useGetConfig } from '@/src/hooks/use-get-config';
 
-export function SettingsAccountPage({ navigate }: { navigate: (to: string) => void }) {
+export function SettingsAccountPage({ navigate }: Readonly<{ navigate: (to: string) => void }>) {
   const { settings } = useAccountSettings();
   if (settings.isLoading) return <div className="p-8">Đang tải cài đặt...</div>;
   if (!settings.data)
@@ -19,17 +19,17 @@ export function SettingsAccountPage({ navigate }: { navigate: (to: string) => vo
 function SettingsAccountEditor({
   initial,
   navigate,
-}: {
+}: Readonly<{
   initial: AccountSettings;
   navigate: (to: string) => void;
-}) {
+}>) {
   const { settings, save, clearLearned } = useAccountSettings();
   const config = useGetConfig();
   const [draft, setDraft] = useState<AccountSettings>(initial);
   const [notice, setNotice] = useState('');
   const models = draft.defaultProvider ? config.data?.providers[draft.defaultProvider] || [] : [];
   const invalidDefault = !!draft.defaultModel && !models.includes(draft.defaultModel);
-  const submit = async (event: FormEvent) => {
+  const submit = async (event: SyntheticEvent) => {
     event.preventDefault();
     setNotice('');
     try {
@@ -66,7 +66,7 @@ function SettingsAccountEditor({
             <span className="text-sm text-muted-foreground">Ảnh từ tài khoản Google</span>
           </div>
           <label className="grid gap-2 text-sm">
-            Tên hiển thị
+            <span>Tên hiển thị</span>
             <input
               className="rounded-lg border bg-background px-3 py-2"
               required
@@ -76,7 +76,7 @@ function SettingsAccountEditor({
             />
           </label>
           <label className="grid gap-2 text-sm">
-            Email Google
+            <span>Email Google</span>
             <input className="rounded-lg border bg-muted px-3 py-2" value={draft.email} readOnly />
           </label>
         </section>
@@ -102,7 +102,7 @@ function SettingsAccountEditor({
         <section className="space-y-4 rounded-2xl border bg-card p-5">
           <h2 className="font-semibold">Tùy chỉnh AI</h2>
           <label className="grid gap-2 text-sm">
-            Chỉ dẫn tùy chỉnh
+            <span>Chỉ dẫn tùy chỉnh</span>
             <textarea
               className="min-h-32 rounded-lg border bg-background px-3 py-2"
               maxLength={10000}
@@ -116,8 +116,8 @@ function SettingsAccountEditor({
               type="checkbox"
               checked={draft.autoLearn}
               onChange={(event) => setDraft({ ...draft, autoLearn: event.target.checked })}
-            />{' '}
-            Tự học sở thích từ nội dung chat và đánh giá
+            />
+            <span>Tự học sở thích từ nội dung chat và đánh giá</span>
           </label>
           <p className="text-xs text-muted-foreground">
             Tắt mục này sẽ ngừng ghi nhận và sử dụng sở thích đã học. Chỉ dẫn tùy chỉnh vẫn có hiệu lực.

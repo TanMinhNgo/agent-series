@@ -269,6 +269,39 @@ function ArtifactPicker({
   );
 }
 
+function ArtifactVersionMenu({
+  selected,
+  versions,
+  onSelect,
+}: Readonly<{
+  selected: LibraryAsset;
+  versions: LibraryAsset[];
+  onSelect: (id: string) => void;
+}>) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button variant="outline" size="sm" className="shrink-0 gap-1" aria-label="Lịch sử phiên bản" />
+        }
+      >
+        v{selected.version}
+        <ChevronDown size={12} />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-44">
+        <DropdownMenuRadioGroup value={selected.id} onValueChange={onSelect}>
+          {versions.map((asset) => (
+            <DropdownMenuRadioItem key={asset.id} value={asset.id}>
+              v{asset.version}
+              <span className="text-xs text-muted-foreground">{formatDate(asset.createdAt)}</span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function ArtifactHeader({
   groups,
   selected,
@@ -280,7 +313,7 @@ function ArtifactHeader({
   onToggleDiff,
   onOpenFullscreen,
   onClose,
-}: ArtifactHeaderProps) {
+}: Readonly<ArtifactHeaderProps>) {
   const fileCount = groups.reduce((total, group) => total + group.artifacts.length, 0);
   const title = (
     <>
@@ -297,31 +330,7 @@ function ArtifactHeader({
           <div className="flex min-w-0 items-center gap-1.5 px-2">{title}</div>
         )}
         {selected && versions && versions.length > 1 ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="shrink-0 gap-1"
-                  aria-label="Lịch sử phiên bản"
-                />
-              }
-            >
-              v{selected.version}
-              <ChevronDown size={12} />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-44">
-              <DropdownMenuRadioGroup value={selected.id} onValueChange={onSelect}>
-                {versions.map((asset) => (
-                  <DropdownMenuRadioItem key={asset.id} value={asset.id}>
-                    v{asset.version}
-                    <span className="text-xs text-muted-foreground">{formatDate(asset.createdAt)}</span>
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <ArtifactVersionMenu selected={selected} versions={versions} onSelect={onSelect} />
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-0.5">
@@ -356,7 +365,9 @@ function ArtifactHeader({
               variant="ghost"
               size="icon-sm"
               nativeButton={false}
-              render={<a href={selected.url} target="_blank" rel="noreferrer" />}
+              render={
+                <a href={selected.url} target="_blank" rel="noreferrer" aria-label="Mở hoặc tải file gốc" />
+              }
               aria-label="Mở hoặc tải file gốc"
               title="Mở hoặc tải file gốc"
             >

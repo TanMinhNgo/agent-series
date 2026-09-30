@@ -20,7 +20,7 @@ async function downloadImage({ url, name }: LightboxImage) {
 }
 
 /** Thumbnail that opens the full image in an overlay, with download and open-in-tab actions. */
-export function ImageLightbox({ image, className }: { image: LightboxImage; className?: string }) {
+export function ImageLightbox({ image, className }: Readonly<{ image: LightboxImage; className?: string }>) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -84,7 +84,9 @@ export function ImageLightbox({ image, className }: { image: LightboxImage; clas
                 size="icon"
                 className="text-white hover:bg-white/15"
                 nativeButton={false}
-                render={<a href={image.url} target="_blank" rel="noreferrer" />}
+                render={
+                  <a href={image.url} target="_blank" rel="noreferrer" aria-label="Mở ảnh trong tab mới" />
+                }
                 aria-label="Mở ảnh trong tab mới"
                 title="Mở trong tab mới"
               >

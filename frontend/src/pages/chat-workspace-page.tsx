@@ -328,7 +328,7 @@ export function ChatWorkspace({
   const changeTheme = async (next: Theme) => {
     setThemeOverride(next);
     try {
-      const current = account.settings.data || (await account.settings.refetch()).data;
+      const current = account.settings.data ?? (await account.settings.refetch()).data;
       if (current) await account.save.mutateAsync({ ...current, theme: next });
     } catch (reason) {
       setUiError(reason instanceof Error ? reason.message : 'Không thể lưu chủ đề.');
