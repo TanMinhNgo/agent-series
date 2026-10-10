@@ -187,7 +187,7 @@ export function WorkflowRunPage() {
                       <p className="mt-4 text-sm">
                         Bản xem trước được rút gọn. Xem file đầy đủ trong{' '}
                         <Link className="underline" to="/library">
-                          Library
+                          Thư viện
                         </Link>
                         .
                       </p>

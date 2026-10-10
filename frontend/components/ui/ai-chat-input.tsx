@@ -1,9 +1,12 @@
 import * as React from 'react';
-import { ImagePlus, Mic, Paperclip, Send, Square, X } from 'lucide-react';
+import { FileText, ImagePlus, Mic, Paperclip, Send, Square, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 
 type Attachment = { id: string; file: File; url: string };
+const PASTE_CHIP_MIN_CHARS = 1500;
+export const MAX_MESSAGE_CHARS = 100_000;
+type Pasted = { id: string; text: string };
 const isKnowledgeFile = (file: File) => /\.(pdf|docx|md)$/i.test(file.name);
 type SpeechRecognitionLike = {
   continuous: boolean;
@@ -41,6 +44,7 @@ export function PromptInput({
   clearAttachmentsOnSubmit = true,
 }: PromptInputProps) {
   const [attachments, setAttachments] = React.useState<Attachment[]>([]);
+  const [pasted, setPasted] = React.useState<Pasted[]>([]);
   const [recording, setRecording] = React.useState(false);
   const fileRef = React.useRef<HTMLInputElement>(null);
   const recognition = React.useRef<SpeechRecognitionLike | null>(null);
@@ -71,12 +75,17 @@ export function PromptInput({
       if (item) URL.revokeObjectURL(item.url);
       return current.filter((attachment) => attachment.id !== id);
     });
+  const pastedText = pasted.map((item) => item.text).join('\n\n');
+  const fullContent = [value.trim(), pastedText].filter(Boolean).join('\n\n');
+  const tooLong = fullContent.length > MAX_MESSAGE_CHARS;
+  const hasContent = Boolean(fullContent) || attachments.length > 0;
   const submit = () => {
-    if (busy || (!value.trim() && !attachments.length)) return;
+    if (busy || tooLong || !hasContent) return;
     onSubmit(
-      value.trim(),
+      fullContent,
       attachments.map((item) => item.file),
     );
+    setPasted([]);
     if (clearAttachmentsOnSubmit) setAttachments([]);
   };
   const startVoice = () => {
@@ -144,11 +153,43 @@ export function PromptInput({
           ))}
         </div>
       )}
+      {pasted.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-2">
+          {pasted.map((item) => (
+            <div
+              key={item.id}
+              className="flex max-w-64 items-center gap-2 rounded-xl border bg-muted px-2.5 py-1.5 text-xs"
+              title={item.text.slice(0, 500)}
+            >
+              <FileText size={14} className="shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1">
+                <span className="block font-medium">Nội dung đã dán</span>
+                <span className="block truncate text-muted-foreground">
+                  {item.text.length.toLocaleString('vi-VN')} ký tự · {item.text.trim().slice(0, 40)}
+                </span>
+              </span>
+              <button
+                type="button"
+                aria-label="Xóa nội dung đã dán"
+                onClick={() => setPasted((current) => current.filter((entry) => entry.id !== item.id))}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <textarea
         value={value}
+        onPaste={(event) => {
+          const text = event.clipboardData.getData('text/plain');
+          if (text.length < PASTE_CHIP_MIN_CHARS) return;
+          event.preventDefault();
+          setPasted((current) => [...current, { id: crypto.randomUUID(), text }]);
+        }}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key === 'Enter' && !event.shiftKey) {
+          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault();
             submit();
           }
@@ -174,6 +215,11 @@ export function PromptInput({
         >
           <ImagePlus size={18} />
         </button>
+        {tooLong && (
+          <span className="text-xs text-destructive">
+            Quá dài: {fullContent.length.toLocaleString('vi-VN')}/{MAX_MESSAGE_CHARS.toLocaleString('vi-VN')} ký tự
+          </span>
+        )}
         <span className="ml-auto text-xs text-muted-foreground">
           {attachments.length}/{maxAttachments}
         </span>
@@ -192,7 +238,7 @@ export function PromptInput({
         </button>
         <button
           type="button"
-          disabled={busy ? !onStop : !value.trim() && !attachments.length}
+          disabled={busy ? !onStop : tooLong || !hasContent}
           onClick={busy ? onStop : submit}
           title={busy ? 'Dừng tạo phản hồi' : 'Gửi tin nhắn'}
           className="rounded-lg bg-primary p-2 text-primary-foreground shadow-sm shadow-primary/20 disabled:opacity-50"

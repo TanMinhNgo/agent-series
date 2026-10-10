@@ -79,9 +79,9 @@ export function ProjectOverviewPage() {
         <span className="rounded-full bg-muted px-3 py-1 text-sm capitalize">{data.project.status}</span>
       </header>
       <section className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Metric icon={<MessageSquare size={18} />} label="Chat" value={data.chats.length} />
+        <Metric icon={<MessageSquare size={18} />} label="Trò chuyện" value={data.chats.length} />
         <Metric icon={<FileText size={18} />} label="Artifact" value={data.assets.length} />
-        <Metric icon={<Sparkles size={18} />} label="Project Sources" value={data.projectSources.length} />
+        <Metric icon={<Sparkles size={18} />} label="Nguồn dự án" value={data.projectSources.length} />
         <Metric icon={<CalendarClock size={18} />} label="Lịch chạy" value={data.schedules.length} />
       </section>
       <ProjectWorkflows
@@ -264,7 +264,7 @@ function ConnectorScopes({
       </CardHeader>
       <CardContent className="grid gap-5 md:grid-cols-2">
         <label className="grid gap-2 text-sm font-medium">
-          <span>GitHub repositories</span>
+          <span>Repository GitHub</span>
           <textarea
             className="min-h-28 rounded-md border bg-background p-2 text-sm font-normal"
             value={repositories}
@@ -284,7 +284,7 @@ function ConnectorScopes({
           </button>
         </label>
         <label className="grid gap-2 text-sm font-medium">
-          <span>Google Drive file IDs</span>
+          <span>ID tệp Google Drive</span>
           <textarea
             className="min-h-28 rounded-md border bg-background p-2 text-sm font-normal"
             value={fileIds}

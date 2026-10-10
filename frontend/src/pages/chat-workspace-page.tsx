@@ -27,6 +27,7 @@ import { queryKeys } from '@/src/hooks/query-keys';
 import type { Chat, LibraryAsset, Message, Theme } from '@/src/types';
 import { SettingsApiKeysPage } from '@/src/pages/settings-api-keys-page';
 import { SettingsAccountPage } from '@/src/pages/settings-account-page';
+import { SettingsHelpPage } from '@/src/pages/settings-help-page';
 import { useAccountSettings } from '@/src/hooks/use-account-settings';
 import { statusForStreamEvent } from '@/src/pages/chat-stream-status';
 import { useQueryClient } from '@tanstack/react-query';
@@ -61,7 +62,6 @@ type ChatWorkspaceProps = {
   navigate: (to: string) => void;
 };
 
-const ARTIFACT_PANEL_OPEN_KEY = 'agent-series.artifact-panel.open';
 const SELECTED_ARTIFACT_KEY = 'agent-series.artifact-panel.selected-artifact';
 const SIDEBAR_COLLAPSED_KEY = 'agent-series.sidebar.collapsed';
 
@@ -97,7 +97,7 @@ function createdArtifactId(data: Record<string, unknown>): string | null {
 function savedArtifactPanelState() {
   try {
     return {
-      open: sessionStorage.getItem(ARTIFACT_PANEL_OPEN_KEY) === 'true',
+      open: false,
       selectedArtifactId: sessionStorage.getItem(SELECTED_ARTIFACT_KEY),
     };
   } catch {
@@ -240,7 +240,6 @@ export function ChatWorkspace({
 
   useEffect(() => {
     try {
-      sessionStorage.setItem(ARTIFACT_PANEL_OPEN_KEY, String(artifactPanel.open));
       if (artifactPanel.selectedArtifactId) {
         sessionStorage.setItem(SELECTED_ARTIFACT_KEY, artifactPanel.selectedArtifactId);
       } else {
@@ -265,7 +264,7 @@ export function ChatWorkspace({
     if (name === 'tool_result') {
       const selectedArtifactId = createdArtifactId(data);
       if (selectedArtifactId) {
-        setArtifactPanel({ open: true, selectedArtifactId });
+        selectArtifact(selectedArtifactId);
         void queryClient.invalidateQueries({ queryKey: ['generated-artifacts'] });
       }
     }
@@ -584,7 +583,7 @@ export function ChatWorkspace({
         }}
         user={auth.session.user}
         onOpenApiKeys={() => navigate('/settings/api-keys')}
-        onOpenSettings={() => navigate('/settings')}
+        onOpenSettings={(section) => navigate(section ? `/settings/${section}` : '/settings')}
         onLogout={logoutToLogin}
         workspaces={workspaces.data || []}
         activeWorkspaceId={activeWorkspaceId}
@@ -653,9 +652,9 @@ export function ChatWorkspace({
               setSidebarOpen(false);
               navigate('/settings/api-keys');
             }}
-            onOpenSettings={() => {
+            onOpenSettings={(section) => {
               setSidebarOpen(false);
-              navigate('/settings');
+              navigate(section ? `/settings/${section}` : '/settings');
             }}
             onLogout={logoutToLogin}
             workspaces={workspaces.data || []}
@@ -825,6 +824,10 @@ export function ChatWorkspace({
         <Suspense fallback={<WorkspacePanelFallback />}>
           <AdminPage view={adminView || 'overview'} navigate={navigate} />
         </Suspense>
+      );
+    if (settingsPage && ['/settings/help', '/settings/support'].includes(window.location.pathname))
+      return (
+        <SettingsHelpPage navigate={navigate} support={window.location.pathname === '/settings/support'} />
       );
     if (settingsPage)
       return window.location.pathname.startsWith('/settings/api-keys') ? (

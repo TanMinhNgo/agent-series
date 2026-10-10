@@ -198,7 +198,15 @@ describe('Project workflows', () => {
     respond();
     mount();
     fireEvent.click(await screen.findByText('Lịch sử'));
-    fireEvent.change(screen.getByLabelText('Lọc trạng thái'), { target: { value: 'failed' } });
+    const trigger = screen.getByLabelText('Lọc trạng thái');
+    fireEvent.pointerDown(trigger);
+    fireEvent.mouseDown(trigger);
+    fireEvent.click(trigger);
+    const option = await screen.findByRole('option', { name: /thất bại/i });
+    await new Promise((resolve) => setTimeout(resolve, 300)); // Base UI ignores clicks right after opening
+    fireEvent.pointerUp(option);
+    fireEvent.mouseUp(option);
+    fireEvent.click(option);
     await waitFor(() =>
       expect(request).toHaveBeenCalledWith({ url: '/projects/p/workflows/flow/runs?status=failed' }),
     );

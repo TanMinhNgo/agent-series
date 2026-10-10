@@ -96,6 +96,12 @@
 *::-webkit-scrollbar-corner {
   background: transparent;
 }
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
 html {
   font-family: var(--font-sans);
   background: var(--background);

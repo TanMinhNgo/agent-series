@@ -18,7 +18,7 @@ export function ModelCatalog({
     <section className="rounded-2xl border bg-card shadow-sm">
       <header className="flex flex-col gap-3 border-b p-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="font-semibold">Model catalog</h2>
+          <h2 className="font-semibold">Danh mục model</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             {onToggle
               ? 'Bật hoặc tắt model được phép dùng trong hệ thống.'

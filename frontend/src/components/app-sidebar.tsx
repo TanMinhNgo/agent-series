@@ -32,7 +32,7 @@ type Props = {
   onOpenAdmin?: () => void;
   user?: AuthUser | null;
   onOpenApiKeys?: () => void;
-  onOpenSettings?: () => void;
+  onOpenSettings?: (section?: 'help' | 'support') => void;
   onLogout?: () => void;
   workspaces?: AppWorkspace[];
   activeWorkspaceId?: string | null;

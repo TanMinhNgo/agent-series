@@ -1,4 +1,5 @@
 import { KeyRound, LoaderCircle, ShieldCheck, Trash2 } from 'lucide-react';
+import { OptionSelect } from '@/components/ui/option-select';
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -52,17 +53,12 @@ export function SettingsApiKeysPage() {
         >
           <label className="grid gap-2 text-sm font-medium">
             Provider
-            <select
-              className="workspace-input"
+            <OptionSelect
+              className="h-10"
               value={provider}
-              onChange={(event) => setProvider(event.target.value as typeof provider)}
-            >
-              {providers.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
+              onValueChange={(value) => setProvider(value as typeof provider)}
+              options={providers.map((item) => ({ value: item.id, label: item.name }))}
+            />
           </label>
           <label className="grid gap-2 text-sm font-medium">
             API key

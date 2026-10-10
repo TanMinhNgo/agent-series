@@ -33,15 +33,21 @@ const messages: Message[] = [
   { messageId: 'm2', role: 'assistant', content: '', artifacts: [asset('a2', 'second.md')] },
 ];
 
-function renderPanel(onSelectedArtifactChange = vi.fn(), selectedArtifactId: string | null = 'a1') {
+function renderPanel(
+  onSelectedArtifactChange = vi.fn(),
+  selectedArtifactId: string | null = 'a1',
+  panelMessages = messages,
+  open = true,
+  onOpenChange = vi.fn(),
+) {
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
       <ArtifactPanel
-        open
-        onOpenChange={vi.fn()}
+        open={open}
+        onOpenChange={onOpenChange}
         selectedArtifactId={selectedArtifactId}
         onSelectedArtifactChange={onSelectedArtifactChange}
-        messages={messages}
+        messages={panelMessages}
         canEditArtifacts
         onEditArtifact={vi.fn()}
       />
@@ -51,6 +57,22 @@ function renderPanel(onSelectedArtifactChange = vi.fn(), selectedArtifactId: str
 }
 
 beforeEach(() => window.localStorage.clear());
+
+it('hides the buttons and panel when the chat has no AI files, even if open', () => {
+  renderPanel(vi.fn(), null, []);
+  expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  expect(screen.queryByText('Chat này chưa có file nào do AI tạo.')).not.toBeInTheDocument();
+});
+
+it('offers an open button when AI files exist and waits for a click', () => {
+  const onOpenChange = vi.fn();
+  renderPanel(vi.fn(), null, messages, false, onOpenChange);
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Chọn file' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'File AI' }));
+  expect(onOpenChange).toHaveBeenCalledWith(true);
+});
 
 it('shows the selected file in the header and its content without a file list', async () => {
   renderPanel();

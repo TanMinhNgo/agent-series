@@ -341,7 +341,7 @@ class ChatRepository:
                     "content": item.content,
                     "contentBlocks": item.content_blocks or [],
                 }.items() if value not in (None, [])}
-                for item in records if item.role in {"user", "assistant"}
+                for item in records if item.role in {"user", "assistant"} and not item.tool_calls
             ]
             share = session.scalar(select(ChatShare).where(ChatShare.chat_id == chat_id))
             if share is None:

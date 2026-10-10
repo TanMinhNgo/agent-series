@@ -13,7 +13,7 @@ from agent_core.jobs.contracts import ScheduleProposalPayload, VIETNAM_TIMEZONE
 from agent_core.ai.prompts import DEFAULT_SYSTEM_PROMPT, OLLAMA_SYSTEM_PROMPT
 from agent_core.ai.providers import build_client
 from agent_core.content.artifacts import PREVIEW_LIMIT, ArtifactEditContext, build_artifact_tool
-from agent_core.integrations.web_search import build_web_search_tool
+from agent_core.integrations.web_search import build_read_url_tool, build_web_search_tool
 from agent_core.knowledge.rag import build_knowledge_tool
 from agent_core.persistence.store import Chat, Project, current_user_id, current_workspace_id
 from agent_core.runtime.services import Services
@@ -46,7 +46,7 @@ def agent_system_prompt(chat: Chat, project: Project | None, web_tool: ToolSpec 
     if chat.collection_id or chat.project_id is None:
         prompt += "\n\nKhi dùng knowledge base, giữ nguyên Markdown link của nguồn và nêu vị trí nguồn để người dùng mở đúng tài liệu."
     if web_tool is not None:
-        prompt += "\n\nKhi Thư viện không có hoặc chưa đủ dữ liệu, dùng `search_web`. Chỉ dùng URL do tool trả về; không tự tạo link hoặc nguồn. Không cần tạo mục Nguồn ở cuối câu trả lời vì hệ thống tự hiển thị trong menu trích nguồn."
+        prompt += "\n\nKhi Thư viện không có hoặc chưa đủ dữ liệu, dùng `search_web`. Khi người dùng gửi URL (YouTube, bài viết...), dùng `read_url` để đọc; nếu không đọc được thì nói rõ, đừng đoán nội dung. Chỉ dùng URL do tool trả về; không tự tạo link hoặc nguồn. Không cần tạo mục Nguồn ở cuối câu trả lời vì hệ thống tự hiển thị trong menu trích nguồn."
     if schedule_tool is not None:
         prompt += "\n\nLịch trình: chỉ gọi `propose_schedule` khi người dùng yêu cầu rõ tạo lịch/nhắc việc VÀ đã có cả ngày lẫn giờ. Nếu thiếu một trong hai, hãy hỏi lại; không đoán."
     prompt += source_context + artifact_edit_context
@@ -101,14 +101,16 @@ def _source_context(deps: AgentDependencies, app_services: Services, chat: Chat)
 
 def _tool_registry(deps, app_services, chat, knowledge_tool, plugin_tools, web_tool, schedule_tool, version_tool, export_tool, web_bundle_tool):
     """Pick the tool set for the chat's provider and mode; returns (registry, web_tool, schedule_tool)."""
+    read_url_tool = build_read_url_tool(app_services.web_search) if web_tool is not None else None
+    web_tools = [tool for tool in (web_tool, read_url_tool) if tool is not None]
     artifact_tools = [build_artifact_tool(app_services.artifacts, chat.project_id)] if chat.project_id else []
     if chat.provider == "ollama":
         return ToolRegistry([]), None, schedule_tool
     if getattr(chat, "mode", "standard") == "plan":
-        read_tools = artifact_tools + [*(plugin_tools or [])] + ([web_tool] if web_tool is not None else [])
+        read_tools = artifact_tools + [*(plugin_tools or [])] + web_tools
         return deps.build_default_registry(knowledge_tool, read_tools), web_tool, None
     extra_tools = artifact_tools + [version_tool or export_tool] + ([] if version_tool is not None else [web_bundle_tool]) + [*(plugin_tools or [])]
-    extra_tools += [tool for tool in (schedule_tool, web_tool) if tool is not None]
+    extra_tools += [tool for tool in (schedule_tool, *web_tools) if tool is not None]
     return deps.build_default_registry(knowledge_tool, extra_tools), web_tool, schedule_tool
 
 

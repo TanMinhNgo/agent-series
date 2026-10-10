@@ -40,11 +40,11 @@ export type ModelPickerProps = {
 };
 
 const effortLabels: Record<ThinkingEffort, string> = {
-  none: 'Off',
-  low: 'Low',
-  medium: 'Medium',
-  high: 'High',
-  max: 'Max',
+  none: 'Tắt',
+  low: 'Thấp',
+  medium: 'Vừa',
+  high: 'Cao',
+  max: 'Tối đa',
 };
 
 function ProviderIcon({ provider }: { provider: ModelPickerProvider }) {
@@ -62,10 +62,10 @@ function CapabilityChips({ capabilities }: { capabilities?: readonly ModelCapabi
   return (
     <span className="inline-flex items-center gap-1 text-muted-foreground">
       {capabilities.includes('reasoning') ? (
-        <Brain aria-label="Reasoning" className="size-3.5 text-violet-500" />
+        <Brain aria-label="Suy luận" className="size-3.5 text-violet-500" />
       ) : null}
       {capabilities.includes('image') ? (
-        <ImageIcon aria-label="Image" className="size-3.5 text-teal-500" />
+        <ImageIcon aria-label="Ảnh" className="size-3.5 text-teal-500" />
       ) : null}
     </span>
   );
@@ -263,7 +263,7 @@ export function ModelPicker({
                 )}
             </div>
             <div className="mt-2 flex h-12 shrink-0 items-center gap-2 border-t pt-2">
-              <span className="text-[11px] text-muted-foreground">Thinking</span>
+              <span className="text-[11px] text-muted-foreground">Mức suy nghĩ</span>
               {levels.length ? (
                 <div className="flex flex-1 gap-1 rounded-full bg-muted p-1">
                   {levels.map((level) => (

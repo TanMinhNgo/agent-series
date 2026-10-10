@@ -34,7 +34,7 @@ class UpdateChatRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    content: str = Field(min_length=1, max_length=20_000)
+    content: str = Field(min_length=1, max_length=100_000)
     attachment_ids: list[str] = Field(default_factory=list, alias="attachmentIds")
     edit_asset_id: str | None = Field(default=None, alias="editAssetId")
     run_id: str | None = Field(default=None, alias="runId", min_length=1, max_length=100)

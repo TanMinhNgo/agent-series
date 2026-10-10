@@ -202,6 +202,18 @@ function SettingsAccountEditor({
           </Button>
         </div>
       </form>
+      <section className="space-y-3 rounded-2xl border bg-card p-5">
+        <h2 className="font-semibold">Trợ giúp & hỗ trợ</h2>
+        <p className="text-sm text-muted-foreground">Xem hướng dẫn sử dụng hoặc báo lỗi bạn gặp phải.</p>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => navigate('/settings/help')}>
+            Trợ giúp
+          </Button>
+          <Button variant="outline" onClick={() => navigate('/settings/support')}>
+            Hỗ trợ
+          </Button>
+        </div>
+      </section>
     </main>
   );
 }

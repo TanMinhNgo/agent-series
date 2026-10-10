@@ -50,9 +50,9 @@ type SidebarNavButtonProps = {
 };
 
 const themeOptions = [
-  { value: 'system', label: 'System', Icon: Monitor },
-  { value: 'light', label: 'Light', Icon: Sun },
-  { value: 'dark', label: 'Dark', Icon: Moon },
+  { value: 'system', label: 'Hệ thống', Icon: Monitor },
+  { value: 'light', label: 'Sáng', Icon: Sun },
+  { value: 'dark', label: 'Tối', Icon: Moon },
 ] as const;
 
 function SidebarNavButton({
@@ -68,8 +68,8 @@ function SidebarNavButton({
       variant={primary ? 'default' : 'ghost'}
       data-active={active}
       aria-current={active ? 'page' : undefined}
-      className={`${primary ? '' : 'sidebar-nav-item'} justify-start ${
-        collapsed ? 'size-9 px-0 lg:mx-auto' : 'w-full'
+      className={`${primary ? '' : 'sidebar-nav-item'} ${
+        collapsed ? 'size-9 justify-center px-0 lg:mx-auto' : 'w-full justify-start'
       } ${primary ? 'shadow-sm shadow-primary/15' : ''}`}
       onClick={onClick}
       title={label}
@@ -203,7 +203,7 @@ export function AccountMenu({
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
   onOpenApiKeys?: () => void;
-  onOpenSettings?: () => void;
+  onOpenSettings?: (section?: 'help' | 'support') => void;
   onLogout?: () => void;
   workspaces: AppWorkspace[];
   activeWorkspaceId?: string | null;
@@ -315,14 +315,14 @@ export function AccountMenu({
               </DropdownMenuRadioGroup>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
-          <DropdownMenuItem disabled>
-            <UserRound /> Hỗ trợ <span className="ml-auto text-xs">Sắp có</span>
+          <DropdownMenuItem onClick={() => onOpenSettings?.('support')}>
+            <UserRound /> Hỗ trợ
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={onOpenSettings}>
+          <DropdownMenuItem onClick={() => onOpenSettings?.()}>
             <Settings /> Cài đặt
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem disabled>
+          <DropdownMenuItem onClick={() => onOpenSettings?.('help')}>
             <CircleHelp /> Trợ giúp <ChevronRight className="ml-auto" />
           </DropdownMenuItem>
           <DropdownMenuItem onClick={onLogout} className="text-destructive focus:text-destructive">

@@ -67,7 +67,7 @@ export function AdminDashboardPage({ view, navigate }: { view: Tab; navigate: (t
       <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 sm:px-8 lg:px-12">
         <header className="flex flex-col gap-4 border-b pb-6 md:flex-row md:items-end md:justify-between">
           <div>
-            <p className="text-sm font-medium text-primary">System administration</p>
+            <p className="text-sm font-medium text-primary">Quản trị hệ thống</p>
             <h1 className="mt-1 text-3xl font-semibold tracking-tight">Bảng điều khiển hệ thống</h1>
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
               Theo dõi sức khỏe hệ thống, người dùng và các sự kiện vận hành. Dữ liệu được đọc trực tiếp từ
@@ -517,7 +517,7 @@ function SecurityTab({
       </Panel>
       <Panel>
         <div className="border-b p-5">
-          <h2 className="font-semibold">Audit log</h2>
+          <h2 className="font-semibold">Nhật ký kiểm toán</h2>
           <p className="mt-1 text-sm text-muted-foreground">Hành động quan trọng trong hệ thống.</p>
         </div>
         <div className="divide-y">

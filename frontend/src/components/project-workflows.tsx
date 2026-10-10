@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { OptionSelect } from '@/components/ui/option-select';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -60,23 +61,18 @@ function WorkflowForm({
       }}
     >
       <label className="grid gap-1 text-sm sm:col-span-2">
-        <span>Recipe</span>
-        <select
-          className={inputClass}
-          value={template}
-          onChange={(e) => {
-            const next = e.target.value as Workflow['template'];
+        <span>Mẫu</span>
+        <OptionSelect
+          className="h-10"
+          value={template ?? ''}
+          onValueChange={(value) => {
+            const next = value as Workflow['template'];
             setTemplate(next);
             const selected = recipes.find((item) => item.id === next);
             if (selected) setPrompt(selected.prompt);
           }}
-        >
-          {recipes.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.title}
-            </option>
-          ))}
-        </select>
+          options={recipes.map((item) => ({ value: item.id ?? '', label: item.title }))}
+        />
       </label>
       <label className="grid gap-1 text-sm">
         <span>Tên workflow</span>
@@ -90,41 +86,35 @@ function WorkflowForm({
       </label>
       <label className="grid gap-1 text-sm">
         <span>Repository {requiresRepository ? '' : '(không bắt buộc)'}</span>
-        <select
+        <OptionSelect
           required={requiresRepository}
-          className={inputClass}
+          className="h-10"
           value={repository}
-          onChange={(e) => setRepository(e.target.value)}
-        >
-          <option value="">Chọn repository</option>
-          {repositories.map((repo) => (
-            <option key={repo}>{repo}</option>
-          ))}
-        </select>
+          onValueChange={setRepository}
+          options={[{ value: '', label: 'Chọn repository' }, ...repositories.map((repo) => ({ value: repo, label: repo }))]}
+        />
       </label>
       <label className="grid gap-1 text-sm">
         <span>Provider</span>
-        <select
-          className={inputClass}
+        <OptionSelect
+          className="h-10"
           value={provider}
-          onChange={(e) => {
-            setProvider(e.target.value);
-            setModel(config.providers[e.target.value]?.[0] ?? '');
+          onValueChange={(value) => {
+            setProvider(value);
+            setModel(config.providers[value]?.[0] ?? '');
           }}
-        >
-          {Object.keys(config.providers).map((value) => (
-            <option key={value}>{value}</option>
-          ))}
-        </select>
+          options={Object.keys(config.providers).map((value) => ({ value, label: value }))}
+        />
       </label>
       <label className="grid gap-1 text-sm">
         <span>Model</span>
-        <select required className={inputClass} value={model} onChange={(e) => setModel(e.target.value)}>
-          <option value="">Chọn model</option>
-          {(config.providers[provider] ?? []).map((value) => (
-            <option key={value}>{value}</option>
-          ))}
-        </select>
+        <OptionSelect
+          required
+          className="h-10"
+          value={model}
+          onValueChange={setModel}
+          options={[{ value: '', label: 'Chọn model' }, ...(config.providers[provider] ?? []).map((value) => ({ value, label: value }))]}
+        />
       </label>
       <label className="grid gap-1 text-sm sm:col-span-2">
         <span>Yêu cầu báo cáo</span>
@@ -326,19 +316,19 @@ export function ProjectWorkflows({ projectId, repositories }: { projectId: strin
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <p className="font-medium">Lịch sử lần chạy</p>
-              <select
+              <OptionSelect
                 aria-label="Lọc trạng thái"
-                className="rounded-md border bg-background px-2 py-1 text-sm"
+                className="w-auto min-w-40"
                 value={historyStatus}
-                onChange={(event) => setHistoryStatus(event.target.value)}
-              >
-                <option value="">Tất cả trạng thái</option>
-                {['queued', 'running', 'retrying', 'succeeded', 'failed', 'cancelled'].map((status) => (
-                  <option key={status} value={status}>
-                    {workflowStatus[status]}
-                  </option>
-                ))}
-              </select>
+                onValueChange={setHistoryStatus}
+                options={[
+                  { value: '', label: 'Tất cả trạng thái' },
+                  ...['queued', 'running', 'retrying', 'succeeded', 'failed', 'cancelled'].map((status) => ({
+                    value: status,
+                    label: workflowStatus[status],
+                  })),
+                ]}
+              />
             </div>
             {runs.isLoading && <p>Đang tải...</p>}
             {runs.data?.length === 0 && <p>Chưa có lần chạy.</p>}

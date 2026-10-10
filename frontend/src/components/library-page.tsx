@@ -1,4 +1,5 @@
 import { useDeferredValue, useRef, useState } from 'react';
+import { OptionSelect } from '@/components/ui/option-select';
 import {
   Eye,
   FilePlus2,
@@ -116,7 +117,7 @@ export function LibraryPage() {
       <div className="mt-2 flex flex-wrap gap-1 text-xs">
         <span className="rounded bg-muted px-2 py-1">v{item.version}</span>
         {item.isProjectSource ? (
-          <span className="rounded bg-emerald-500/10 px-2 py-1 text-emerald-700">Project source</span>
+          <span className="rounded bg-emerald-500/10 px-2 py-1 text-emerald-700">Nguồn dự án</span>
         ) : null}
         {item.isProjectSource && item.indexStatus !== 'ready' ? (
           <span className="rounded bg-amber-500/10 px-2 py-1 text-amber-700">
@@ -190,18 +191,15 @@ export function LibraryPage() {
         </div>
       </div>
       {pinningAssetId === item.id ? (
-        <select
-          className="mt-3 w-full rounded-md border bg-background px-2 py-1 text-xs"
-          defaultValue=""
-          onChange={(event) => pinAsset(item, event.target.value)}
-        >
-          <option value="">Chọn Project để ghim…</option>
-          {(projects.data || []).map((project) => (
-            <option key={project.id} value={project.id}>
-              {project.name}
-            </option>
-          ))}
-        </select>
+        <OptionSelect
+          className="mt-3 h-8 text-xs"
+          value=""
+          onValueChange={(value) => pinAsset(item, value)}
+          options={[
+            { value: '', label: 'Chọn Project để ghim…' },
+            ...(projects.data || []).map((project) => ({ value: project.id, label: project.name })),
+          ]}
+        />
       ) : null}
     </article>
   );
@@ -320,26 +318,23 @@ export function LibraryPage() {
     <section className="rounded-xl border p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="font-semibold">Knowledge collections</h2>
+          <h2 className="font-semibold">Bộ tri thức</h2>
           <p className="text-sm text-muted-foreground">
             Tải PDF, DOCX hoặc Markdown; chọn theo từng Project để chat chỉ tìm đúng bộ nguồn.
           </p>
         </div>
-        <select
-          className="rounded-lg border bg-background px-3 py-2 text-sm"
+        <OptionSelect
+          className="w-auto min-w-44"
           value={collectionProjectId}
-          onChange={(event) => {
-            setCollectionProjectId(event.target.value);
+          onValueChange={(value) => {
+            setCollectionProjectId(value);
             setEditingCollectionId(null);
           }}
-        >
-          <option value="">Chọn Project…</option>
-          {(projects.data || []).map((project) => (
-            <option key={project.id} value={project.id}>
-              {project.name}
-            </option>
-          ))}
-        </select>
+          options={[
+            { value: '', label: 'Chọn Project…' },
+            ...(projects.data || []).map((project) => ({ value: project.id, label: project.name })),
+          ]}
+        />
       </div>
       {collectionProjectId ? (
         <>
@@ -658,7 +653,7 @@ export function LibraryPage() {
             variant={tab === 'memory' ? 'secondary' : 'ghost'}
             onClick={() => setTab('memory')}
           >
-            Memory
+            Bộ nhớ
           </Button>
           <Button
             size="sm"
@@ -679,11 +674,10 @@ export function LibraryPage() {
         </label>
         {tab === 'files' ? (
           <div className="flex gap-2">
-            <select
-              className="min-w-40 rounded-lg border bg-background px-3 py-2 text-sm"
+            <OptionSelect
+              className="w-auto min-w-40"
               value={assetScope === 'project' ? `project:${assetProjectId}` : assetScope}
-              onChange={(event) => {
-                const value = event.target.value;
+              onValueChange={(value) => {
                 if (value.startsWith('project:')) {
                   setAssetScope('project');
                   setAssetProjectId(value.slice('project:'.length));
@@ -693,15 +687,12 @@ export function LibraryPage() {
                 }
               }}
               aria-label="Lọc file theo Project"
-            >
-              <option value="all">Tất cả file</option>
-              <option value="global">Không thuộc Project</option>
-              {(projects.data || []).map((project) => (
-                <option key={project.id} value={`project:${project.id}`}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
+              options={[
+                { value: 'all', label: 'Tất cả file' },
+                { value: 'global', label: 'Không thuộc Project' },
+                ...(projects.data || []).map((project) => ({ value: `project:${project.id}`, label: project.name })),
+              ]}
+            />
           </div>
         ) : null}
       </div>

@@ -200,7 +200,7 @@ export function SidebarHistory({
   const sectionProps = { projects, activeChatId, onSelectChat, onRename, onUpdate, onDelete, onShare };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto" onScroll={onHistoryScroll}>
+    <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto" onScroll={onHistoryScroll}>
       <ChatListSection title="Đã ghim" chats={pinned} {...sectionProps} showPinIcon={false} />
       <ChatListSection
         title="Gần đây"

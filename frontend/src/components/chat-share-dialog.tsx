@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { OptionSelect } from '@/components/ui/option-select';
 import { AtSign, Check, Copy, Link, LoaderCircle, MessageCircle, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -125,16 +126,16 @@ export function ChatShareDialog({ chat, onClose }: Props) {
           <div className="space-y-3">
             <label className="grid gap-1 text-sm font-medium">
               Hết hạn
-              <select
-                className="rounded-xl border bg-background px-3 py-2 text-sm"
+              <OptionSelect
                 value={expiry}
-                onChange={(event) => setExpiry(event.target.value as typeof expiry)}
-              >
-                <option value="never">Không hết hạn</option>
-                <option value="1d">Sau 1 ngày</option>
-                <option value="7d">Sau 7 ngày</option>
-                <option value="30d">Sau 30 ngày</option>
-              </select>
+                onValueChange={(value) => setExpiry(value as typeof expiry)}
+                options={[
+                  { value: 'never', label: 'Không hết hạn' },
+                  { value: '1d', label: 'Sau 1 ngày' },
+                  { value: '7d', label: 'Sau 7 ngày' },
+                  { value: '30d', label: 'Sau 30 ngày' },
+                ]}
+              />
             </label>
             <Button className="w-full" disabled={loading} onClick={() => void publish()}>
               {loading ? <LoaderCircle className="animate-spin" /> : <Link />} Tạo liên kết chia sẻ

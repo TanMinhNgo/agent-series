@@ -532,6 +532,8 @@ export function ArtifactPanel({
     setIsResizing(false);
   };
 
+  if (!generatedArtifacts.length) return null;
+
   const body = (
     <>
       <ArtifactHeader

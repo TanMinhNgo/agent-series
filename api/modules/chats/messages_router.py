@@ -23,7 +23,7 @@ def _visible_messages(deps: MessageRouteDependencies, services: Any, chat_id: st
     backfill = getattr(services.chats, "backfill_artifact_links", None)
     if backfill:
         backfill(chat_id)
-    history = [item for item in services.chats.history(chat_id) if item["role"] in {"user", "assistant"}]
+    history = [item for item in services.chats.history(chat_id) if item["role"] in {"user", "assistant"} and not item.get("tool_calls")]  # assistant tool-call turns are intermediate, not replies
     ids = [item["message_id"] for item in history if item["role"] == "assistant" and item.get("message_id")]
     artifacts = services.chats.artifacts_by_assistant_message(chat_id, ids) if hasattr(services.chats, "artifacts_by_assistant_message") else {}
     feedback = services.personalization.feedback_by_message_ids(ids)

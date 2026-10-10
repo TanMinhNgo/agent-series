@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { OptionSelect } from '@/components/ui/option-select';
 import type { FormEvent, ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -290,9 +291,20 @@ function ProjectCard({
       <CardHeader>
         <CardTitle className="flex items-start justify-between gap-3">
           <span className="line-clamp-2">{item.name}</span>
-          <Button variant="ghost" size="icon-sm" onClick={onEdit} aria-label={`Sửa ${item.name}`}>
-            <Pencil />
-          </Button>
+          <span className="flex shrink-0 gap-1">
+            <Button variant="ghost" size="icon-sm" onClick={onEdit} aria-label={`Sửa ${item.name}`}>
+              <Pencil />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="text-muted-foreground hover:text-destructive"
+              onClick={onDelete}
+              aria-label={`Xóa ${item.name}`}
+            >
+              <Trash2 />
+            </Button>
+          </span>
         </CardTitle>
         <CardDescription className="line-clamp-3 min-h-10">
           {item.description || 'Chưa có mô tả cho dự án này.'}
@@ -302,15 +314,6 @@ function ProjectCard({
         <Badge variant={meta.variant}>
           <meta.Icon /> {meta.label}
         </Badge>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="text-muted-foreground hover:text-destructive"
-          onClick={onDelete}
-          aria-label={`Xóa ${item.name}`}
-        >
-          <Trash2 />
-        </Button>
         <a href={`/projects/${item.id}`} className="text-sm text-primary hover:underline">
           Mở
         </a>
@@ -373,27 +376,23 @@ function ProjectForm({
           />
         </Field>
         <Field label="Trạng thái">
-          <select
-            className="workspace-input"
+          <OptionSelect
+            className="h-10"
             value={status}
-            onChange={(event) => setStatus(event.target.value)}
-          >
-            {Object.entries(statusMeta).map(([value, meta]) => (
-              <option key={value} value={value}>
-                {meta.label}
-              </option>
-            ))}
-          </select>
+            onValueChange={setStatus}
+            options={Object.entries(statusMeta).map(([value, meta]) => ({ value, label: meta.label }))}
+          />
         </Field>
         <Field label="Bộ nhớ">
-          <select
-            className="workspace-input"
+          <OptionSelect
+            className="h-10"
             value={memoryMode}
-            onChange={(event) => setMemoryMode(event.target.value as Project['memoryMode'])}
-          >
-            <option value="default">Bộ nhớ mặc định</option>
-            <option value="project_only">Chỉ bộ nhớ dự án</option>
-          </select>
+            onValueChange={(value) => setMemoryMode(value as Project['memoryMode'])}
+            options={[
+              { value: 'default', label: 'Bộ nhớ mặc định' },
+              { value: 'project_only', label: 'Chỉ bộ nhớ dự án' },
+            ]}
+          />
         </Field>
         <Field label="Hướng dẫn cho AI trong dự án">
           <textarea
@@ -936,24 +935,21 @@ function ScheduleForm({
         }
       >
         {!schedule ? (
-          <Field label="Workflow recipe">
-            <select
-              className="workspace-input"
-              defaultValue=""
-              onChange={(event) => {
-                const recipe = recipes.data?.find((item) => item.id === event.target.value);
+          <Field label="Mẫu workflow">
+            <OptionSelect
+              className="h-10"
+              value=""
+              onValueChange={(value) => {
+                const recipe = recipes.data?.find((item) => item.id === value);
                 if (recipe) applyRecipe(recipe);
               }}
-            >
-              <option value="">Tự cấu hình</option>
-              {(recipes.data || []).map((recipe) => (
-                <option key={recipe.id} value={recipe.id}>
-                  {recipe.title}
-                </option>
-              ))}
-            </select>
+              options={[
+                { value: '', label: 'Tự cấu hình' },
+                ...(recipes.data || []).map((recipe) => ({ value: recipe.id ?? '', label: recipe.title })),
+              ]}
+            />
             <p className="mt-1 text-xs text-muted-foreground">
-              Recipe chỉ điền sẵn form; bạn luôn cần xem và xác nhận trước khi tạo lịch.
+              Mẫu chỉ điền sẵn form; bạn luôn cần xem và xác nhận trước khi tạo lịch.
             </p>
           </Field>
         ) : null}
@@ -978,40 +974,33 @@ function ScheduleForm({
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Provider">
-            <select
+            <OptionSelect
               required
-              className="workspace-input"
+              className="h-10"
               value={selectedProvider}
               disabled={config.isLoading || !Object.keys(config.data?.providers || {}).length}
-              onChange={(event) => {
-                const nextProvider = event.target.value;
+              onValueChange={(nextProvider) => {
                 setProvider(nextProvider);
                 setModel(config.data?.providers[nextProvider]?.[0] || '');
               }}
-            >
-              {!selectedProvider ? <option value="">Chưa có provider khả dụng</option> : null}
-              {Object.keys(config.data?.providers || {}).map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
+              options={[
+                ...(selectedProvider ? [] : [{ value: '', label: 'Chưa có provider khả dụng' }]),
+                ...Object.keys(config.data?.providers || {}).map((item) => ({ value: item, label: item })),
+              ]}
+            />
           </Field>
           <Field label="Model">
-            <select
+            <OptionSelect
               required
-              className="workspace-input"
+              className="h-10"
               value={selectedModel}
               disabled={!selectedProvider || !models.length}
-              onChange={(event) => setModel(event.target.value)}
-            >
-              {!selectedModel ? <option value="">Chưa có model khả dụng</option> : null}
-              {models.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
+              onValueChange={setModel}
+              options={[
+                ...(selectedModel ? [] : [{ value: '', label: 'Chưa có model khả dụng' }]),
+                ...models.map((item) => ({ value: item, label: item })),
+              ]}
+            />
           </Field>
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -1035,15 +1024,16 @@ function ScheduleForm({
           </Field>
         </div>
         <Field label="Lặp lại">
-          <select
-            className="workspace-input"
+          <OptionSelect
+            className="h-10"
             value={recurrence}
-            onChange={(event) => setRecurrence(event.target.value as Schedule['recurrence'])}
-          >
-            <option value="once">Một lần</option>
-            <option value="daily">Hằng ngày</option>
-            <option value="weekly">Hằng tuần</option>
-          </select>
+            onValueChange={(value) => setRecurrence(value as Schedule['recurrence'])}
+            options={[
+              { value: 'once', label: 'Một lần' },
+              { value: 'daily', label: 'Hằng ngày' },
+              { value: 'weekly', label: 'Hằng tuần' },
+            ]}
+          />
         </Field>
         <ScheduleNotifications
           requireWebSource={requireWebSource}
@@ -1052,18 +1042,15 @@ function ScheduleForm({
           onNotifyEmailChange={setNotifyEmail}
         />
         <Field label="Dự án">
-          <select
-            className="workspace-input"
+          <OptionSelect
+            className="h-10"
             value={projectId}
-            onChange={(event) => setProjectId(event.target.value)}
-          >
-            <option value="">Không gắn dự án</option>
-            {projects.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
+            onValueChange={setProjectId}
+            options={[
+              { value: '', label: 'Không gắn dự án' },
+              ...projects.map((item) => ({ value: item.id ?? '', label: item.name })),
+            ]}
+          />
         </Field>
         <Field label="Ghi chú">
           <textarea
@@ -1844,7 +1831,7 @@ function PluginForm({
             onChange={(event) => setDescription(event.target.value)}
           />
         </Field>
-        <Field label="Config JSON">
+        <Field label="Cấu hình JSON">
           <textarea
             className="workspace-input min-h-36 font-mono text-xs"
             value={config}
@@ -2023,14 +2010,15 @@ function MembersView() {
                 </ul>
               ) : null}
             </div>
-            <select
-              className="workspace-input"
+            <OptionSelect
+              className="h-10 w-32"
               value={role}
-              onChange={(event) => setRole(event.target.value as 'editor' | 'viewer')}
-            >
-              <option value="viewer">Viewer</option>
-              <option value="editor">Editor</option>
-            </select>
+              onValueChange={(value) => setRole(value as 'editor' | 'viewer')}
+              options={[
+                { value: 'viewer', label: 'Người xem' },
+                { value: 'editor', label: 'Người chỉnh sửa' },
+              ]}
+            />
             <Button type="submit" disabled={inviteWorkspaceMember.isPending}>
               Mời
             </Button>
@@ -2057,21 +2045,22 @@ function MembersView() {
                   <Badge variant="secondary">{member.role}</Badge>
                 ) : (
                   <div className="flex items-center gap-2">
-                    <select
-                      className="workspace-input h-8 py-1 text-xs"
+                    <OptionSelect
+                      className="h-8 w-28 text-xs"
                       value={member.role}
                       disabled={updateWorkspaceMember.isPending || removeWorkspaceMember.isPending}
-                      onChange={(event) =>
+                      onValueChange={(value) =>
                         void updateWorkspaceMember.mutateAsync({
                           userId: member.userId,
-                          role: event.target.value as WorkspaceRole,
+                          role: value as WorkspaceRole,
                         })
                       }
-                    >
-                      <option value="viewer">Viewer</option>
-                      <option value="editor">Editor</option>
-                      <option value="owner">Owner</option>
-                    </select>
+                      options={[
+                        { value: 'viewer', label: 'Người xem' },
+                        { value: 'editor', label: 'Người chỉnh sửa' },
+                        { value: 'owner', label: 'Chủ sở hữu' },
+                      ]}
+                    />
                     <Button
                       size="sm"
                       variant="ghost"
