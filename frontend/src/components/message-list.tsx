@@ -1,4 +1,4 @@
-import { Fragment, useRef, type RefObject } from 'react';
+import { Fragment, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useGSAP } from '@gsap/react';
 import { gsap } from 'gsap';
 import { ScrollToPlugin } from 'gsap/ScrollToPlugin';
@@ -11,6 +11,8 @@ import { cn } from '@/lib/utils';
 import { RichResponseLazy } from '@/src/components/rich-response-lazy';
 import { AssistantMessageActions } from '@/src/components/assistant-message-actions';
 import { ImageLightbox } from '@/src/components/image-lightbox';
+import { freshAssistantIds } from '@/src/hooks/use-stream-chat';
+import { useTypewriter } from '@/src/hooks/use-typewriter';
 import type { LibraryAsset, Message } from '@/src/types';
 
 gsap.registerPlugin(useGSAP, ScrollToPlugin);
@@ -121,6 +123,34 @@ function MessageEvidence({
           </div>
         </div>
       ) : null}
+    </>
+  );
+}
+
+function AssistantBody({
+  message,
+  onScheduleProposalAction,
+  children,
+}: {
+  message: Message;
+  onScheduleProposalAction?: (proposalId: string, action: 'confirm' | 'dismiss') => void;
+  children: ReactNode;
+}) {
+  // Decided once at mount (and consumed) so refetches or remounts never retype a reply.
+  const [animate] = useState(() => freshAssistantIds.delete(message.messageId ?? ''));
+  const { shown, done } = useTypewriter(message.content, animate);
+  return (
+    <>
+      <RichResponseLazy
+        content={shown}
+        blocks={done ? message.contentBlocks : undefined}
+        onScheduleProposalAction={onScheduleProposalAction}
+      />
+      {done ? (
+        children
+      ) : (
+        <span aria-hidden="true" className="inline-block h-4 w-1.5 animate-pulse rounded-sm bg-foreground/60" />
+      )}
     </>
   );
 }
@@ -390,34 +420,29 @@ export function MessageList({
                   message.role === 'user' ? 'flex flex-col items-end' : 'pt-0.5',
                 )}
               >
-                <div
-                  className={cn(
-                    message.role === 'user' &&
-                      'rounded-2xl bg-primary px-4 py-2.5 text-primary-foreground shadow-sm shadow-primary/10',
-                  )}
-                >
-                  {message.role === 'assistant' ? (
-                    <RichResponseLazy
-                      content={message.content}
-                      blocks={message.contentBlocks}
-                      onScheduleProposalAction={onScheduleProposalAction}
-                    />
-                  ) : (
-                    <p className="m-0 whitespace-pre-wrap text-[.95rem]">{message.content}</p>
-                  )}
-                  <MessageMedia message={message} />
-                </div>
-                {message.messageId && message.role === 'assistant' && onBranch && onRegenerate ? (
-                  <AssistantMessageActions
-                    chatId={chatId}
-                    message={message}
-                    isLatest={index === latestAssistantResponseIndex}
-                    onBranch={onBranch}
-                    onRegenerate={onRegenerate}
-                  />
-                ) : null}
-                <MessageEvidence message={message} onOpenArtifact={onOpenArtifact} />
-                <UserMessageActions message={message} onPin={onPin} />
+                {message.role === 'assistant' ? (
+                  <AssistantBody message={message} onScheduleProposalAction={onScheduleProposalAction}>
+                    <MessageMedia message={message} />
+                    {message.messageId && onBranch && onRegenerate ? (
+                      <AssistantMessageActions
+                        chatId={chatId}
+                        message={message}
+                        isLatest={index === latestAssistantResponseIndex}
+                        onBranch={onBranch}
+                        onRegenerate={onRegenerate}
+                      />
+                    ) : null}
+                    <MessageEvidence message={message} onOpenArtifact={onOpenArtifact} />
+                  </AssistantBody>
+                ) : (
+                  <>
+                    <div className="rounded-2xl bg-primary px-4 py-2.5 text-primary-foreground shadow-sm shadow-primary/10">
+                      <p className="m-0 whitespace-pre-wrap text-[.95rem]">{message.content}</p>
+                      <MessageMedia message={message} />
+                    </div>
+                    <UserMessageActions message={message} onPin={onPin} />
+                  </>
+                )}
               </div>
             </article>
           </Fragment>

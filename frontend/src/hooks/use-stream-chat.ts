@@ -20,6 +20,9 @@ type Variables = {
   onUserMessageQueued?: () => void;
 };
 
+// Assistant replies received live in this session; MessageList types these out once.
+export const freshAssistantIds = new Set<string>();
+
 export const useStreamChat = () => {
   const queryClient = useQueryClient();
   const activeRequest = useRef<{ chatId: string; runId: string; controller: AbortController } | null>(null);
@@ -56,6 +59,8 @@ export const useStreamChat = () => {
       }
       try {
         await readSse(response, (name, data) => {
+          if (name === 'message' && data.role === 'assistant' && typeof data.messageId === 'string')
+            freshAssistantIds.add(data.messageId);
           if (name === 'message')
             queryClient.setQueryData<Message[]>(queryKeys.messages(chatId), (items = []) => [
               ...items,
